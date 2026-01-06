@@ -13,6 +13,7 @@ try:
         CharacterBrainstormingTool,
         PlotBrainstormingTool,
         NextLineGenerationTool,
+        ChatWithContextTool,
     )
 except ImportError:
     # Add parent directory to path for direct execution
@@ -27,6 +28,7 @@ except ImportError:
         CharacterBrainstormingTool,
         PlotBrainstormingTool,
         NextLineGenerationTool,
+        ChatWithContextTool,
     )
 
 
@@ -58,6 +60,7 @@ class StoryAgent:
         self.character_tool = CharacterBrainstormingTool(self.project_id, self.location)
         self.plot_tool = PlotBrainstormingTool(self.project_id, self.location)
         self.next_line_tool = NextLineGenerationTool(self.project_id, self.location)
+        self.chat_tool = ChatWithContextTool(self.project_id, self.location)
 
     async def generate_next_lines(
         self,
@@ -182,6 +185,25 @@ class StoryAgent:
         """
         return await self.plot_tool.execute(story_id, plot_type)
 
+    async def chat_with_context(
+        self,
+        story_id: str,
+        message: str,
+        chat_history: Optional[list] = None,
+    ) -> Dict[str, Any]:
+        """
+        Generate chat response using story context (RAG).
+
+        Args:
+            story_id: Firestore story document ID
+            message: User's message
+            chat_history: Optional list of previous messages for conversational context
+
+        Returns:
+            Dictionary containing response and context usage
+        """
+        return await self.chat_tool.execute(story_id, message, chat_history)
+
     async def execute_agent(
         self,
         action: str,
@@ -235,21 +257,27 @@ class StoryAgent:
             cursor_pos = parameters.get('cursorPosition')
             has_chapter_id = bool(parameters.get('chapterId'))
             content_length = len(parameters.get('content', ''))
-            
+
             logger.info(f"generateNextLines called with storyId={story_id}, cursorPosition={cursor_pos}, content_length={content_length}, hasChapterId={has_chapter_id}")
             print(f"[AGENT] generateNextLines called: storyId={story_id}, cursorPosition={cursor_pos}, content_length={content_length}, hasChapterId={has_chapter_id}")
-            
+
             result = await self.generate_next_lines(
                 parameters.get("storyId"),
                 parameters.get("content"),
                 parameters.get("cursorPosition"),
                 parameters.get("chapterId"),  # Optional
             )
-            
+
             result_info = f"result keys: {list(result.keys())}" if isinstance(result, dict) else f"result type: {type(result)}"
             logger.info(f"generateNextLines completed, {result_info}")
             print(f"[AGENT] generateNextLines completed, {result_info}")
             return result
+        elif action == "chatWithContext":
+            return await self.chat_with_context(
+                parameters.get("storyId"),
+                parameters.get("message"),
+                parameters.get("chatHistory"),
+            )
         else:
             raise ValueError(f"Unknown action: {action}")
 

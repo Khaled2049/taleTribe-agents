@@ -6,6 +6,7 @@ from .brainstorming import BrainstormingTool
 from .character_brainstorming import CharacterBrainstormingTool
 from .plot_brainstorming import PlotBrainstormingTool
 from .next_line_generation import NextLineGenerationTool
+from .chat_with_context import ChatWithContextTool
 __all__ = [
     "StoryGenerationTool",
     "ChapterGenerationTool",
@@ -13,5 +14,6 @@ __all__ = [
     "CharacterBrainstormingTool",
     "PlotBrainstormingTool",
     "NextLineGenerationTool",
+    "ChatWithContextTool",
 ]
 
