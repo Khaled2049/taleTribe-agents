@@ -1,0 +1,60 @@
+# Cloud Build configuration for Python agents
+# This is an alternative to using gcloud builds submit directly
+
+steps:
+  # Build the container image
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      [
+        "build",
+        "-t",
+        "gcr.io/$PROJECT_ID/story-agent:$SHORT_SHA",
+        "-t",
+        "gcr.io/$PROJECT_ID/story-agent:latest",
+        ".",
+      ]
+    dir: "python"
+
+  # Push the container image to Container Registry
+  - name: "gcr.io/cloud-builders/docker"
+    args: ["push", "gcr.io/$PROJECT_ID/story-agent:$SHORT_SHA"]
+
+  - name: "gcr.io/cloud-builders/docker"
+    args: ["push", "gcr.io/$PROJECT_ID/story-agent:latest"]
+
+  # Deploy container image to Cloud Run
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: gcloud
+    args:
+      - "run"
+      - "deploy"
+      - "story-agent"
+      - "--image"
+      - "gcr.io/$PROJECT_ID/story-agent:$SHORT_SHA"
+      - "--region"
+      - "us-central1"
+      - "--platform"
+      - "managed"
+      - "--memory"
+       - "1Gi"
+       - "--cpu"
+       - "1"
+      - "--timeout"
+      - "540"
+       - "--max-instances"
+       - "5"
+      - "--min-instances"
+      - "0"
+      - "--set-env-vars"
+      - "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_AI_STUDIO_API_KEY=${_GOOGLE_AI_STUDIO_API_KEY},GOOGLE_AI_STUDIO_MODEL=gemini-2.0-flash-exp"
+
+images:
+  - "gcr.io/$PROJECT_ID/story-agent:$SHORT_SHA"
+  - "gcr.io/$PROJECT_ID/story-agent:latest"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+substitutions:
+  _GOOGLE_AI_STUDIO_API_KEY: "" # Set this when triggering the build
+

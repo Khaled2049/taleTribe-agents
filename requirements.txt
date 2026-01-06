@@ -1,0 +1,25 @@
+# Unified Python Dependencies
+# This file contains all dependencies for bots, agents, and image-generation
+
+# Firebase and Google Cloud
+google-cloud-firestore>=2.13.0
+
+# HTTP and API
+requests>=2.31.0
+httpx>=0.25.0
+
+# Web Framework (for agent server and image-generation API)
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+
+# Data Validation
+pydantic>=2.5.0
+
+# Environment Management
+python-dotenv>=1.0.0
+
+# Image Generation Dependencies
+torch>=2.0.0
+diffusers>=0.21.0
+Pillow>=10.0.0
+
