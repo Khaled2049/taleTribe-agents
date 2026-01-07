@@ -12,6 +12,7 @@ try:
     from .tools.character_brainstorming import CharacterBrainstormingTool
     from .tools.plot_brainstorming import PlotBrainstormingTool
     from .tools.chat_with_context import ChatWithContextTool
+    from .tools.enhance_text import EnhanceTextTool
 except ImportError:
     # Handle direct execution case
     import sys
@@ -28,6 +29,7 @@ except ImportError:
     from agents.storyAgent.tools.character_brainstorming import CharacterBrainstormingTool
     from agents.storyAgent.tools.plot_brainstorming import PlotBrainstormingTool
     from agents.storyAgent.tools.chat_with_context import ChatWithContextTool
+    from agents.storyAgent.tools.enhance_text import EnhanceTextTool
 
 __all__ = [
     "StoryGenerationTool",
@@ -36,5 +38,6 @@ __all__ = [
     "CharacterBrainstormingTool",
     "PlotBrainstormingTool",
     "ChatWithContextTool",
+    "EnhanceTextTool",
 ]
 

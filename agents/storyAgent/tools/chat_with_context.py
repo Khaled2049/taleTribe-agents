@@ -54,7 +54,6 @@ class ChatWithContextTool:
         context_text = self._build_context_string(context)
 
         # log out context_text for debugging
-        print("Context Text:\n", context_text)
 
         system_prompt = f"""You are a helpful creative writing assistant for NovelSync.
 You have access to the user's story context including chapters, characters, plots, and places.
@@ -88,7 +87,6 @@ STORY CONTEXT:
         # Add current user message
         full_prompt += f"User: {message}\n\nAssistant:"
 
-        print("Full Prompt:\n", full_prompt)
         # Generate response using LLM provider
         response = self.llm_provider.generate_content(full_prompt)
 
@@ -99,8 +97,7 @@ STORY CONTEXT:
             "plots": len(context.get("plots", [])),
             "places": len(context.get("places", [])),
         }
-
-        print("Response:\n", response)
+        
 
         return {
             "response": response.strip(),

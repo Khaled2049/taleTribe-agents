@@ -14,6 +14,7 @@ try:
         PlotBrainstormingTool,
         NextLineGenerationTool,
         ChatWithContextTool,
+        EnhanceTextTool,
     )
 except ImportError:
     # Add parent directory to path for direct execution
@@ -29,6 +30,7 @@ except ImportError:
         PlotBrainstormingTool,
         NextLineGenerationTool,
         ChatWithContextTool,
+        EnhanceTextTool,
     )
 
 
@@ -61,6 +63,7 @@ class StoryAgent:
         self.plot_tool = PlotBrainstormingTool(self.project_id, self.location)
         self.next_line_tool = NextLineGenerationTool(self.project_id, self.location)
         self.chat_tool = ChatWithContextTool(self.project_id, self.location)
+        self.enhance_text_tool = EnhanceTextTool(self.project_id, self.location)
 
     async def generate_next_lines(
         self,
@@ -204,6 +207,27 @@ class StoryAgent:
         """
         return await self.chat_tool.execute(story_id, message, chat_history)
 
+    async def enhance_text(
+        self,
+        story_id: str,
+        action: str,
+        selected_text: str,
+        chapter_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Enhance selected text based on action type.
+
+        Args:
+            story_id: Firestore story document ID
+            action: Action type (expand, dialogue, rewrite)
+            selected_text: The text to enhance
+            chapter_id: Optional chapter document ID for better context
+
+        Returns:
+            Dictionary containing enhanced text
+        """
+        return await self.enhance_text_tool.execute(story_id, action, selected_text, chapter_id)
+
     async def execute_agent(
         self,
         action: str,
@@ -277,6 +301,13 @@ class StoryAgent:
                 parameters.get("storyId"),
                 parameters.get("message"),
                 parameters.get("chatHistory"),
+            )
+        elif action == "enhanceText":
+            return await self.enhance_text(
+                parameters.get("storyId"),
+                parameters.get("action"),
+                parameters.get("selectedText"),
+                parameters.get("chapterId"),
             )
         else:
             raise ValueError(f"Unknown action: {action}")
