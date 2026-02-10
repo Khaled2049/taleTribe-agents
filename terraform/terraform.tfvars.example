@@ -1,0 +1,41 @@
+# Example Terraform Variables
+#
+# Copy this file to terraform.tfvars and fill in your values
+# terraform.tfvars is in .gitignore - never commit real values
+#
+# Example:
+#   cp terraform.tfvars.example terraform.tfvars
+
+# GCP Project ID
+project_id = "story-6f89f"
+
+# GCP Region
+region = "us-central1"
+
+# Cloud Run service name
+service_name = "novelsync-agents"
+
+# Docker image URI (set by GitHub Actions during deployment)
+# Format: us-central1-docker.pkg.dev/story-6f89f/novelsync-agents/app:{tag}
+# On first deployment, use: us-central1-docker.pkg.dev/story-6f89f/novelsync-agents/app:initial
+image = "us-central1-docker.pkg.dev/story-6f89f/novelsync-agents/app:latest"
+
+# Cloud Run scaling (free tier: scale to zero when idle)
+min_instances = 0
+max_instances = 5
+
+# Resource allocation (free tier: 1Gi memory, 1 CPU)
+memory = "1Gi"
+cpu    = "1"
+
+# Request timeout (max 3600 seconds)
+timeout_seconds = 300
+
+# Max concurrent requests per instance
+concurrency = 80
+
+# Google AI Studio configuration
+google_ai_studio_model = "gemini-2.5-flash"
+
+# Enable public access (set to false for authenticated-only)
+enable_public_access = true
