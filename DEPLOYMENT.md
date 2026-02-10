@@ -118,16 +118,17 @@ gcloud iam workload-identity-pools providers create-oidc "github-provider" \
   --workload-identity-pool="github-pool" \
   --display-name="GitHub Actions Provider" \
   --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository,attribute.repository_owner=assertion.repository_owner" \
-  --attribute-condition="assertion.repository_owner == 'khaled2049'" \
+  --attribute-condition="assertion.repository_owner == 'Khaled2049'" \
   --issuer-uri="https://token.actions.githubusercontent.com"
 
 # Allow GitHub Actions to impersonate service account
 # Replace PROJECT_NUMBER with the value from above
+# ⚠️ IMPORTANT: GitHub usernames are case-sensitive (use "Khaled2049" not "khaled2049")
 gcloud iam service-accounts add-iam-policy-binding \
   github-actions@story-6f89f.iam.gserviceaccount.com \
   --project=story-6f89f \
   --role="roles/iam.workloadIdentityUser" \
-  --member="principalSet://iam.googleapis.com/projects/793308156964/locations/global/workloadIdentityPools/github-pool/attribute.repository/khaled2049/novelsync-agents"
+  --member="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool/attribute.repository/Khaled2049/novelsync-agents"
 
 # Get Workload Identity Provider resource name (needed for GitHub Secrets)
 WIF_PROVIDER=$(gcloud iam workload-identity-pools providers describe "github-provider" \
@@ -141,14 +142,31 @@ echo "WIF_PROVIDER: $WIF_PROVIDER"
 # projects/{PROJECT_NUMBER}/locations/global/workloadIdentityPools/github-pool/providers/github-provider
 ```
 
-### 5. Create Secret in Secret Manager
+### 5. Add Missing IAM Roles to GitHub Actions Service Account
+
+GitHub Actions needs additional permissions to manage resources:
 
 ```bash
-# Create secret (GitHub Actions will add the version with your API key)
-gcloud secrets create google-ai-studio-api-key \
-  --replication-policy=automatic
+# Service usage management (to enable/list APIs)
+gcloud projects add-iam-policy-binding story-6f89f \
+  --member="serviceAccount:github-actions@story-6f89f.iam.gserviceaccount.com" \
+  --role="roles/serviceusage.serviceUsageAdmin"
 
-# Or, if you have the API key ready now:
+# IAM management (to create service accounts)
+gcloud projects add-iam-policy-binding story-6f89f \
+  --member="serviceAccount:github-actions@story-6f89f.iam.gserviceaccount.com" \
+  --role="roles/iam.securityAdmin"
+
+# Firestore management (to manage database)
+gcloud projects add-iam-policy-binding story-6f89f \
+  --member="serviceAccount:github-actions@story-6f89f.iam.gserviceaccount.com" \
+  --role="roles/datastore.owner"
+```
+
+### 6. Create Secret in Secret Manager
+
+```bash
+# Create secret with your API key
 echo "YOUR_API_KEY_HERE" | \
   gcloud secrets create google-ai-studio-api-key \
   --data-file=- \
@@ -183,7 +201,35 @@ Configure these secrets in your GitHub repository:
 
 ## First Deployment
 
-### Step 1: Initialize Terraform
+### Step 0: Optimize Docker Image (IMPORTANT)
+
+The full `requirements.txt` includes large ML libraries (PyTorch, Diffusers) that are not needed for Cloud Run since image generation is disabled. Create a production-only requirements file:
+
+**Create `requirements-prod.txt`:**
+```bash
+# This file is already created for you
+# It excludes: torch, diffusers, Pillow, transformers, accelerate
+cat requirements-prod.txt
+```
+
+**Update Dockerfile and CI/CD to use it:**
+- ✅ `Dockerfile` - uses `requirements-prod.txt`
+- ✅ `.github/workflows/ci.yml` - uses `requirements-prod.txt`
+- ✅ Keep `requirements.txt` for local development with full features
+
+This reduces Docker image size from ~8GB to ~500MB and speeds up CI/CD!
+
+### Step 1: Create Artifact Registry Repository
+
+```bash
+# Create the Docker repository (Terraform will use this)
+gcloud artifacts repositories create novelsync-agents \
+  --repository-format=docker \
+  --location=us-central1 \
+  --description="Docker repository for NovelSync Agents"
+```
+
+### Step 2: Initialize Terraform
 
 ```bash
 # Navigate to project
@@ -200,14 +246,17 @@ terraform validate
 terraform fmt -check -recursive
 ```
 
-### Step 2: Build and Push Initial Docker Image
+### Step 3: Build and Push Initial Docker Image
+
+**Important: Use correct architecture for Cloud Run (x86_64)**
 
 ```bash
 # Back to project root
 cd ..
 
-# Build Docker image
-docker build \
+# Build Docker image for x86_64 (required for Cloud Run)
+# Use --platform if on M1/M2 Mac (ARM64)
+docker build --platform=linux/amd64 \
   -t us-central1-docker.pkg.dev/story-6f89f/novelsync-agents/app:initial \
   .
 
@@ -218,15 +267,34 @@ gcloud auth configure-docker us-central1-docker.pkg.dev
 docker push us-central1-docker.pkg.dev/story-6f89f/novelsync-agents/app:initial
 ```
 
-### Step 3: Deploy with Terraform
+### Step 4: Import Existing Resources into Terraform
+
+If you created resources manually (Firestore database, Secret, Artifact Registry), tell Terraform about them:
+
+```bash
+cd terraform
+
+# Import Artifact Registry repository
+terraform import google_artifact_registry_repository.docker_repo \
+  projects/story-6f89f/locations/us-central1/repositories/novelsync-agents
+
+# Import Firestore database
+terraform import google_firestore_database.database \
+  'projects/story-6f89f/databases/(default)'
+
+# Import Secret Manager secret (if it exists)
+terraform import google_secret_manager_secret.google_ai_studio_api_key \
+  google-ai-studio-api-key
+```
+
+### Step 5: Deploy with Terraform
 
 ```bash
 # Plan deployment
-cd terraform
 terraform plan \
   -var="image=us-central1-docker.pkg.dev/story-6f89f/novelsync-agents/app:initial"
 
-# Apply (creates all infrastructure)
+# Apply (creates/updates infrastructure)
 terraform apply \
   -var="image=us-central1-docker.pkg.dev/story-6f89f/novelsync-agents/app:initial"
 
@@ -435,6 +503,104 @@ gcloud run services describe novelsync-agents --region=us-central1
 gcloud run services update-traffic novelsync-agents \
   --to-revisions=PREVIOUS_REVISION=100 \
   --region=us-central1
+```
+
+## Real-World Issues & Solutions
+
+### Docker Image Too Large (~8GB)
+
+**Problem:** Docker image is too large, takes forever to push to registry.
+
+**Root Cause:** `requirements.txt` includes PyTorch, Diffusers, and other large ML libraries that aren't needed in Cloud Run.
+
+**Solution:**
+1. Create `requirements-prod.txt` without ML dependencies
+2. Update `Dockerfile` to use `requirements-prod.txt`
+3. Update `.github/workflows/ci.yml` to use `requirements-prod.txt`
+4. Rebuild and push: `docker build --platform=linux/amd64 -t ... .`
+
+Result: Image size drops from ~8GB to ~500MB ✅
+
+### GitHub Actions Authentication Fails
+
+**Problem:** `failed to generate Google Cloud federated token` or `The given credential is rejected by the attribute condition`
+
+**Root Cause:** GitHub username is case-sensitive in Workload Identity Federation. If you use `khaled2049` but your username is `Khaled2049`, authentication fails.
+
+**Solution:**
+```bash
+# Update Workload Identity Provider with CORRECT capitalization
+gcloud iam workload-identity-pools providers update-oidc "github-provider" \
+  --project="story-6f89f" \
+  --location="global" \
+  --workload-identity-pool="github-pool" \
+  --attribute-condition="assertion.repository_owner == 'Khaled2049'"  # Use YOUR exact capitalization
+
+# Update IAM binding with CORRECT capitalization
+gcloud iam service-accounts add-iam-policy-binding \
+  github-actions@story-6f89f.iam.gserviceaccount.com \
+  --project=story-6f89f \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool/attribute.repository/Khaled2049/novelsync-agents"
+```
+
+### Terraform: Service Account Can't Create Resources
+
+**Problem:** `Permission 'iam.serviceAccounts.create' denied` or `Failed to list services`
+
+**Root Cause:** GitHub Actions service account is missing required IAM roles.
+
+**Solution:**
+```bash
+# Add all required roles to the service account
+gcloud projects add-iam-policy-binding story-6f89f \
+  --member="serviceAccount:github-actions@story-6f89f.iam.gserviceaccount.com" \
+  --role="roles/serviceusage.serviceUsageAdmin"
+
+gcloud projects add-iam-policy-binding story-6f89f \
+  --member="serviceAccount:github-actions@story-6f89f.iam.gserviceaccount.com" \
+  --role="roles/iam.securityAdmin"
+
+gcloud projects add-iam-policy-binding story-6f89f \
+  --member="serviceAccount:github-actions@story-6f89f.iam.gserviceaccount.com" \
+  --role="roles/datastore.owner"
+```
+
+### Terraform: Resources Already Exist
+
+**Problem:** `Error 409: the repository already exists` or `Error 409: Secret already exists`
+
+**Root Cause:** Resources were created manually before Terraform knew about them.
+
+**Solution:** Import existing resources into Terraform state:
+```bash
+cd terraform
+
+# Import Artifact Registry
+terraform import google_artifact_registry_repository.docker_repo \
+  projects/story-6f89f/locations/us-central1/repositories/novelsync-agents
+
+# Import Secret
+terraform import google_secret_manager_secret.google_ai_studio_api_key \
+  google-ai-studio-api-key
+
+# Import Firestore database
+terraform import google_firestore_database.database \
+  'projects/story-6f89f/databases/(default)'
+```
+
+### Docker Build: Architecture Mismatch
+
+**Problem:** Cloud Run: `Application failed to start: failed to load /usr/local/bin/python: exec format error`
+
+**Root Cause:** Docker image built on M1/M2 Mac (ARM64) but Cloud Run runs on x86_64.
+
+**Solution:**
+```bash
+# Always use --platform=linux/amd64 when building
+docker build --platform=linux/amd64 \
+  -t us-central1-docker.pkg.dev/story-6f89f/novelsync-agents/app:initial \
+  .
 ```
 
 ## Troubleshooting
