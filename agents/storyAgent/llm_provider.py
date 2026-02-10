@@ -47,14 +47,14 @@ class LLMProvider(ABC):
 class GoogleAIStudioProvider(LLMProvider):
     """Google AI Studio (Gemini) provider using REST API with API key."""
 
-    def __init__(self, api_key: str, model_name: str = "gemini-2.0-flash-exp"):
+    def __init__(self, api_key: str, model_name: str = "gemini-2.5-flash"):
         """
         Initialize Google AI Studio provider.
 
         Args:
             api_key: Google AI Studio API key
-            model_name: Model name to use (default: gemini-2.0-flash-exp for free tier)
-                        Use gemini-2.0-flash-exp for free tier, gemini-1.5-flash for paid
+            model_name: Model name to use (default: gemini-2.5-flash for free tier)
+                        Use gemini-2.5-flash for free tier, gemini-1.5-flash for paid
         """
         self.api_key = api_key
         self.model_name = model_name
@@ -341,7 +341,7 @@ def get_llm_provider(project_id: Optional[str] = None, location: str = "us-centr
     - OLLAMA_BASE_URL: Ollama API base URL (default: http://localhost:11434)
     - OLLAMA_MODEL: Model name to use (default: phi4-mini)
     - USE_MOCK: If set to "true", use mock provider (no AI calls, for testing)
-    - GOOGLE_AI_STUDIO_MODEL: Model name for Google AI Studio (default: gemini-2.0-flash-exp for free tier)
+    - GOOGLE_AI_STUDIO_MODEL: Model name for Google AI Studio (default: gemini-2.5-flash for free tier)
 
     Args:
         project_id: GCP project ID (required for Firestore access, not used by LLM provider)
@@ -367,7 +367,7 @@ def get_llm_provider(project_id: Optional[str] = None, location: str = "us-centr
     # Prefer Google AI Studio API if API key is provided
     if google_ai_studio_api_key:
         print("Using Google AI Studio API Provider.")
-        model_name = os.getenv("GOOGLE_AI_STUDIO_MODEL", "gemini-2.0-flash-exp")
+        model_name = os.getenv("GOOGLE_AI_STUDIO_MODEL", "gemini-2.5-flash")
         return GoogleAIStudioProvider(api_key=google_ai_studio_api_key, model_name=model_name)
     
     # Default to ollama

@@ -1,12 +1,32 @@
-# Python Project
+# NovelSync Agents
 
-This directory contains bots, agents, and image-generation services for the Novel Sync application.
+FastAPI backend service for AI-powered story generation with Terraform and GitHub Actions deployment to Google Cloud Run.
 
 ## Quick Start
 
-1. **Setup**: See [SETUP.md](./SETUP.md) for environment setup
-2. **Quick Start**: See [QUICKSTART.md](./QUICKSTART.md) for getting started quickly
-3. **Local Development**: See [LOCAL_DEVELOPMENT.md](./LOCAL_DEVELOPMENT.md) for detailed development guide
+### Production Deployment
+
+This project is deployed to Google Cloud Run using Terraform and GitHub Actions.
+
+**For deployment documentation**, see [DEPLOYMENT.md](./DEPLOYMENT.md)
+
+**Quick deploy:**
+
+```bash
+# Push to main branch - GitHub Actions automatically deploys
+git push origin main
+
+# Monitor deployment
+# https://github.com/khaled2049/novelsync-agents/actions
+```
+
+**Manual deployment:**
+
+```bash
+cd terraform
+terraform init
+terraform apply -var="image=us-central1-docker.pkg.dev/story-6f89f/novelsync-agents/app:TAG"
+```
 
 ## Structure
 
@@ -41,6 +61,7 @@ The unified server (`server.py`) includes both story agent endpoints and image g
 **Quick Start:**
 
 1. Start the unified server:
+
    ```bash
    python server.py
    ```
@@ -58,12 +79,14 @@ The unified server (`server.py`) includes both story agent endpoints and image g
      -d '{"prompt": "A beautiful sunset over mountains"}'
    ```
 
-**Note:** 
+**Note:**
+
 - Image generation endpoints are automatically available if dependencies are installed
 - The first image generation request will download the Stable Diffusion model (~1.4GB), which may take a few minutes
 - If image generation dependencies are not installed, the server will start without them (with a warning)
 
 ### Bot
+
 ```bash
 python -m bots.bots.bot
 ```

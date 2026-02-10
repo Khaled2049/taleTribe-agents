@@ -9,8 +9,8 @@ RUN apt-get update && apt-get install -y \
   gcc \
   && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
-COPY requirements.txt /app/requirements.txt
+# Copy production requirements (excludes large ML libraries for Cloud Run)
+COPY requirements-prod.txt /app/requirements.txt
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r /app/requirements.txt

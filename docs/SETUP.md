@@ -14,6 +14,7 @@ This guide will help you set up a single Python environment for both bots and ag
 Navigate to the `python` directory and create a virtual environment:
 
 ### Windows
+
 ```bash
 cd python
 python -m venv venv
@@ -21,6 +22,7 @@ venv\Scripts\activate
 ```
 
 ### Linux/Mac
+
 ```bash
 cd python
 python3 -m venv venv
@@ -37,6 +39,7 @@ pip install -r requirements.txt
 ```
 
 This will install all dependencies needed for both bots and agents:
+
 - Firebase/Google Cloud libraries
 - FastAPI and Uvicorn (for agent server)
 - HTTP libraries (requests, httpx)
@@ -54,8 +57,8 @@ GOOGLE_CLOUD_PROJECT=your-project-id
 # Required: Google AI Studio API Key (for AI generation)
 GOOGLE_AI_STUDIO_API_KEY=your-api-key
 
-# Optional: AI Model (defaults to gemini-2.0-flash-exp)
-GOOGLE_AI_STUDIO_MODEL=gemini-2.0-flash-exp
+# Optional: AI Model (defaults to gemini-2.5-flash)
+GOOGLE_AI_STUDIO_MODEL=gemini-2.5-flash
 
 # Optional: For local development with Firebase emulators
 FIRESTORE_EMULATOR_HOST=localhost:8080
@@ -103,8 +106,9 @@ curl http://localhost:8000/health
 ```
 
 Expected response:
+
 ```json
-{"status": "healthy", "project_id": "your-project-id"}
+{ "status": "healthy", "project_id": "your-project-id" }
 ```
 
 ### Test Bot (if configured)
@@ -118,15 +122,18 @@ python -m bots.bots.bot
 ### Virtual Environment Not Activating
 
 **Windows:**
+
 - Make sure you're using `venv\Scripts\activate` (not `venv/Scripts/activate`)
 - If you get an execution policy error, run: `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
 
 **Linux/Mac:**
+
 - Make sure you're using `source venv/bin/activate` (not `venv/bin/activate`)
 
 ### Import Errors
 
 If you get import errors, make sure:
+
 1. Your virtual environment is activated (you should see `(venv)` in your terminal prompt)
 2. All dependencies are installed: `pip install -r requirements.txt`
 3. You're running commands from the `python` directory
@@ -134,6 +141,7 @@ If you get import errors, make sure:
 ### Firestore Connection Issues
 
 If you're using the emulator:
+
 1. Make sure Firebase emulators are running: `cd ../functions && npm run emulator`
 2. Set `FIRESTORE_EMULATOR_HOST=localhost:8080` in your `.env` file
 3. Restart your Python application
@@ -141,6 +149,7 @@ If you're using the emulator:
 ### Port Already in Use
 
 If port 8000 is already in use:
+
 1. Change the `PORT` in your `.env` file
 2. Or stop the process using port 8000
 
@@ -159,25 +168,32 @@ deactivate
 ```
 
 requirements.txt
+
 # Unified Python Dependencies
+
 # This file contains all dependencies for bots, agents, and image-generation
 
 # Firebase and Google Cloud
+
 google-cloud-firestore>=2.13.0
 
 # HTTP and API
+
 requests>=2.31.0
 httpx>=0.25.0
 
 # Web Framework (for agent server and image-generation API)
+
 fastapi>=0.104.1
 uvicorn[standard]>=0.24.0
 
 # Data Validation
+
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
 
 # Image Generation (for image-generation service)
+
 diffusers>=0.24.0
 transformers>=4.35.0
 torch>=2.1.0
@@ -185,9 +201,11 @@ accelerate>=0.25.0
 pillow>=10.1.0
 
 # PyTorch: Install CPU version by default, or CUDA version for GPU support
+
 # For CUDA 12.x: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
 # For CUDA 11.x: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 
 # Environment Management
-python-dotenv>=1.0.0
 
+python-dotenv>=1.0.0

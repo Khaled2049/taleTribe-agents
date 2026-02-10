@@ -1,0 +1,107 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # Allow manual trigger
+
+env:
+  PROJECT_ID: story-6f89f
+  REGION: us-central1
+  SERVICE_NAME: novelsync-agents
+  ARTIFACT_REGISTRY_REPO: novelsync-agents
+
+jobs:
+  deploy:
+    name: Build and Deploy
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write  # Required for Workload Identity Federation
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/app:${{ github.sha }} \
+            -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/app:latest \
+            .
+
+      - name: Push Docker image to Artifact Registry
+        run: |
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/app:${{ github.sha }}
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/app:latest
+
+      - name: Create or update secret version in Secret Manager
+        run: |
+          # Check if secret exists with at least one version
+          if gcloud secrets versions list google-ai-studio-api-key --limit=1 >/dev/null 2>&1; then
+            echo "Secret already exists with versions"
+          else
+            # Create secret if it doesn't exist (first deployment)
+            echo "${{ secrets.GOOGLE_AI_STUDIO_API_KEY }}" | \
+              gcloud secrets create google-ai-studio-api-key \
+              --data-file=- \
+              --replication-policy=automatic 2>/dev/null || true
+          fi
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+
+      - name: Terraform Init
+        working-directory: ./terraform
+        run: terraform init
+
+      - name: Terraform Plan
+        working-directory: ./terraform
+        run: |
+          terraform plan \
+            -var="image=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/app:${{ github.sha }}" \
+            -out=tfplan
+
+      - name: Terraform Apply
+        working-directory: ./terraform
+        run: terraform apply -auto-approve tfplan
+
+      - name: Get Service URL
+        id: get_url
+        working-directory: ./terraform
+        run: |
+          SERVICE_URL=$(terraform output -raw service_url)
+          echo "service_url=$SERVICE_URL" >> $GITHUB_OUTPUT
+
+      - name: Wait for service to be ready
+        run: |
+          sleep 10
+
+      - name: Test deployment health check
+        run: |
+          curl -f ${{ steps.get_url.outputs.service_url }}/health || exit 1
+
+      - name: Deployment Summary
+        run: |
+          echo "## Deployment Successful! 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Service URL:** [${{ steps.get_url.outputs.service_url }}](${{ steps.get_url.outputs.service_url }})" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image Tag:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Region:** ${{ env.REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** [${{ github.sha }}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})" >> $GITHUB_STEP_SUMMARY

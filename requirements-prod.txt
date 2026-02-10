@@ -1,0 +1,20 @@
+# Production Dependencies for Cloud Run
+# Excludes large ML libraries (torch, diffusers, Pillow) since image generation is disabled
+# Use this for Cloud Run deployment via Docker
+
+# Firebase and Google Cloud
+google-cloud-firestore>=2.13.0
+
+# HTTP and API
+requests>=2.31.0
+httpx>=0.25.0
+
+# Web Framework
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+
+# Data Validation
+pydantic>=2.5.0
+
+# Environment Management
+python-dotenv>=1.0.0
