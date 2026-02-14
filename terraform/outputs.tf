@@ -30,7 +30,7 @@ output "firestore_database_id" {
 
 output "secret_manager_secret_id" {
   description = "Secret Manager secret ID for Google AI Studio API key"
-  value       = google_secret_manager_secret.google_ai_studio_api_key.secret_id
+  value       = data.google_secret_manager_secret.google_ai_studio_api_key.secret_id
 }
 
 output "project_id" {
