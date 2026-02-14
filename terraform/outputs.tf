@@ -15,12 +15,12 @@ output "service_region" {
 
 output "artifact_registry_repository" {
   description = "Artifact Registry repository URL for Docker images"
-  value       = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.docker_repo.repository_id}"
+  value       = "${var.region}-docker.pkg.dev/${var.project_id}/${data.google_artifact_registry_repository.docker_repo.repository_id}"
 }
 
 output "service_account_email" {
   description = "Email of the Cloud Run service account"
-  value       = google_service_account.cloud_run_sa.email
+  value       = data.google_service_account.cloud_run_sa.email
 }
 
 output "firestore_database_id" {

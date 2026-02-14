@@ -19,15 +19,11 @@ resource "google_project_service" "artifactregistry" {
   disable_on_destroy = false
 }
 
-# Artifact Registry Repository for Docker images
-# More cost-effective than Container Registry for long-term storage
-resource "google_artifact_registry_repository" "docker_repo" {
+
+data "google_artifact_registry_repository" "docker_repo" {
   location      = var.region
   repository_id = "novelsync-agents"
-  description   = "Docker repository for NovelSync Agents API server"
-  format        = "DOCKER"
-
-  depends_on = [google_project_service.artifactregistry]
+  project       = var.project_id
 }
 
 # Firestore Database (Native mode)
@@ -48,26 +44,23 @@ data "google_secret_manager_secret" "google_ai_studio_api_key" {
   project   = var.project_id
 }
 
-# Service Account for Cloud Run
-# Has minimal permissions (principle of least privilege)
-resource "google_service_account" "cloud_run_sa" {
-  account_id   = "novelsync-agents-run"
-  display_name = "NovelSync Agents Cloud Run Service Account"
-  description  = "Service account for NovelSync Agents Cloud Run service"
+data "google_service_account" "cloud_run_sa" {
+  account_id = "novelsync-agents-run"
+  project    = var.project_id
 }
 
 # IAM: Allow Cloud Run service account to read secrets from Secret Manager
 resource "google_secret_manager_secret_iam_member" "secret_access" {
   secret_id = data.google_secret_manager_secret.google_ai_studio_api_key.secret_id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.cloud_run_sa.email}"
+  member    = "serviceAccount:${data.google_service_account.cloud_run_sa.email}"
 }
 
 # IAM: Allow Cloud Run service account to use Firestore
 resource "google_project_iam_member" "firestore_user" {
   project = var.project_id
   role    = "roles/datastore.user"
-  member  = "serviceAccount:${google_service_account.cloud_run_sa.email}"
+  member  = "serviceAccount:${data.google_service_account.cloud_run_sa.email}"
 }
 
 # Cloud Run Service
@@ -78,7 +71,7 @@ resource "google_cloud_run_v2_service" "app" {
   location = var.region
 
   template {
-    service_account = google_service_account.cloud_run_sa.email
+    service_account = data.google_service_account.cloud_run_sa.email
 
     scaling {
       min_instance_count = var.min_instances
