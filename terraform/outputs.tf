@@ -24,8 +24,8 @@ output "service_account_email" {
 }
 
 output "firestore_database_id" {
-  description = "Firestore database ID"
-  value       = google_firestore_database.database.name
+  description = "Firestore database ID (default database created by workflow if missing)"
+  value       = "projects/${var.project_id}/databases/(default)"
 }
 
 output "secret_manager_secret_id" {

@@ -26,16 +26,8 @@ data "google_artifact_registry_repository" "docker_repo" {
   project       = var.project_id
 }
 
-# Firestore Database (Native mode)
-# Free tier: 1GB storage, 50K reads/day, 20K writes/day
-resource "google_firestore_database" "database" {
-  project     = var.project_id
-  name        = "(default)"
-  location_id = var.region
-  type        = "FIRESTORE_NATIVE"
-
-  depends_on = [google_project_service.firestore]
-}
+# Firestore database is created by the deploy workflow if missing (no data source in provider).
+# Terraform does not manage it to avoid 409 in CI when DB already exists and state is not shared.
 
 # Use existing Secret Manager secret (created outside Terraform or by GitHub Actions)
 # Secret versions are added by the deploy workflow; Terraform only references it.
