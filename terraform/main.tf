@@ -41,17 +41,11 @@ resource "google_firestore_database" "database" {
   depends_on = [google_project_service.firestore]
 }
 
-# Secret Manager secret for Google AI Studio API key
-# Note: Secret version is managed by GitHub Actions for security
-# Terraform only creates the secret container
-resource "google_secret_manager_secret" "google_ai_studio_api_key" {
+# Use existing Secret Manager secret (created outside Terraform or by GitHub Actions)
+# Secret versions are added by the deploy workflow; Terraform only references it.
+data "google_secret_manager_secret" "google_ai_studio_api_key" {
   secret_id = "google-ai-studio-api-key"
-
-  replication {
-    auto {}
-  }
-
-  depends_on = [google_project_service.secretmanager]
+  project   = var.project_id
 }
 
 # Service Account for Cloud Run
@@ -64,7 +58,7 @@ resource "google_service_account" "cloud_run_sa" {
 
 # IAM: Allow Cloud Run service account to read secrets from Secret Manager
 resource "google_secret_manager_secret_iam_member" "secret_access" {
-  secret_id = google_secret_manager_secret.google_ai_studio_api_key.secret_id
+  secret_id = data.google_secret_manager_secret.google_ai_studio_api_key.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.cloud_run_sa.email}"
 }
@@ -134,7 +128,7 @@ resource "google_cloud_run_v2_service" "app" {
         name = "GOOGLE_AI_STUDIO_API_KEY"
         value_source {
           secret_key_ref {
-            secret  = google_secret_manager_secret.google_ai_studio_api_key.secret_id
+            secret  = data.google_secret_manager_secret.google_ai_studio_api_key.secret_id
             version = "latest"
           }
         }
