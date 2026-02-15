@@ -1,6 +1,11 @@
 terraform {
   required_version = ">= 1.5.0"
 
+  backend "gcs" {
+    bucket = "story-6f89f-tfstate"
+    prefix = "novelsync-agents"
+  }
+
   required_providers {
     google = {
       source  = "hashicorp/google"

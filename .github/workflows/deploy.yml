@@ -3,7 +3,15 @@ name: Deploy to Cloud Run
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
   workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   PROJECT_ID: story-6f89f
@@ -75,8 +83,15 @@ jobs:
       - name: Create or update secret in Secret Manager
         run: |
           if gcloud secrets describe google-ai-studio-api-key --project=${{ env.PROJECT_ID }} >/dev/null 2>&1; then
-            echo "${{ secrets.GOOGLE_AI_STUDIO_API_KEY }}" | \
-              gcloud secrets versions add google-ai-studio-api-key --data-file=-
+            # Only add a new version if the value has changed
+            CURRENT=$(gcloud secrets versions access latest --secret=google-ai-studio-api-key --project=${{ env.PROJECT_ID }} 2>/dev/null || echo "")
+            if [ "$CURRENT" != "${{ secrets.GOOGLE_AI_STUDIO_API_KEY }}" ]; then
+              echo "Secret value changed, adding new version..."
+              echo "${{ secrets.GOOGLE_AI_STUDIO_API_KEY }}" | \
+                gcloud secrets versions add google-ai-studio-api-key --data-file=-
+            else
+              echo "Secret value unchanged, skipping"
+            fi
           else
             echo "${{ secrets.GOOGLE_AI_STUDIO_API_KEY }}" | \
               gcloud secrets create google-ai-studio-api-key \
@@ -84,14 +99,51 @@ jobs:
               --replication-policy=automatic
           fi
 
+      - name: Create Terraform state bucket if needed
+        run: |
+          BUCKET=story-6f89f-tfstate
+          if ! gcloud storage buckets describe gs://$BUCKET >/dev/null 2>&1; then
+            echo "Creating GCS bucket for Terraform state..."
+            gcloud storage buckets create gs://$BUCKET \
+              --location=${{ env.REGION }} \
+              --uniform-bucket-level-access
+            gcloud storage buckets update gs://$BUCKET --versioning
+          else
+            echo "Terraform state bucket already exists"
+          fi
+
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.5.0
+          terraform_wrapper: false
 
       - name: Terraform Init
         working-directory: ./terraform
         run: terraform init
+
+      - name: Import existing resources if state is empty
+        working-directory: ./terraform
+        run: |
+          # Only run imports if the state is empty (first run with new backend)
+          if terraform state list 2>/dev/null | grep -q .; then
+            echo "State already populated, skipping imports"
+            exit 0
+          fi
+
+          echo "Empty state detected — importing existing resources..."
+          IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/app:${{ github.sha }}"
+          SA="novelsync-agents-run@${{ env.PROJECT_ID }}.iam.gserviceaccount.com"
+          IMPORT="terraform import -var=image=$IMAGE"
+
+          $IMPORT google_project_service.run "${{ env.PROJECT_ID }}/run.googleapis.com" || true
+          $IMPORT google_project_service.firestore "${{ env.PROJECT_ID }}/firestore.googleapis.com" || true
+          $IMPORT google_project_service.secretmanager "${{ env.PROJECT_ID }}/secretmanager.googleapis.com" || true
+          $IMPORT google_project_service.artifactregistry "${{ env.PROJECT_ID }}/artifactregistry.googleapis.com" || true
+          $IMPORT google_cloud_run_v2_service.app "projects/${{ env.PROJECT_ID }}/locations/${{ env.REGION }}/services/${{ env.SERVICE_NAME }}" || true
+          $IMPORT google_secret_manager_secret_iam_member.secret_access "projects/${{ env.PROJECT_ID }}/secrets/google-ai-studio-api-key roles/secretmanager.secretAccessor serviceAccount:$SA" || true
+          $IMPORT google_project_iam_member.firestore_user "${{ env.PROJECT_ID }} roles/datastore.user serviceAccount:$SA" || true
+          $IMPORT 'google_cloud_run_v2_service_iam_member.public_access[0]' "projects/${{ env.PROJECT_ID }}/locations/${{ env.REGION }}/services/${{ env.SERVICE_NAME }} roles/run.invoker allUsers" || true
 
       - name: Terraform Plan
         working-directory: ./terraform
@@ -111,13 +163,19 @@ jobs:
           SERVICE_URL=$(terraform output -raw service_url)
           echo "service_url=$SERVICE_URL" >> $GITHUB_OUTPUT
 
-      - name: Wait for service to be ready
-        run: |
-          sleep 10
-
       - name: Test deployment health check
         run: |
-          curl -f ${{ steps.get_url.outputs.service_url }}/health || exit 1
+          URL="${{ steps.get_url.outputs.service_url }}/health"
+          for i in 1 2 3 4 5; do
+            if curl -sf --max-time 10 "$URL" > /dev/null; then
+              echo "Health check passed on attempt $i"
+              exit 0
+            fi
+            echo "Attempt $i failed, waiting 10s..."
+            sleep 10
+          done
+          echo "Health check failed after 5 attempts"
+          exit 1
 
       - name: Deployment Summary
         run: |
