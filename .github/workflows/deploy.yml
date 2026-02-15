@@ -3,7 +3,7 @@ name: Deploy to Cloud Run
 on:
   push:
     branches: [main]
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:
 
 env:
   PROJECT_ID: story-6f89f
@@ -18,7 +18,7 @@ jobs:
 
     permissions:
       contents: read
-      id-token: write  # Required for Workload Identity Federation
+      id-token: write
 
     steps:
       - name: Checkout code
@@ -47,6 +47,15 @@ jobs:
             echo "Repository already exists"
           fi
 
+      - name: Create Firestore database if needed
+        run: |
+          if ! gcloud firestore databases describe --database="(default)" --project=${{ env.PROJECT_ID }} >/dev/null 2>&1; then
+            echo "Creating Firestore (default) database..."
+            gcloud firestore databases create --location=${{ env.REGION }} --type=firestore-native --project=${{ env.PROJECT_ID }}
+          else
+            echo "Firestore database already exists"
+          fi
+
       - name: Configure Docker for Artifact Registry
         run: |
           gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
@@ -63,17 +72,16 @@ jobs:
           docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/app:${{ github.sha }}
           docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/app:latest
 
-      - name: Create or update secret version in Secret Manager
+      - name: Create or update secret in Secret Manager
         run: |
-          # Check if secret exists with at least one version
-          if gcloud secrets versions list google-ai-studio-api-key --limit=1 >/dev/null 2>&1; then
-            echo "Secret already exists with versions"
+          if gcloud secrets describe google-ai-studio-api-key --project=${{ env.PROJECT_ID }} >/dev/null 2>&1; then
+            echo "${{ secrets.GOOGLE_AI_STUDIO_API_KEY }}" | \
+              gcloud secrets versions add google-ai-studio-api-key --data-file=-
           else
-            # Create secret if it doesn't exist (first deployment)
             echo "${{ secrets.GOOGLE_AI_STUDIO_API_KEY }}" | \
               gcloud secrets create google-ai-studio-api-key \
               --data-file=- \
-              --replication-policy=automatic 2>/dev/null || true
+              --replication-policy=automatic
           fi
 
       - name: Set up Terraform

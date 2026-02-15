@@ -5,6 +5,8 @@ This guide covers deploying NovelSync Agents to Google Cloud Run using Terraform
 **Quick Links:**
 
 - [Architecture Overview](#architecture-overview)
+- [Security](#security)
+- [Free tier](#free-tier)
 - [Prerequisites Setup](#prerequisites-setup)
 - [GitHub Configuration](#github-repository-secrets)
 - [First Deployment](#first-deployment)
@@ -29,15 +31,46 @@ Google Cloud Platform
     └─→ Secret Manager (API keys)
 ```
 
+## Security
+
+This setup follows security best practices:
+
+| Practice | How we do it |
+|----------|--------------|
+| **No long-lived keys** | GitHub Actions uses **Workload Identity Federation** (OIDC). No service account JSON keys are stored in GitHub or on disk. |
+| **Least privilege** | The Cloud Run service account (`novelsync-agents-run`) has only `roles/secretmanager.secretAccessor` (one secret) and `roles/datastore.user`. It cannot modify IAM or other project resources. |
+| **Secrets in Secret Manager** | The Google AI Studio API key is stored in Secret Manager. Cloud Run receives it via environment injection; the value never appears in code or in Terraform. |
+| **GitHub Secrets** | `GOOGLE_AI_STUDIO_API_KEY`, `WIF_PROVIDER`, and `WIF_SERVICE_ACCOUNT` are stored as GitHub Actions secrets. Never commit `.env` or `terraform.tfvars` with real keys (both are in `.gitignore`). |
+| **Public access is optional** | By default the service allows unauthenticated invocations (`enable_public_access = true`). For authenticated-only access, set `enable_public_access = false` in Terraform and grant `roles/run.invoker` to specific identities. |
+| **Key rotation** | Rotate the API key in Google AI Studio, update the GitHub secret `GOOGLE_AI_STUDIO_API_KEY`, then redeploy; the workflow pushes the new key to Secret Manager (GitHub masks secret values in logs). |
+| **Deploy pipeline** | The workflow never persists the API key to the repo or to Terraform; it is passed only from GitHub Secrets to Secret Manager. |
+
+**Do not:** commit `.env` or `terraform.tfvars` with secrets, grant the GitHub Actions SA more roles than listed in Prerequisites, or use a service account key instead of WIF.
+
+## Free tier
+
+The stack is tuned to stay within **GCP free tier** where possible:
+
+| Service | Free tier (approx.) | How we stay within it |
+|---------|---------------------|------------------------|
+| **Cloud Run** | 2M requests/month, 360K GB-seconds memory, 180K vCPU-seconds | `min_instances = 0` (scale to zero), `cpu_idle = true` (no CPU charge when idle), 1 vCPU, 1 Gi memory, `max_instances = 5` to cap cost spikes. |
+| **Firestore** | 1 GB storage, 50K reads/day, 20K writes/day | Use the default database; typical app usage stays under these limits. |
+| **Artifact Registry** | 0.5 GB storage per region (then paid) | Keep only a few image tags (e.g. `latest` + recent SHAs); delete old images if you approach the limit. |
+| **Secret Manager** | 6 active secret versions free | One secret with 1–2 versions is well within free tier. |
+| **Cloud Build / GitHub Actions** | N/A | Builds run on GitHub-hosted runners; no GCP build minutes used. |
+
+**Recommendation:** Enable [billing alerts](https://console.cloud.google.com/billing/budgets) (e.g. alert at $1 and $10) so you are notified if usage grows.
+
 ## Prerequisites Setup
 
 Run these commands **once** to prepare GCP for deployment. This sets up:
 
 - Required APIs
-- Firestore database
-- Service accounts and IAM
-- Workload Identity Federation (keyless authentication)
-- Secrets
+- Cloud Run and GitHub Actions service accounts
+- Workload Identity Federation (keyless authentication; no keys stored)
+- Secret Manager secret for the API key
+
+**Note:** The Artifact Registry repository and Firestore database can be created by the deploy workflow on first run, or you can create them in these steps.
 
 ### 1. Configure GCP Project
 
@@ -58,19 +91,30 @@ gcloud services enable \
 gcloud beta billing projects describe story-6f89f
 ```
 
-### 2. Create Firestore Database
+### 2. Create Firestore database (optional before first deploy)
+
+The deploy workflow can create the default Firestore database if it does not exist. To create it manually:
 
 ```bash
-# Create Firestore in Native mode (required for app to work)
 gcloud firestore databases create \
   --location=us-central1 \
-  --type=firestore-native
+  --type=firestore-native \
+  --project=story-6f89f
 
-# Verify database created
-gcloud firestore databases list
+gcloud firestore databases list --project=story-6f89f
 ```
 
-### 3. Create Service Account for GitHub Actions
+### 3. Create Cloud Run service account (required, one-time)
+
+Terraform references this SA; it does not create it (so CI does not need `iam.serviceAccounts.create`). Create it once:
+
+```bash
+gcloud iam service-accounts create novelsync-agents-run \
+  --display-name="NovelSync Agents Cloud Run Service Account" \
+  --project=story-6f89f
+```
+
+### 4. Create Service Account for GitHub Actions
 
 ```bash
 # Create service account
@@ -96,7 +140,7 @@ gcloud projects add-iam-policy-binding story-6f89f \
   --role="roles/secretmanager.admin"
 ```
 
-### 4. Set Up Workload Identity Federation (Keyless Auth)
+### 5. Set Up Workload Identity Federation (Keyless Auth)
 
 Workload Identity Federation allows GitHub Actions to authenticate to GCP **without storing service account keys**.
 
@@ -142,28 +186,28 @@ echo "WIF_PROVIDER: $WIF_PROVIDER"
 # projects/{PROJECT_NUMBER}/locations/global/workloadIdentityPools/github-pool/providers/github-provider
 ```
 
-### 5. Add Missing IAM Roles to GitHub Actions Service Account
+### 6. Add IAM roles for GitHub Actions
 
-GitHub Actions needs additional permissions to manage resources:
+The GitHub Actions service account needs these roles to deploy (create/update Cloud Run, push images, manage secrets, etc.):
 
 ```bash
-# Service usage management (to enable/list APIs)
+# Enable and list APIs
 gcloud projects add-iam-policy-binding story-6f89f \
   --member="serviceAccount:github-actions@story-6f89f.iam.gserviceaccount.com" \
   --role="roles/serviceusage.serviceUsageAdmin"
 
-# IAM management (to create service accounts)
+# Required for Terraform (IAM bindings, etc.)
 gcloud projects add-iam-policy-binding story-6f89f \
   --member="serviceAccount:github-actions@story-6f89f.iam.gserviceaccount.com" \
   --role="roles/iam.securityAdmin"
 
-# Firestore management (to manage database)
+# Firestore (workflow may create DB; Terraform does not manage it)
 gcloud projects add-iam-policy-binding story-6f89f \
   --member="serviceAccount:github-actions@story-6f89f.iam.gserviceaccount.com" \
   --role="roles/datastore.owner"
 ```
 
-### 6. Create Secret in Secret Manager
+### 7. Create Secret in Secret Manager
 
 ```bash
 # Create secret with your API key
@@ -188,7 +232,7 @@ Configure these secrets in your GitHub repository:
 
 3. **GOOGLE_AI_STUDIO_API_KEY**
    - Value: Your API key from https://aistudio.google.com/app/apikey
-   - **IMPORTANT:** After first successful deployment, delete from `.env` and rotate the key
+   - **Security:** Never commit this to the repo. Keep it only in GitHub Secrets and in Secret Manager. Rotate it if it was ever exposed (e.g. in `.env` that was committed).
 
 ### How to Add Secrets in GitHub
 
@@ -201,113 +245,39 @@ Configure these secrets in your GitHub repository:
 
 ## First Deployment
 
-### Step 0: Optimize Docker Image (IMPORTANT)
+### Step 0: Docker image size (recommended)
 
-The full `requirements.txt` includes large ML libraries (PyTorch, Diffusers) that are not needed for Cloud Run since image generation is disabled. Create a production-only requirements file:
+The full `requirements.txt` includes large ML libraries not needed for Cloud Run (image generation is disabled in production). The repo uses `requirements-prod.txt` in the Dockerfile to keep the image small (~500MB instead of ~8GB).
 
-**Create `requirements-prod.txt`:**
+### Step 1: Prerequisites and secrets
+
+1. Complete [Prerequisites Setup](#prerequisites-setup) (APIs, Cloud Run SA, GitHub Actions SA, WIF, secret).
+2. Add [GitHub Repository Secrets](#github-repository-secrets): `WIF_PROVIDER`, `WIF_SERVICE_ACCOUNT`, `GOOGLE_AI_STUDIO_API_KEY`.
+
+The deploy workflow creates the Artifact Registry repository and Firestore database if they do not exist. You can create them manually in Prerequisites if you prefer.
+
+### Step 2: Deploy
+
+Push to `main` or run the workflow manually (Actions → Deploy to Cloud Run → Run workflow):
+
 ```bash
-# This file is already created for you
-# It excludes: torch, diffusers, Pillow, transformers, accelerate
-cat requirements-prod.txt
+git add .
+git commit -m "feat: deploy to Cloud Run"
+git push origin main
 ```
 
-**Update Dockerfile and CI/CD to use it:**
-- ✅ `Dockerfile` - uses `requirements-prod.txt`
-- ✅ `.github/workflows/ci.yml` - uses `requirements-prod.txt`
-- ✅ Keep `requirements.txt` for local development with full features
+The workflow will: build the image, push to Artifact Registry, create the secret (if missing) or add a new version so the live key matches GitHub Secrets, create Firestore if missing, run Terraform (APIs, IAM, Cloud Run service), and run a health check.
 
-This reduces Docker image size from ~8GB to ~500MB and speeds up CI/CD!
+### Step 3: Verify deployment
 
-### Step 1: Create Artifact Registry Repository
+After a deploy, the workflow summary shows the service URL. Or get it locally (if you have Terraform state) or from GCP:
 
 ```bash
-# Create the Docker repository (Terraform will use this)
-gcloud artifacts repositories create novelsync-agents \
-  --repository-format=docker \
-  --location=us-central1 \
-  --description="Docker repository for NovelSync Agents"
-```
+# If you ran Terraform locally:
+SERVICE_URL=$(cd terraform && terraform output -raw service_url)
 
-### Step 2: Initialize Terraform
-
-```bash
-# Navigate to project
-cd /Users/kh1011/Documents/Developer/2026/novelsync-agents
-
-# Initialize Terraform
-cd terraform
-terraform init
-
-# Validate configuration
-terraform validate
-
-# Format check (for code quality)
-terraform fmt -check -recursive
-```
-
-### Step 3: Build and Push Initial Docker Image
-
-**Important: Use correct architecture for Cloud Run (x86_64)**
-
-```bash
-# Back to project root
-cd ..
-
-# Build Docker image for x86_64 (required for Cloud Run)
-# Use --platform if on M1/M2 Mac (ARM64)
-docker build --platform=linux/amd64 \
-  -t us-central1-docker.pkg.dev/story-6f89f/novelsync-agents/app:initial \
-  .
-
-# Authenticate Docker to Artifact Registry
-gcloud auth configure-docker us-central1-docker.pkg.dev
-
-# Push image
-docker push us-central1-docker.pkg.dev/story-6f89f/novelsync-agents/app:initial
-```
-
-### Step 4: Import Existing Resources into Terraform
-
-If you created resources manually (Firestore database, Secret, Artifact Registry), tell Terraform about them:
-
-```bash
-cd terraform
-
-# Import Artifact Registry repository
-terraform import google_artifact_registry_repository.docker_repo \
-  projects/story-6f89f/locations/us-central1/repositories/novelsync-agents
-
-# Import Firestore database
-terraform import google_firestore_database.database \
-  'projects/story-6f89f/databases/(default)'
-
-# Import Secret Manager secret (if it exists)
-terraform import google_secret_manager_secret.google_ai_studio_api_key \
-  google-ai-studio-api-key
-```
-
-### Step 5: Deploy with Terraform
-
-```bash
-# Plan deployment
-terraform plan \
-  -var="image=us-central1-docker.pkg.dev/story-6f89f/novelsync-agents/app:initial"
-
-# Apply (creates/updates infrastructure)
-terraform apply \
-  -var="image=us-central1-docker.pkg.dev/story-6f89f/novelsync-agents/app:initial"
-
-# Get service URL
-terraform output service_url
-# Output: https://novelsync-agents-XXXXX-uc.a.run.app
-```
-
-### Step 4: Verify Deployment
-
-```bash
-# Get the service URL
-SERVICE_URL=$(terraform output -raw service_url)
+# Or from gcloud:
+SERVICE_URL=$(gcloud run services describe novelsync-agents --region=us-central1 --format='value(status.url)')
 
 # Test health endpoint
 curl $SERVICE_URL/health
@@ -327,54 +297,10 @@ curl -X POST $SERVICE_URL/agent/execute \
 # Expected response: {"success":true,"data":{...}}
 ```
 
-### Step 5: Commit and Enable Automated Deployments
+### Step 4: Keep secrets out of the repo
 
-```bash
-# Remove the exposed API key from .env
-# CRITICAL SECURITY STEP
-rm .env
-
-# Add deployment files to git
-git add .
-git commit -m "feat: Add Terraform and GitHub Actions deployment
-
-- Terraform configuration for Cloud Run, Firestore, Secret Manager
-- GitHub Actions CI/CD workflows (lint, test, build, deploy)
-- Test suite with pytest
-- Deployment documentation
-- Secure secrets management with Workload Identity Federation"
-
-# Push to main - GitHub Actions will automatically deploy on subsequent changes
-git push origin main
-
-# Monitor deployment at:
-# https://github.com/khaled2049/novelsync-agents/actions
-```
-
-### Step 6: Secure the API Key
-
-**CRITICAL:** The API key is currently exposed in the `.env` file. Complete these steps immediately:
-
-```bash
-# 1. The .env file with the exposed key should already be deleted above
-#    Verify it's gone:
-ls -la .env  # Should NOT exist
-
-# 2. Rotate the API key in Google AI Studio:
-#    - Go to: https://aistudio.google.com/app/apikey
-#    - Delete the old key (the one that was in .env)
-#    - Create a new API key
-#    - Copy the new key
-
-# 3. Update GitHub Secrets with the new API key:
-#    - Go to: https://github.com/khaled2049/novelsync-agents/settings/secrets/actions
-#    - Update GOOGLE_AI_STUDIO_API_KEY with the new key
-#    - GitHub Actions will use the new key for future deployments
-
-# 4. Verify the new key is in Secret Manager:
-gcloud secrets versions list google-ai-studio-api-key --limit=3
-# Should show the new version is "latest"
-```
+- **Never commit** `.env` or `terraform.tfvars` with real API keys (both are in `.gitignore`).
+- If a key was ever committed: remove it from history, rotate the key in Google AI Studio, update the GitHub secret and Secret Manager, then redeploy.
 
 ## Ongoing Operations
 
@@ -431,41 +357,43 @@ gcloud run services logs read novelsync-agents \
 # https://console.cloud.google.com/run/detail/us-central1/novelsync-agents/logs
 ```
 
-### Updating Secrets
+### Updating secrets
+
+To rotate the Google AI Studio API key:
+
+1. Create a new key at https://aistudio.google.com/app/apikey
+2. Update the GitHub secret `GOOGLE_AI_STUDIO_API_KEY` (Settings → Secrets and variables → Actions)
+3. Push to `main` or re-run the deploy workflow — it will add a new Secret Manager version so Cloud Run uses the new key
+4. Delete the old key in Google AI Studio
+
+Alternatively, add a new version manually:  
+`echo "NEW_API_KEY" | gcloud secrets versions add google-ai-studio-api-key --data-file=-`  
+Cloud Run uses the latest version automatically.
+
+### Monitoring costs
+
+See [Free tier](#free-tier) for how the stack stays within free limits. Recommended:
 
 ```bash
-# Rotate Google AI Studio API key
-# 1. Create new API key in Google AI Studio console
-# 2. Add new secret version to Secret Manager
-echo "NEW_API_KEY" | gcloud secrets versions add google-ai-studio-api-key --data-file=-
-
-# 3. Update GitHub Secret with same key
-#    Go to: https://github.com/khaled2049/novelsync-agents/settings/secrets/actions
-
-# 4. Cloud Run automatically uses latest version
-# 5. Delete old API key from Google AI Studio console
-
-# Verify the change
-gcloud secrets versions list google-ai-studio-api-key --limit=3
-```
-
-### Monitoring Costs
-
-The app is configured to stay within GCP's free tier.
-
-```bash
-# Check billing account
+# Confirm billing is linked
 gcloud billing projects describe story-6f89f
 
-# View resource usage (Cloud Console)
-# https://console.cloud.google.com/billing
-
-# Free tier limits we're using:
-# - Cloud Run: 2M requests/month (we use <100K)
-# - Cloud Run: 360K GB-seconds (we use <20K)
-# - Firestore: 1GB storage (we use <100MB)
-# - Firestore: 50K reads/day (we use <5K)
+# Set up billing alerts (e.g. $1 and $10) in Cloud Console
+# https://console.cloud.google.com/billing/budgets
 ```
+
+### Tear-down (delete all resources)
+
+To remove everything Terraform manages (Cloud Run, IAM bindings; Artifact Registry, Firestore, and the secret are created outside Terraform):
+
+```bash
+cd terraform
+terraform init
+terraform destroy -var="image=us-central1-docker.pkg.dev/story-6f89f/novelsync-agents/app:latest"
+# Type yes when prompted
+```
+
+APIs remain enabled. To remove Firestore or the secret, delete them in GCP (e.g. `gcloud firestore databases delete --database="(default)"`, `gcloud secrets delete google-ai-studio-api-key`). See [Free tier](#free-tier) for cost impact.
 
 ## Rollback Procedures
 
@@ -566,28 +494,17 @@ gcloud projects add-iam-policy-binding story-6f89f \
   --role="roles/datastore.owner"
 ```
 
-### Terraform: Resources Already Exist
+### Terraform: Resource already exists (409)
 
-**Problem:** `Error 409: the repository already exists` or `Error 409: Secret already exists`
+**Problem:** `Error 409: Resource 'novelsync-agents' already exists` (Cloud Run) or similar for another resource.
 
-**Root Cause:** Resources were created manually before Terraform knew about them.
+**Root Cause:** The resource exists in GCP but Terraform state (e.g. in CI) does not track it.
 
-**Solution:** Import existing resources into Terraform state:
-```bash
-cd terraform
-
-# Import Artifact Registry
-terraform import google_artifact_registry_repository.docker_repo \
-  projects/story-6f89f/locations/us-central1/repositories/novelsync-agents
-
-# Import Secret
-terraform import google_secret_manager_secret.google_ai_studio_api_key \
-  google-ai-studio-api-key
-
-# Import Firestore database
-terraform import google_firestore_database.database \
-  'projects/story-6f89f/databases/(default)'
-```
+**Solution:**
+- **Cloud Run:** Delete the service so Terraform can create it:  
+  `gcloud run services delete novelsync-agents --region=us-central1 --project=story-6f89f`  
+  Then re-run the deploy workflow or `terraform apply`.
+- **Artifact Registry, Secret, Firestore:** The current setup uses data sources or workflow-created resources; Terraform does not create these. If you see 409 on them, ensure you are not still defining them as `resource` blocks (they should be `data` or created by the workflow only).
 
 ### Docker Build: Architecture Mismatch
 
@@ -618,13 +535,10 @@ gcloud iam service-accounts get-iam-policy \
 # https://github.com/khaled2049/novelsync-agents/settings/secrets/actions
 ```
 
-**Problem:** "Resource already exists" error
+**Problem:** "Resource already exists" (409)
 
-```bash
-# Solution: Some resources are already created
-# This is safe - Terraform will adopt them on next run
-terraform import google_firestore_database.database projects/story-6f89f/databases/(default)
-```
+- For **Cloud Run:** delete the service with `gcloud run services delete novelsync-agents --region=us-central1 --project=story-6f89f`, then redeploy.
+- **Firestore** is created by the workflow if missing; Terraform does not manage it. No import needed.
 
 ### Cloud Run Deployment Fails
 
@@ -679,11 +593,7 @@ terraform init
 
 **Problem:** Firestore database already exists
 
-```bash
-# Solution: Terraform can't create what already exists
-# Just skip creating the database resource or import it
-terraform import google_firestore_database.database projects/story-6f89f/databases/(default)
-```
+Terraform no longer creates the Firestore database; the deploy workflow creates it if missing. No import or resource change needed.
 
 ### Testing Deployment
 
@@ -713,7 +623,7 @@ gcloud run services logs read novelsync-agents --region=us-central1 --limit=50
 A: It allows keyless authentication - GitHub Actions don't need service account keys, improving security.
 
 **Q: How much will this cost?**
-A: $0/month with light usage (within GCP free tier). See [terraform/README.md](./terraform/README.md#free-tier-limits).
+A: With default settings and light usage, the stack stays within [GCP free tier](#free-tier) (Cloud Run scale-to-zero, Firestore, Secret Manager, Artifact Registry). Set billing alerts to be notified if usage grows.
 
 **Q: Can I use a different GCP project?**
 A: Yes, change `project_id` in `terraform/variables.tf`.
