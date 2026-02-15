@@ -59,9 +59,8 @@ resource "google_project_iam_member" "firestore_user" {
 # Free tier: 2M requests/month, 360K GB-seconds, 180K vCPU-seconds
 # Configured to scale to zero when idle (min_instances=0)
 resource "google_cloud_run_v2_service" "app" {
-  name                = var.service_name
-  location            = var.region
-  deletion_protection = true
+  name     = var.service_name
+  location = var.region
 
   template {
     service_account = data.google_service_account.cloud_run_sa.email
