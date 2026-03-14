@@ -1,6 +1,7 @@
 """Main ADK agent implementation for story generation."""
 import os
 import sys
+import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -243,72 +244,71 @@ class StoryAgent:
         Returns:
             Result from the agent execution
         """
+        logger = logging.getLogger(__name__)
+        logger.info("Executing action=%s with parameter_keys=%s", action, sorted(parameters.keys()))
+
         if action == "generateStory":
             return await self.generate_story(
-                parameters.get("storyId"),
-                parameters.get("genre"),
-                parameters.get("tone"),
-                parameters.get("length"),
+                self._param(parameters, "storyId", "story_id"),
+                self._param(parameters, "genre"),
+                self._param(parameters, "tone"),
+                self._param(parameters, "length"),
+                self._param(parameters, "generateFirstChapterOnly", "generate_first_chapter_only", True),
+                self._param(parameters, "plotContext", "plot_context"),
             )
-        elif action == "generateChapter":
+        if action == "generateChapter":
             return await self.generate_chapter(
-                parameters.get("storyId"),
-                parameters.get("chapterNumber"),
-                parameters.get("previousChapters"),
+                self._param(parameters, "storyId", "story_id"),
+                self._param(parameters, "chapterNumber", "chapter_number"),
+                self._param(parameters, "previousChapters", "previous_chapters"),
+                self._param(parameters, "plotContext", "plot_context"),
             )
-        elif action == "brainstormIdeas":
+        if action == "brainstormIdeas":
             return await self.brainstorm_ideas(
-                parameters.get("storyId"),
-                parameters.get("type"),
-                parameters.get("prompt"),
-                parameters.get("count", 5),
+                self._param(parameters, "storyId", "story_id"),
+                self._param(parameters, "type", "idea_type"),
+                self._param(parameters, "prompt"),
+                self._param(parameters, "count", default=5),
             )
-        elif action == "brainstormCharacter":
+        if action == "brainstormCharacter":
             return await self.brainstorm_character(
-                parameters.get("storyId"),
-                parameters.get("role"),
-                parameters.get("archetype"),
+                self._param(parameters, "storyId", "story_id"),
+                self._param(parameters, "role"),
+                self._param(parameters, "archetype"),
             )
-        elif action == "brainstormPlot":
+        if action == "brainstormPlot":
             return await self.brainstorm_plot(
-                parameters.get("storyId"),
-                parameters.get("plotType", "conflict"),
+                self._param(parameters, "storyId", "story_id"),
+                self._param(parameters, "plotType", "plot_type", "conflict"),
             )
-        elif action == "generateNextLines":
-            import logging
-            logger = logging.getLogger(__name__)
-            story_id = parameters.get('storyId')
-            cursor_pos = parameters.get('cursorPosition')
-            has_chapter_id = bool(parameters.get('chapterId'))
-            content_length = len(parameters.get('content', ''))
-
-            logger.info(f"generateNextLines called with storyId={story_id}, cursorPosition={cursor_pos}, content_length={content_length}, hasChapterId={has_chapter_id}")
-            print(f"[AGENT] generateNextLines called: storyId={story_id}, cursorPosition={cursor_pos}, content_length={content_length}, hasChapterId={has_chapter_id}")
-
-            result = await self.generate_next_lines(
-                parameters.get("storyId"),
-                parameters.get("content"),
-                parameters.get("cursorPosition"),
-                parameters.get("chapterId"),  # Optional
+        if action == "generateNextLines":
+            return await self.generate_next_lines(
+                self._param(parameters, "storyId", "story_id"),
+                self._param(parameters, "content"),
+                self._param(parameters, "cursorPosition", "cursor_position"),
+                self._param(parameters, "chapterId", "chapter_id"),
             )
-
-            result_info = f"result keys: {list(result.keys())}" if isinstance(result, dict) else f"result type: {type(result)}"
-            logger.info(f"generateNextLines completed, {result_info}")
-            print(f"[AGENT] generateNextLines completed, {result_info}")
-            return result
-        elif action == "chatWithContext":
+        if action == "chatWithContext":
             return await self.chat_with_context(
-                parameters.get("storyId"),
-                parameters.get("message"),
-                parameters.get("chatHistory"),
+                self._param(parameters, "storyId", "story_id"),
+                self._param(parameters, "message"),
+                self._param(parameters, "chatHistory", "chat_history"),
             )
-        elif action == "enhanceText":
+        if action == "enhanceText":
             return await self.enhance_text(
-                parameters.get("storyId"),
-                parameters.get("action"),
-                parameters.get("selectedText"),
-                parameters.get("chapterId"),
+                self._param(parameters, "storyId", "story_id"),
+                self._param(parameters, "action"),
+                self._param(parameters, "selectedText", "selected_text"),
+                self._param(parameters, "chapterId", "chapter_id"),
             )
-        else:
-            raise ValueError(f"Unknown action: {action}")
+
+        raise ValueError(f"Unknown action: {action}")
+    @staticmethod
+    def _param(parameters: Dict[str, Any], camel: str, snake: Optional[str] = None, default: Any = None) -> Any:
+        """Read an action parameter from camelCase and snake_case names."""
+        if camel in parameters:
+            return parameters[camel]
+        if snake and snake in parameters:
+            return parameters[snake]
+        return default
 

@@ -15,6 +15,7 @@ uvicorn[standard]>=0.24.0
 
 # Data Validation
 pydantic>=2.5.0
+pydantic-settings>=2.0.0
 
 # Environment Management
 python-dotenv>=1.0.0

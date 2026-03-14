@@ -1,9 +1,9 @@
-"""Tests for StoryAgent functionality."""
+"""Tests for StoryAgent action dispatch and parameter handling."""
 import os
+from unittest.mock import AsyncMock
 
 import pytest
 
-# Set environment for testing
 os.environ["USE_MOCK"] = "true"
 os.environ["GOOGLE_CLOUD_PROJECT"] = "test-project"
 
@@ -11,76 +11,47 @@ from agents.storyAgent.agent import StoryAgent
 
 
 class TestStoryAgentInitialization:
-    """Tests for StoryAgent initialization."""
-
     def test_agent_initializes_with_mock_provider(self):
-        """Test that agent initializes with mock provider."""
         agent = StoryAgent(project_id="test-project")
         assert agent.project_id == "test-project"
 
-    def test_agent_initializes_without_firestore(self):
-        """Test that agent can initialize without Firestore connection."""
-        # Should not raise error even without Firestore
-        agent = StoryAgent(project_id="test-project")
-        assert agent is not None
-
 
 @pytest.mark.asyncio
-class TestAgentMethods:
-    """Tests for agent methods with mock provider."""
-
-    async def test_generate_next_lines_returns_dict(self):
-        """Test that generate_next_lines returns a dict."""
+class TestActionDispatch:
+    async def test_execute_agent_generate_story_dispatch(self):
         agent = StoryAgent(project_id="test-project")
-        result = await agent.generate_next_lines(
-            story_id="test-story",
-            content="Once upon a time",
-            cursorPosition=17,
-        )
-        assert isinstance(result, dict)
+        agent.generate_story = AsyncMock(return_value={"ok": True})
 
-    async def test_generate_next_lines_returns_suggestions(self):
-        """Test that generate_next_lines returns suggestions."""
+        result = await agent.execute_agent(
+            "generateStory",
+            {
+                "storyId": "s1",
+                "genre": "fantasy",
+                "generateFirstChapterOnly": False,
+            },
+        )
+
+        assert result == {"ok": True}
+        agent.generate_story.assert_awaited_once_with("s1", "fantasy", None, None, False, None)
+
+    async def test_execute_agent_accepts_snake_case(self):
         agent = StoryAgent(project_id="test-project")
-        result = await agent.generate_next_lines(
-            story_id="test-story",
-            content="Once upon a time",
-            cursorPosition=17,
+        agent.generate_next_lines = AsyncMock(return_value={"suggestions": []})
+
+        await agent.execute_agent(
+            "generateNextLines",
+            {
+                "story_id": "s1",
+                "content": "Once",
+                "cursor_position": 4,
+                "chapter_id": "c1",
+            },
         )
-        assert "suggestions" in result or "error" in result
 
-    async def test_generate_story_returns_dict(self):
-        """Test that generate_story returns a dict."""
-        agent = StoryAgent(project_id="test-project")
-        result = await agent.generate_story(
-            title="Test Story",
-            genre="Fantasy",
-        )
-        assert isinstance(result, dict)
+        agent.generate_next_lines.assert_awaited_once_with("s1", "Once", 4, "c1")
 
-    async def test_brainstorm_characters_returns_dict(self):
-        """Test that brainstorm_characters returns a dict."""
-        agent = StoryAgent(project_id="test-project")
-        result = await agent.brainstorm_characters(
-            story_context="A fantasy adventure",
-            story_id="test-story",
-        )
-        assert isinstance(result, dict)
-
-
-class TestAgentIntegration:
-    """Integration tests for agent functionality."""
-
-    @pytest.mark.slow
-    @pytest.mark.asyncio
-    async def test_agent_execution_workflow(self):
-        """Test a complete agent execution workflow."""
+    async def test_execute_agent_unknown_action_raises(self):
         agent = StoryAgent(project_id="test-project")
 
-        # Test multiple operations in sequence
-        result = await agent.generate_next_lines(
-            story_id="test-story",
-            content="Once upon a time",
-            cursorPosition=17,
-        )
-        assert isinstance(result, dict)
+        with pytest.raises(ValueError):
+            await agent.execute_agent("doesNotExist", {})

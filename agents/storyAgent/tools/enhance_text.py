@@ -1,5 +1,6 @@
 """Tool for enhancing selected text based on action type."""
 import sys
+import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -49,7 +50,7 @@ class EnhanceTextTool:
                 return {"id": chapter_doc.id, **chapter_doc.to_dict()}
         except Exception as e:
             # Log error but don't fail - chapter_id is optional
-            print(f"Warning: Could not fetch chapter {chapter_id}: {e}")
+            self.logger.warning("Could not fetch chapter %s: %s", chapter_id, e)
         return None
 
     def _build_action_prompt(self, action: str) -> str:
@@ -157,7 +158,7 @@ class EnhanceTextTool:
         )
 
         # Call LLM to enhance the text
-        enhanced_text = self.llm_provider.generate_content(
+        enhanced_text = await self.llm_provider.generate_content_async(
             f"{system_prompt}\n\n{user_prompt}"
         )
 
@@ -166,3 +167,4 @@ class EnhanceTextTool:
             "action": action,
             "enhancedText": enhanced_text.strip()
         }
+    logger = logging.getLogger(__name__)

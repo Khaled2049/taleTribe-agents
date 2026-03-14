@@ -14,6 +14,7 @@ uvicorn[standard]>=0.24.0
 
 # Data Validation
 pydantic>=2.5.0
+pydantic-settings>=2.0.0
 
 # Environment Management
 python-dotenv>=1.0.0
@@ -22,4 +23,3 @@ python-dotenv>=1.0.0
 torch>=2.0.0
 diffusers>=0.21.0
 Pillow>=10.0.0
-

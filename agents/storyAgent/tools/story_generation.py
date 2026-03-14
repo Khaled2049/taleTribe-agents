@@ -86,7 +86,7 @@ Return in this format:
 - Content: [Full chapter text]
 """
             # Generate using LLM provider
-            generated_text = self.llm_provider.generate_content(prompt)
+            generated_text = await self.llm_provider.generate_content_async(prompt)
 
             # Parse response (simple extraction)
             return {
@@ -119,7 +119,7 @@ Return in this format:
     """
 
             # Generate using LLM provider
-            generated_text = self.llm_provider.generate_content(prompt)
+            generated_text = await self.llm_provider.generate_content_async(prompt)
 
             # Parse response (simple extraction)
             return {
@@ -140,4 +140,3 @@ Return in this format:
             "long": "4000-5500"
         }
         return lengths.get(length.lower(), "2500-3500")
-

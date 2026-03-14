@@ -4,7 +4,11 @@ import json
 import re
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, List
+import logging
+import anyio
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class LLMProvider(ABC):
@@ -22,6 +26,10 @@ class LLMProvider(ABC):
             Generated text content
         """
         pass
+
+    async def generate_content_async(self, prompt: str) -> str:
+        """Generate content in a worker thread for async call sites."""
+        return await anyio.to_thread.run_sync(self.generate_content, prompt)
 
     @abstractmethod
     async def generate_structured_content(
@@ -109,25 +117,24 @@ class GoogleAIStudioProvider(LLMProvider):
         )
 
         try:
-            response = httpx.post(
-                url,
-                json={
-                    "contents": [{
-                        "parts": [{"text": full_prompt}]
-                    }],
-                    "generationConfig": {
-                        "responseMimeType": "application/json",                        
-                        "responseSchema": response_schema 
-                    }
-                },
-                params={"key": self.api_key},
-                timeout=300.0,
-            )
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                response = await client.post(
+                    url,
+                    json={
+                        "contents": [{
+                            "parts": [{"text": full_prompt}]
+                        }],
+                        "generationConfig": {
+                            "responseMimeType": "application/json",
+                            "responseSchema": response_schema
+                        }
+                    },
+                    params={"key": self.api_key},
+                )
             response.raise_for_status()
             result = response.json()
-            
-            
-            print(f"[GOOGLE_AI_STUDIO_PROVIDER] Google AI Studio API response: {result}")
+
+            logger.debug("Google AI Studio structured response received")
             if "candidates" in result and result["candidates"]:
                 candidate = result["candidates"][0]
                 content_parts = candidate.get("content", {}).get("parts", [])
@@ -160,13 +167,13 @@ class GoogleAIStudioProvider(LLMProvider):
                         return []
                         
                     except json.JSONDecodeError:
-                        print(f"[ERROR] Failed to decode JSON: {response_text}")
+                        logger.warning("Failed to decode JSON response from Google AI Studio")
                         return []
             
             return []
 
         except Exception as e:
-            print(f"[ERROR] API Call failed: {e}")
+            logger.exception("Google AI Studio structured call failed: %s", e)
             return []
 
 class OllamaProvider(LLMProvider):
@@ -225,15 +232,15 @@ IMPORTANT: You MUST respond with ONLY a valid JSON array that matches this schem
 Do not include any text before or after the JSON array. Return ONLY the JSON array."""
 
         try:
-            response = httpx.post(
-                self.api_url,
-                json={
-                    "model": self.model_name,
-                    "prompt": enhanced_prompt,
-                    "stream": False,
-                },
-                timeout=300.0,  # 5 minutes timeout
-            )
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                response = await client.post(
+                    self.api_url,
+                    json={
+                        "model": self.model_name,
+                        "prompt": enhanced_prompt,
+                        "stream": False,
+                    },
+                )
             response.raise_for_status()
             result = response.json()
             response_text = result.get("response", "").strip()
@@ -355,24 +362,23 @@ def get_llm_provider(project_id: Optional[str] = None, location: str = "us-centr
     google_ai_studio_api_key = os.getenv("GOOGLE_AI_STUDIO_API_KEY")
 
     if use_mock:
-        print("Using Mock LLM Provider for testing.")
+        logger.info("Using Mock LLM Provider for testing")
         return MockProvider()
     
     if use_ollama:
-        print("Using Ollama LLM Provider.")
+        logger.info("Using Ollama LLM Provider")
         base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         model_name = os.getenv("OLLAMA_MODEL", "phi4-mini")
         return OllamaProvider(base_url=base_url, model_name=model_name)
     
     # Prefer Google AI Studio API if API key is provided
     if google_ai_studio_api_key:
-        print("Using Google AI Studio API Provider.")
+        logger.info("Using Google AI Studio API Provider")
         model_name = os.getenv("GOOGLE_AI_STUDIO_MODEL", "gemini-2.5-flash")
         return GoogleAIStudioProvider(api_key=google_ai_studio_api_key, model_name=model_name)
     
     # Default to ollama
-    print("Using Ollama Provider.")
+    logger.info("Using Ollama Provider")
     base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     model_name = os.getenv("OLLAMA_MODEL", "phi4-mini")
     return OllamaProvider(base_url=base_url, model_name=model_name)
-

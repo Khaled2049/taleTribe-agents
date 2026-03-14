@@ -89,7 +89,7 @@ IMPORTANT: You are writing a specific segment of a larger arc.
     - Content: [Full chapter text]
     """
         
-        generated_text = self.llm_provider.generate_content(prompt)
+        generated_text = await self.llm_provider.generate_content_async(prompt)
         
         return {
             "storyId": story_id,

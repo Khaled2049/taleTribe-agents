@@ -1,4 +1,4 @@
-"""Unified HTTP server for NovelSync services (agents and image generation)."""
+"""Unified HTTP server for NovelSync services (agents and optional image generation)."""
 import logging
 import os
 import sys
@@ -6,142 +6,175 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, ValidationError
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+from agents.storyAgent.action_schemas import ActionName, validate_action_parameters
+from agents.storyAgent.agent import StoryAgent
+
+LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 logger = logging.getLogger(__name__)
 
-# Load environment variables
-current_dir = Path(__file__).parent
-env_path = current_dir / ".env"
-if env_path.exists():
-    load_dotenv(dotenv_path=env_path)
-    logger.info(f"Loaded environment variables from {env_path}")
 
-# Set FIRESTORE_EMULATOR_HOST for local development only
-if os.getenv("ENVIRONMENT") != "production" and not os.getenv("FIRESTORE_EMULATOR_HOST"):
-    os.environ["FIRESTORE_EMULATOR_HOST"] = "localhost:8080"
+class ErrorDetail(BaseModel):
+    """Stable error payload returned to API clients."""
 
-# Add current directory to path for imports
-if str(current_dir) not in sys.path:
-    sys.path.insert(0, str(current_dir))
+    code: str
+    message: str
+    details: Optional[Any] = None
 
-# Import agent
-try:
-    from agents.storyAgent.agent import StoryAgent
-except ImportError as e:
-    logger.error(f"Failed to import StoryAgent: {e}")
-    raise
 
-# Try to load image generation routes if enabled
-IMAGE_GENERATION_AVAILABLE = False
-image_router = None
+class AgentRequest(BaseModel):
+    """Request model for agent execution."""
 
-if os.getenv("ENABLE_LOCAL_IMAGE_GENERATION", "true").lower() == "true":
+    action: ActionName
+    parameters: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentResponse(BaseModel):
+    """Response model for agent execution."""
+
+    success: bool
+    data: Optional[Any] = None
+    error: Optional[ErrorDetail] = None
+
+
+def _configure_environment() -> Path:
+    """Load env variables and local emulator defaults."""
+    current_dir = Path(__file__).parent
+    env_path = current_dir / ".env"
+
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path)
+
+    if os.getenv("ENVIRONMENT") != "production" and not os.getenv("FIRESTORE_EMULATOR_HOST"):
+        os.environ["FIRESTORE_EMULATOR_HOST"] = "localhost:8080"
+
+    if str(current_dir) not in sys.path:
+        sys.path.insert(0, str(current_dir))
+
+    return current_dir
+
+
+def _try_load_image_router(current_dir: Path):
+    """Try to load image generation router when enabled."""
+    if os.getenv("ENABLE_LOCAL_IMAGE_GENERATION", "true").lower() != "true":
+        logger.info("Image generation disabled (ENABLE_LOCAL_IMAGE_GENERATION=false)")
+        return None
+
     try:
         image_gen_path = current_dir / "image-generation"
         if str(image_gen_path) not in sys.path:
             sys.path.insert(0, str(image_gen_path))
         from app.api.routes import router as image_router  # type: ignore
-        IMAGE_GENERATION_AVAILABLE = True
+
         logger.info("Image generation routes loaded successfully")
-    except ImportError as e:
-        logger.warning(f"Image generation not available: {e}")
-else:
-    logger.info("Image generation disabled (ENABLE_LOCAL_IMAGE_GENERATION=false)")
-
-# Initialize FastAPI app
-app = FastAPI(
-    title="NovelSync Unified Service",
-    description="Unified API for story agents and image generation"
-)
-
-# CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Initialize agent
-PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
-if not PROJECT_ID:
-    raise ValueError("GOOGLE_CLOUD_PROJECT environment variable must be set")
-
-agent = StoryAgent(
-    project_id=PROJECT_ID,
-    location=os.getenv("VERTEX_AI_LOCATION", "us-central1")  # Legacy parameter
-)
-
-# Include image generation routes if available
-if IMAGE_GENERATION_AVAILABLE and image_router:
-    app.include_router(image_router, tags=["Image Generation"])
+        return image_router
+    except ImportError as exc:
+        logger.warning("Image generation routes not available: %s", exc)
+        return None
 
 
-class AgentRequest(BaseModel):
-    """Request model for agent execution."""
-    action: str
-    parameters: Dict[str, Any]
+def create_app() -> FastAPI:
+    """Create and configure the FastAPI application."""
+    logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
+    current_dir = _configure_environment()
 
+    app = FastAPI(
+        title="NovelSync Unified Service",
+        description="Unified API for story agents and optional image generation",
+    )
 
-class AgentResponse(BaseModel):
-    """Response model for agent execution."""
-    success: bool
-    data: Optional[Any] = None
-    error: Optional[str] = None
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
+    project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
+    if not project_id:
+        raise ValueError("GOOGLE_CLOUD_PROJECT environment variable must be set")
 
-@app.post("/agent/execute", response_model=AgentResponse)
-async def execute_agent(request: AgentRequest) -> AgentResponse:
-    """
-    Execute an agent action.
+    app.state.project_id = project_id
+    app.state.agent = StoryAgent(
+        project_id=project_id,
+        location=os.getenv("VERTEX_AI_LOCATION", "us-central1"),
+    )
 
-    Available actions:
-    - generateStory: Generate a complete story
-    - generateChapter: Generate a chapter
-    - brainstormIdeas: Generate brainstorming ideas
-    - brainstormCharacter: Generate character ideas
-    - brainstormPlot: Generate plot ideas
-    - generateNextLines: Generate next line suggestions
-    """
-    try:
-        logger.info(
-            f"Executing agent action: {request.action}, "
-            f"parameters: {list(request.parameters.keys())}"
+    image_router = _try_load_image_router(current_dir)
+    app.state.image_generation_available = image_router is not None
+    if image_router is not None:
+        app.include_router(image_router, tags=["Image Generation"])
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(_: Request, exc: RequestValidationError):
+        return JSONResponse(
+            status_code=422,
+            content=AgentResponse(
+                success=False,
+                error=ErrorDetail(code="VALIDATION_ERROR", message="Invalid request", details=exc.errors()),
+            ).model_dump(),
         )
-        result = await agent.execute_agent(request.action, request.parameters)
-        logger.info(f"Agent action '{request.action}' completed successfully")
-        return AgentResponse(success=True, data=result)
-    except Exception as e:
-        logger.error(
-            f"Error executing agent action '{request.action}': {str(e)}",
-            exc_info=True
+
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(_: Request, exc: HTTPException):
+        detail = exc.detail
+        if isinstance(detail, dict) and {"code", "message"}.issubset(detail.keys()):
+            error = ErrorDetail(**detail)
+        else:
+            error = ErrorDetail(code="HTTP_ERROR", message=str(detail))
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=AgentResponse(success=False, error=error).model_dump(),
         )
-        return AgentResponse(success=False, error=str(e))
 
+    @app.post("/agent/execute", response_model=AgentResponse)
+    async def execute_agent(request: AgentRequest) -> AgentResponse:
+        try:
+            validated_params = validate_action_parameters(request.action, request.parameters)
+            result = await app.state.agent.execute_agent(request.action, validated_params)
+            return AgentResponse(success=True, data=result)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "VALIDATION_ERROR", "message": "Invalid parameters", "details": exc.errors()},
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "BAD_REQUEST", "message": str(exc), "details": None},
+            ) from exc
+        except Exception as exc:  # pragma: no cover - defensive boundary
+            logger.exception("Unhandled error for action=%s", request.action)
+            raise HTTPException(
+                status_code=500,
+                detail={"code": "INTERNAL_ERROR", "message": "Internal server error", "details": None},
+            ) from exc
 
-@app.get("/health")
-async def health_check():
-    """Health check endpoint."""
-    return {
-        "status": "healthy",
-        "project_id": PROJECT_ID,
-        "services": {
-            "agent": "available",
-            "image_generation": "available" if IMAGE_GENERATION_AVAILABLE else "unavailable"
+    @app.get("/health")
+    async def health_check():
+        return {
+            "status": "healthy",
+            "project_id": app.state.project_id,
+            "services": {
+                "agent": "available",
+                "image_generation": "available" if app.state.image_generation_available else "unavailable",
+            },
         }
-    }
+
+    return app
+
+
+app = create_app()
 
 
 if __name__ == "__main__":
     import uvicorn
+
     port = int(os.getenv("PORT", "8000"))
     uvicorn.run(app, host="0.0.0.0", port=port)

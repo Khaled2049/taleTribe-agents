@@ -3,15 +3,18 @@
 import logging
 from fastapi import APIRouter, HTTPException, status
 from app.models.schemas import CoverRequest, CoverResponse
-from app.services.image_service import ImageService
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Initialize image service (singleton)
-image_service = ImageService()
+
+def get_image_service():
+    """Lazily construct the singleton image service."""
+    from app.services.image_service import ImageService
+
+    return ImageService()
 
 
 @router.post(
@@ -78,6 +81,7 @@ async def generate_cover(request: CoverRequest) -> CoverResponse:
     """
     try:
         logger.info(f"Received request to generate cover with prompt: {request.prompt[:50]}...")
+        image_service = get_image_service()
         
         # Generate image
         image, generation_time = await image_service.generate_image(
@@ -140,6 +144,8 @@ async def health_check():
         Dictionary with status and model information
     """
     try:
+        image_service = get_image_service()
+
         # Check if model is loaded
         model_loaded = image_service._pipeline is not None
         
@@ -155,4 +161,3 @@ async def health_check():
             "status": "unhealthy",
             "error": str(e)
         }
-

@@ -73,11 +73,10 @@ Provide:
 
 Make it compelling and well-integrated with the existing story."""
 
-        generated_text = self.llm_provider.generate_content(prompt)
+        generated_text = await self.llm_provider.generate_content_async(prompt)
 
         return {
             "storyId": story_id,
             "plotType": plot_type,
             "plot": generated_text,
         }
-

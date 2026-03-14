@@ -1,14 +1,20 @@
 """Configuration settings for the image generation API."""
 
-import os
 from typing import Literal
-from pydantic_settings import BaseSettings
+
+try:
+    from pydantic_settings import BaseSettings
+    _HAS_PYDANTIC_SETTINGS = True
+except ImportError:  # pragma: no cover - compatibility for partially provisioned envs
+    from pydantic import BaseModel as BaseSettings
+    _HAS_PYDANTIC_SETTINGS = False
 
 # Auto-detect CUDA availability
 try:
     import torch
     _cuda_available = torch.cuda.is_available()
 except ImportError:
+    torch = None
     _cuda_available = False
 
 
@@ -37,12 +43,21 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = "INFO"
 
-    class Config:
-        """Pydantic config."""
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
-        extra = "ignore"  # Ignore extra environment variables not in this model
+    if _HAS_PYDANTIC_SETTINGS:
+        model_config = {
+            "env_file": ".env",
+            "env_file_encoding": "utf-8",
+            "case_sensitive": False,
+            "extra": "ignore",
+        }
+    else:
+        class Config:
+            """Pydantic v1-style config used by the compatibility fallback."""
+
+            env_file = ".env"
+            env_file_encoding = "utf-8"
+            case_sensitive = False
+            extra = "ignore"  # Ignore extra environment variables not in this model
 
 
 # Global settings instance
@@ -73,8 +88,10 @@ def get_torch_dtype():
     """
     device = get_device()
     
+    if torch is None:
+        return None
+
     if settings.torch_dtype == "auto":
         return torch.float16 if device == "cuda" else torch.float32
     else:
         return getattr(torch, settings.torch_dtype, torch.float32)
-

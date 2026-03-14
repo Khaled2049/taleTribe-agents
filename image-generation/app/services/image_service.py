@@ -1,14 +1,20 @@
 """Image generation service using Stable Diffusion."""
 
-import io
+from __future__ import annotations
+
 import base64
+import io
 import logging
 import time
-from typing import Optional, Tuple
-from PIL import Image
+from typing import Any, Optional, Tuple, TYPE_CHECKING
+
 import torch
-from diffusers import AutoPipelineForText2Image
+from PIL import Image
+
 from app.config import settings
+
+if TYPE_CHECKING:
+    from diffusers import AutoPipelineForText2Image
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +23,7 @@ class ImageService:
     """Service for generating images from text prompts."""
     
     _instance: Optional['ImageService'] = None
-    _pipeline: Optional[AutoPipelineForText2Image] = None
+    _pipeline: Optional["AutoPipelineForText2Image"] = None
     
     def __new__(cls):
         """Singleton pattern to ensure only one instance exists."""
@@ -38,6 +44,8 @@ class ImageService:
         for subsequent requests, which is critical for performance on low-end machines.
         """
         try:
+            from diffusers import AutoPipelineForText2Image
+
             logger.info(f"Loading model: {settings.model_name}")
             
             # Determine device (auto-detect CUDA if available)
@@ -50,12 +58,17 @@ class ImageService:
                 logger.info(f"CUDA device: {torch.cuda.get_device_name(0)}")
                 logger.info(f"CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
             logger.info(f"Using dtype: {torch_dtype}")
-            
+
             # Load the pipeline
+            pipeline_kwargs: dict[str, Any] = {}
+            if settings.enable_model_caching:
+                pipeline_kwargs["cache_dir"] = "./models"
+            if torch_dtype is not None:
+                pipeline_kwargs["torch_dtype"] = torch_dtype
+
             self._pipeline = AutoPipelineForText2Image.from_pretrained(
                 settings.model_name,
-                torch_dtype=torch_dtype,
-                cache_dir="./models" if settings.enable_model_caching else None,
+                **pipeline_kwargs,
             )
             
             # Move to device
@@ -149,4 +162,3 @@ class ImageService:
         image_bytes = buffer.read()
         base64_string = base64.b64encode(image_bytes).decode("utf-8")
         return base64_string
-

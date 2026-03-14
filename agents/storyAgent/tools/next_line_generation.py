@@ -1,5 +1,6 @@
 """Specialized tool for plot brainstorming."""
 import sys
+import logging
 from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional
 
@@ -18,6 +19,7 @@ except ImportError:
 PREFIX_CHAR_LENGTH = 1200 
 SUFFIX_CHAR_LENGTH = 300  
 NUMBER_OF_SUGGESTIONS = 3 
+logger = logging.getLogger(__name__)
 
 class NextLineGenerationTool:
     """Specialized tool for generating next lines."""
@@ -64,7 +66,7 @@ class NextLineGenerationTool:
                 return {"id": chapter_doc.id, **chapter_doc.to_dict()}
         except Exception as e:
             # Log error but don't fail - chapter_id is optional
-            print(f"Warning: Could not fetch chapter {chapter_id}: {e}")
+            logger.warning("Could not fetch chapter %s: %s", chapter_id, e)
         return None
 
     def _get_previous_chapters_context(self, chapters: List[Dict[str, Any]], current_chapter_number: Optional[int]) -> str:
@@ -169,68 +171,46 @@ Respond ONLY with the JSON array containing the {NUMBER_OF_SUGGESTIONS} generate
         Returns:
             Dictionary containing the suggestions array.
         """
-        import logging
-        logger = logging.getLogger(__name__)
-        
-        logger.info(f"NextLineGenerationTool.execute called: story_id={story_id}, content_length={len(content)}, cursorPosition={cursorPosition}, chapter_id={chapter_id}")
-        print(f"[NEXT_LINE_TOOL] execute called: story_id={story_id}, content_length={len(content)}, cursorPosition={cursorPosition}, chapter_id={chapter_id}")
+        logger.info(
+            "NextLineGenerationTool.execute story_id=%s content_length=%s cursor_position=%s has_chapter_id=%s",
+            story_id,
+            len(content),
+            cursorPosition,
+            bool(chapter_id),
+        )
         
         try:
             # Build Macro Context
-            logger.info("Building story context...")
-            print("[NEXT_LINE_TOOL] Building story context...")
             context = self.context_builder.build_story_context(story_id)
             chapters_count = len(context.get('chapters', []))
-            logger.info(f"Story context built, chapters count: {chapters_count}")
-            print(f"[NEXT_LINE_TOOL] Story context built, chapters count: {chapters_count}")
+            logger.info("Story context built, chapters count=%s", chapters_count)
     
             # If chapter_id is provided, enhance context with chapter-specific information
             current_chapter_number = None
             previous_chapters_text = ""
             if chapter_id:
-                logger.info(f"Fetching chapter {chapter_id}...")
-                print(f"[NEXT_LINE_TOOL] Fetching chapter {chapter_id}...")
                 current_chapter = self._get_chapter(story_id, chapter_id)
                 if current_chapter:
                     current_chapter_number = current_chapter.get("chapterNumber") or current_chapter.get("order")
-                    logger.info(f"Found chapter, number: {current_chapter_number}")
-                    print(f"[NEXT_LINE_TOOL] Found chapter, number: {current_chapter_number}")
+                    logger.info("Found chapter number=%s", current_chapter_number)
                     # Get previous chapters for continuity
                     previous_chapters_text = self._get_previous_chapters_context(
                         context.get("chapters", []), 
                         current_chapter_number
                     )
-                    prev_len = len(previous_chapters_text)
-                    logger.info(f"Previous chapters context length: {prev_len}")
-                    print(f"[NEXT_LINE_TOOL] Previous chapters context length: {prev_len}")
+                    logger.info("Previous chapters context length=%s", len(previous_chapters_text))
             
-            logger.info("Formatting context for prompt...")
-            print("[NEXT_LINE_TOOL] Formatting context for prompt...")
             formatted_context = self.context_builder.format_context_for_prompt(context)
             
             # Build Micro Context
-            logger.info("Slicing content...")
-            print("[NEXT_LINE_TOOL] Slicing content...")
             prefix_text, suffix_text = self._slice_content(content, cursorPosition)
-            logger.info(f"Prefix length: {len(prefix_text)}, Suffix length: {len(suffix_text)}")
-            print(f"[NEXT_LINE_TOOL] Prefix length: {len(prefix_text)}, Suffix length: {len(suffix_text)}")
+            logger.info("Prefix length=%s Suffix length=%s", len(prefix_text), len(suffix_text))
             
-            logger.info("Building prompts...")
-            print("[NEXT_LINE_TOOL] Building prompts...")
             system_prompt = self._build_system_prompt()
             user_prompt = self._build_user_prompt(formatted_context, prefix_text, suffix_text, previous_chapters_text)
             response_schema = self._get_response_schema()
             
-            logger.info("Calling LLM provider...")
-            print("[NEXT_LINE_TOOL] Calling LLM provider...")
-
-            # log out the system_prompt, user_prompt, and response_schema
-            logger.info(f"System prompt: {system_prompt}")
-            print(f"[NEXT_LINE_TOOL] System prompt: {system_prompt}")
-            logger.info(f"User prompt: {user_prompt}")
-            print(f"[NEXT_LINE_TOOL] User prompt: {user_prompt}")
-            logger.info(f"Response schema: {response_schema}")
-            print(f"[NEXT_LINE_TOOL] Response schema: {response_schema}")
+            logger.debug("Calling LLM provider for next line generation")
 
             try:
                 generated_suggestions = await self.llm_provider.generate_structured_content(
@@ -238,11 +218,8 @@ Respond ONLY with the JSON array containing the {NUMBER_OF_SUGGESTIONS} generate
                     user_prompt=user_prompt,
                     response_schema=response_schema
                 )
-                logger.info(f"Generated suggestions: {generated_suggestions}")
-                print(f"[NEXT_LINE_TOOL] Generated suggestions: {generated_suggestions}")
                 suggestions_count = len(generated_suggestions) if isinstance(generated_suggestions, list) else 'non-list'
-                logger.info(f"LLM returned {suggestions_count} suggestions")
-                print(f"[NEXT_LINE_TOOL] LLM returned {suggestions_count} suggestions")
+                logger.info("LLM returned %s suggestions", suggestions_count)
                 
                 if not isinstance(generated_suggestions, list) or len(generated_suggestions) != NUMBER_OF_SUGGESTIONS:
                      raise ValueError("LLM returned improperly formatted or missing suggestions.")
@@ -251,25 +228,18 @@ Respond ONLY with the JSON array containing the {NUMBER_OF_SUGGESTIONS} generate
                     "storyId": story_id,                
                     "suggestions": generated_suggestions,
                 }
-                logger.info(f"Successfully generated {len(generated_suggestions)} suggestions")
-                print(f"[NEXT_LINE_TOOL] Successfully generated {len(generated_suggestions)} suggestions")
+                logger.info("Successfully generated %s suggestions", len(generated_suggestions))
                 return result
 
             except Exception as error:
-                logger.error(f"Error in LLM generation: {error}", exc_info=True)
-                print(f"[NEXT_LINE_TOOL ERROR] Error in LLM generation: {error}")
-                import traceback
-                print(f"[NEXT_LINE_TOOL ERROR] Traceback: {traceback.format_exc()}")
+                logger.error("Error in next-line LLM generation: %s", error, exc_info=True)
                 return {
                     "storyId": story_id,
                     "suggestions": [],
                     "error": f"Failed to generate lines: {error}"
                 }
         except Exception as error:
-            logger.error(f"Error in NextLineGenerationTool.execute: {error}", exc_info=True)
-            print(f"[NEXT_LINE_TOOL ERROR] Error in execute: {error}")
-            import traceback
-            print(f"[NEXT_LINE_TOOL ERROR] Traceback: {traceback.format_exc()}")
+            logger.error("Error in NextLineGenerationTool.execute: %s", error, exc_info=True)
             return {
                 "storyId": story_id,
                 "suggestions": [],

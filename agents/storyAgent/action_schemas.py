@@ -1,0 +1,135 @@
+"""Validation schemas for StoryAgent actions."""
+from typing import Any, Dict, List, Literal, Optional
+
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+
+ActionName = Literal[
+    "generateStory",
+    "generateChapter",
+    "brainstormIdeas",
+    "brainstormCharacter",
+    "brainstormPlot",
+    "generateNextLines",
+    "chatWithContext",
+    "enhanceText",
+]
+
+
+class StrictModel(BaseModel):
+    """Base model with strict unknown-field handling."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class GenerateStoryParams(StrictModel):
+    story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
+    genre: Optional[str] = None
+    tone: Optional[str] = None
+    length: Optional[str] = None
+    generate_first_chapter_only: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("generateFirstChapterOnly", "generate_first_chapter_only"),
+        serialization_alias="generateFirstChapterOnly",
+    )
+    plot_context: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("plotContext", "plot_context"),
+        serialization_alias="plotContext",
+    )
+
+
+class GenerateChapterParams(StrictModel):
+    story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
+    chapter_number: int = Field(validation_alias=AliasChoices("chapterNumber", "chapter_number"), serialization_alias="chapterNumber")
+    previous_chapters: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        validation_alias=AliasChoices("previousChapters", "previous_chapters"),
+        serialization_alias="previousChapters",
+    )
+    plot_context: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("plotContext", "plot_context"),
+        serialization_alias="plotContext",
+    )
+
+
+class BrainstormIdeasParams(StrictModel):
+    story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
+    idea_type: str = Field(validation_alias=AliasChoices("type", "idea_type"), serialization_alias="type")
+    prompt: Optional[str] = None
+    count: int = Field(default=5, ge=1, le=20)
+
+
+class BrainstormCharacterParams(StrictModel):
+    story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
+    role: Optional[str] = None
+    archetype: Optional[str] = None
+
+
+class BrainstormPlotParams(StrictModel):
+    story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
+    plot_type: str = Field(
+        default="conflict",
+        validation_alias=AliasChoices("plotType", "plot_type"),
+        serialization_alias="plotType",
+    )
+
+
+class GenerateNextLinesParams(StrictModel):
+    story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
+    content: str
+    cursor_position: int = Field(
+        ge=0,
+        validation_alias=AliasChoices("cursorPosition", "cursor_position"),
+        serialization_alias="cursorPosition",
+    )
+    chapter_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("chapterId", "chapter_id"),
+        serialization_alias="chapterId",
+    )
+
+
+class ChatWithContextParams(StrictModel):
+    story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
+    message: str
+    chat_history: Optional[List[Dict[str, str]]] = Field(
+        default=None,
+        validation_alias=AliasChoices("chatHistory", "chat_history"),
+        serialization_alias="chatHistory",
+    )
+
+
+class EnhanceTextParams(StrictModel):
+    story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
+    action: Literal["expand", "dialogue", "rewrite"]
+    selected_text: str = Field(
+        validation_alias=AliasChoices("selectedText", "selected_text"),
+        serialization_alias="selectedText",
+    )
+    chapter_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("chapterId", "chapter_id"),
+        serialization_alias="chapterId",
+    )
+
+
+_ACTION_SCHEMAS = {
+    "generateStory": GenerateStoryParams,
+    "generateChapter": GenerateChapterParams,
+    "brainstormIdeas": BrainstormIdeasParams,
+    "brainstormCharacter": BrainstormCharacterParams,
+    "brainstormPlot": BrainstormPlotParams,
+    "generateNextLines": GenerateNextLinesParams,
+    "chatWithContext": ChatWithContextParams,
+    "enhanceText": EnhanceTextParams,
+}
+
+
+def validate_action_parameters(action: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate action parameters and return normalized camelCase payload."""
+    schema = _ACTION_SCHEMAS.get(action)
+    if not schema:
+        raise ValueError(f"Unknown action: {action}")
+    validated = schema.model_validate(parameters)
+    return validated.model_dump(by_alias=True, exclude_none=True)

@@ -41,7 +41,7 @@ venv.bak/
 .env
 
 # Model cache
-models/
+/models/
 .cache/
 huggingface/
 
@@ -65,4 +65,3 @@ htmlcov/
 .mypy_cache/
 .dmypy.json
 dmypy.json
-

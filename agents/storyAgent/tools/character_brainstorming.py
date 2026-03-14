@@ -75,7 +75,7 @@ Provide a complete character profile with:
 
 Make the character compelling and well-developed."""
 
-        generated_text = self.llm_provider.generate_content(prompt)
+        generated_text = await self.llm_provider.generate_content_async(prompt)
 
         return {
             "storyId": story_id,
@@ -85,4 +85,3 @@ Make the character compelling and well-developed."""
                 "profile": generated_text,
             },
         }
-
