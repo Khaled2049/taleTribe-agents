@@ -14,13 +14,15 @@ This repo is one of three in the NovelSync project:
 - `agents/storyAgent/`: StoryAgent implementation — `agent.py`, `tools.py`, `action_schemas.py`, `context_builder.py`, `llm_provider.py`.
 - `image-generation/`: Optional local image generation module (disabled in production via `ENABLE_LOCAL_IMAGE_GENERATION`).
 - `terraform/`: Terraform configuration for GCP (Cloud Run, IAM, Artifact Registry).
-- `.github/workflows/`: CI (`ci.yml`) and deploy (`deploy.yml`) GitHub Actions workflows.
+- `.github/workflows/`: PR validation (`pr-check.yml`) and deploy (`deploy.yml`) GitHub Actions workflows.
 - `scripts/`: Utility scripts.
 - `tests/`: pytest test suite.
 - `requirements.txt`: Full Python dependencies including ML libs (local dev).
 - `requirements-prod.txt`: Slim dependencies for Cloud Run (no ML libs; keeps image ~500 MB).
 - `Dockerfile`: Multi-stage build using `requirements-prod.txt`.
-- `DEPLOYMENT.md`: Full GCP + Terraform + GitHub Actions deployment guide.
+- `README.md`: Repo entrypoint.
+- `docs/README.md`: Documentation index.
+- `docs/deployment.md`: GCP + Terraform + GitHub Actions deployment guide.
 
 ## Build, Test, and Development Commands
 
@@ -61,7 +63,7 @@ Deployments are fully automated via GitHub Actions on push to `main`:
 1. CI runs lint and tests (`ci.yml`).
 2. Deploy workflow builds the Docker image, pushes to Artifact Registry, and applies Terraform to update Cloud Run (`deploy.yml`).
 
-See `DEPLOYMENT.md` for setup instructions, secret management, rollback procedures, and troubleshooting.
+See `docs/deployment.md` for setup instructions and deployment behavior.
 
 ## Commit & Pull Request Guidelines
 
@@ -73,4 +75,4 @@ See `DEPLOYMENT.md` for setup instructions, secret management, rollback procedur
 - API keys (Google AI Studio) are stored in GCP Secret Manager and injected at runtime — never in code or `.env` committed to the repo.
 - GitHub Actions uses Workload Identity Federation (keyless OIDC auth); no service account JSON keys are stored anywhere.
 - Never commit `.env` or `terraform.tfvars` with real secrets (both are in `.gitignore`).
-- See `DEPLOYMENT.md` → Security section for full details.
+- See `docs/deployment.md` for deployment and secret-management details.
