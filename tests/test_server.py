@@ -60,6 +60,39 @@ class TestAgentExecution:
         assert data["success"] is False
         assert data["error"]["code"] == "VALIDATION_ERROR"
 
+    def test_chat_with_context_accepts_legacy_context_payload(self):
+        app.state.agent.execute_agent = AsyncMock(return_value={"response": "ok"})
+
+        response = client.post(
+            "/agent/execute",
+            json={
+                "action": "chatWithContext",
+                "parameters": {
+                    "storyId": "s1",
+                    "message": "hello",
+                    "context": {
+                        "story": {"title": "Joy of Santa Fe"},
+                        "chapters": [],
+                    },
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        app.state.agent.execute_agent.assert_awaited_once_with(
+            "chatWithContext",
+            {
+                "storyId": "s1",
+                "message": "hello",
+                "context": {
+                    "story": {"title": "Joy of Santa Fe"},
+                    "chapters": [],
+                },
+            },
+        )
+
 
 class TestDocsEndpoints:
     def test_openapi_schema_available(self):

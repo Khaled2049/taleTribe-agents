@@ -30,7 +30,7 @@ Cloud Run-compatible dependency set:
 pip install -r requirements-prod.txt
 ```
 
-`requirements.txt` includes local image-generation dependencies. `requirements-prod.txt` excludes the large ML packages used only for local image generation.
+`requirements.txt` includes local image-generation dependencies, including a `transformers` 4.x version and `sentencepiece` required by the Stable Diffusion pipeline stack. `requirements-prod.txt` excludes the large ML packages used only for local image generation.
 
 ## Configure environment
 

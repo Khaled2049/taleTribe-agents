@@ -93,6 +93,7 @@ class GenerateNextLinesParams(StrictModel):
 class ChatWithContextParams(StrictModel):
     story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
     message: str
+    context: Optional[Dict[str, Any]] = None
     chat_history: Optional[List[Dict[str, str]]] = Field(
         default=None,
         validation_alias=AliasChoices("chatHistory", "chat_history"),

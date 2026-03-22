@@ -1,5 +1,5 @@
 # Production Dependencies for Cloud Run
-# Excludes large ML libraries (torch, diffusers, Pillow) since image generation is disabled
+# Excludes large ML libraries (torch, diffusers, transformers, Pillow) since image generation is disabled
 # Use this for Cloud Run deployment via Docker
 
 # Firebase and Google Cloud
