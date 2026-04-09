@@ -277,6 +277,35 @@ class MockProvider(LLMProvider):
 
     def generate_content(self, prompt: str) -> str:
         """Generate mock content."""
+        # Story choices — opening mode
+        if "OPENING MODE" in prompt:
+            return json.dumps({
+                "openingScene": "The rain had been falling for three days straight, turning the cobblestones into rivers of shadow.",
+                "choices": [
+                    {"label": "Elena discovers the hidden letter", "sceneText": "She found it tucked beneath the floorboard, sealed with wax the color of dried blood."},
+                    {"label": "A stranger arrives at the inn", "sceneText": "The door swung open against the wind, admitting a figure wrapped in a travelling cloak."},
+                    {"label": "The market erupts in chaos", "sceneText": "First came the sound — a low crack, like ice giving way — then the screaming."},
+                ],
+            })
+
+        # Story choices — continuation mode
+        if "CONTINUATION MODE" in prompt:
+            return json.dumps({
+                "choices": [
+                    {"label": "Confront Marcus directly now", "sceneText": "She stepped into his path, her voice low and even. \"We need to talk. Now.\""},
+                    {"label": "Follow the shadow into alley", "sceneText": "The figure slipped around the corner and she followed without thinking, her footsteps swallowed by the fog."},
+                    {"label": "Return to the archive", "sceneText": "The old building was dark at this hour, but she still had her key, and the answers were waiting."},
+                ],
+            })
+
+        # Story choices — ending mode
+        if "ENDING MODE" in prompt:
+            return json.dumps({
+                "choices": [
+                    {"label": "The story reaches its end", "sceneText": "The long silence between them finally broke. She let the letter fall to the floor and crossed the room, and for the first time in years, she was not afraid.", "isFinal": True},
+                ],
+            })
+
         # Simple mock that returns formatted responses based on prompt content
         if "character" in prompt.lower():
             return """1. **Aria Blackwood** - A mysterious scholar with a hidden past, seeking ancient knowledge. Key traits: Intelligent, secretive, determined. Backstory: Former member of a secret organization, now on the run. Motivations: To uncover the truth about her family's disappearance.

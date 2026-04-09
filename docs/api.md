@@ -115,6 +115,63 @@ Error response:
 - `selectedText`
 - `chapterId` optional
 
+### `enhanceWizardInput`
+
+- `type`: `premise`, `character`, `place`, `conflict`, or `blueprint`
+- `data`: object payload for the selected `type`
+- `userId`
+- response:
+  - `premise|character|place|conflict` -> `{ "enhanced": "..." }`
+  - `blueprint` -> `{ "blueprint": { ... } }`
+
+### `generateStoryChoices`
+
+Generates an opening scene with branching choices (first launch) or continuation choices (co-write).
+
+- `storyId`
+- `mode`: `opening`, `continuation`, or `ending`
+- `currentContent` optional, HTML from the editor — empty string for opening, defaults to `""`
+- `chapterId` optional
+- `turnCount` optional, number of choices selected so far — used for arc-aware prompting, defaults to `0`
+
+Response for `mode: "opening"`:
+
+```json
+{
+  "storyId": "story-123",
+  "openingScene": "The rain had been falling for three days...",
+  "choices": [
+    { "label": "Elena discovers the hidden letter", "sceneText": "She found it tucked beneath the floorboard..." },
+    { "label": "A stranger arrives at the inn", "sceneText": "The door swung open against the wind..." },
+    { "label": "The market erupts in chaos", "sceneText": "First came the sound — a low crack..." }
+  ]
+}
+```
+
+Response for `mode: "continuation"`:
+
+```json
+{
+  "storyId": "story-123",
+  "choices": [
+    { "label": "Confront Marcus directly", "sceneText": "..." },
+    { "label": "Follow the shadow into the alley", "sceneText": "..." },
+    { "label": "Return to the archive", "sceneText": "..." }
+  ]
+}
+```
+
+Response for `mode: "ending"`:
+
+```json
+{
+  "storyId": "story-123",
+  "choices": [
+    { "label": "The story reaches its end", "sceneText": "...", "isFinal": true }
+  ]
+}
+```
+
 ## Validation and error behavior
 
 - unknown actions return `400 BAD_REQUEST`

@@ -12,6 +12,8 @@ ActionName = Literal[
     "generateNextLines",
     "chatWithContext",
     "enhanceText",
+    "enhanceWizardInput",
+    "generateStoryChoices",
 ]
 
 
@@ -115,6 +117,38 @@ class EnhanceTextParams(StrictModel):
     )
 
 
+class GenerateStoryChoicesParams(StrictModel):
+    story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
+    mode: Literal["opening", "continuation", "ending"]
+    current_content: str = Field(
+        default="",
+        validation_alias=AliasChoices("currentContent", "current_content"),
+        serialization_alias="currentContent",
+    )
+    chapter_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("chapterId", "chapter_id"),
+        serialization_alias="chapterId",
+    )
+    turn_count: int = Field(
+        default=0,
+        validation_alias=AliasChoices("turnCount", "turn_count"),
+        serialization_alias="turnCount",
+    )
+
+
+class EnhanceWizardInputParams(StrictModel):
+    wizard_type: Literal["premise", "character", "place", "conflict", "blueprint"] = Field(
+        validation_alias=AliasChoices("type", "wizard_type"),
+        serialization_alias="type",
+    )
+    data: Dict[str, Any]
+    user_id: str = Field(
+        validation_alias=AliasChoices("userId", "user_id"),
+        serialization_alias="userId",
+    )
+
+
 _ACTION_SCHEMAS = {
     "generateStory": GenerateStoryParams,
     "generateChapter": GenerateChapterParams,
@@ -124,6 +158,8 @@ _ACTION_SCHEMAS = {
     "generateNextLines": GenerateNextLinesParams,
     "chatWithContext": ChatWithContextParams,
     "enhanceText": EnhanceTextParams,
+    "enhanceWizardInput": EnhanceWizardInputParams,
+    "generateStoryChoices": GenerateStoryChoicesParams,
 }
 
 

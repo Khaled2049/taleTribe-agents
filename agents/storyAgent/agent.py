@@ -16,6 +16,8 @@ try:
         NextLineGenerationTool,
         ChatWithContextTool,
         EnhanceTextTool,
+        EnhanceWizardInputTool,
+        StoryChoicesTool,
     )
 except ImportError:
     # Add parent directory to path for direct execution
@@ -32,6 +34,8 @@ except ImportError:
         NextLineGenerationTool,
         ChatWithContextTool,
         EnhanceTextTool,
+        EnhanceWizardInputTool,
+        StoryChoicesTool,
     )
 
 
@@ -65,6 +69,8 @@ class StoryAgent:
         self.next_line_tool = NextLineGenerationTool(self.project_id, self.location)
         self.chat_tool = ChatWithContextTool(self.project_id, self.location)
         self.enhance_text_tool = EnhanceTextTool(self.project_id, self.location)
+        self.enhance_wizard_tool = EnhanceWizardInputTool(self.project_id, self.location)
+        self.story_choices_tool = StoryChoicesTool(self.project_id, self.location)
 
     async def generate_next_lines(
         self,
@@ -229,6 +235,40 @@ class StoryAgent:
         """
         return await self.enhance_text_tool.execute(story_id, action, selected_text, chapter_id)
 
+    async def generate_story_choices(
+        self,
+        story_id: str,
+        mode: str,
+        current_content: str = "",
+        chapter_id: Optional[str] = None,
+        turn_count: int = 0,
+    ) -> Dict[str, Any]:
+        """
+        Generate interactive story choices for the co-write feature.
+
+        Args:
+            story_id: Firestore story document ID
+            mode: "opening", "continuation", or "ending"
+            current_content: HTML already in the editor (empty string for opening)
+            chapter_id: Optional chapter document ID for chapter-specific context
+            turn_count: How many choices the user has selected (used for arc-aware prompting)
+
+        Returns:
+            For opening: {"storyId", "openingScene", "choices": [{label, sceneText}, ...]}
+            For continuation: {"storyId", "choices": [{label, sceneText}, ...]}
+            For ending: {"storyId", "choices": [{label, sceneText, isFinal: true}]}
+        """
+        return await self.story_choices_tool.execute(story_id, mode, current_content, chapter_id, turn_count)
+
+    async def enhance_wizard_input(
+        self,
+        user_id: str,
+        wizard_type: str,
+        data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Enhance wizard input across premise/character/place/conflict/blueprint."""
+        return await self.enhance_wizard_tool.execute(user_id, wizard_type, data)
+
     async def execute_agent(
         self,
         action: str,
@@ -300,6 +340,21 @@ class StoryAgent:
                 self._param(parameters, "action"),
                 self._param(parameters, "selectedText", "selected_text"),
                 self._param(parameters, "chapterId", "chapter_id"),
+            )
+        if action == "enhanceWizardInput":
+            return await self.enhance_wizard_input(
+                self._param(parameters, "userId", "user_id"),
+                self._param(parameters, "type", "wizard_type"),
+                self._param(parameters, "data", default={}) or {},
+            )
+
+        if action == "generateStoryChoices":
+            return await self.generate_story_choices(
+                self._param(parameters, "storyId", "story_id"),
+                self._param(parameters, "mode"),
+                self._param(parameters, "currentContent", "current_content", ""),
+                self._param(parameters, "chapterId", "chapter_id"),
+                int(self._param(parameters, "turnCount", "turn_count", 0) or 0),
             )
 
         raise ValueError(f"Unknown action: {action}")
