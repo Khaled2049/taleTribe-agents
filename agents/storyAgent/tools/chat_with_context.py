@@ -32,6 +32,7 @@ class ChatWithContextTool:
         story_id: str,
         message: str,
         chat_history: Optional[List[Dict[str, str]]] = None,
+        brain_context: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Generate chat response using story context (RAG).
@@ -41,6 +42,8 @@ class ChatWithContextTool:
             message: User's message
             chat_history: List of previous messages for conversational context
                          Each message should have "role" ("user" or "assistant") and "content"
+            brain_context: Optional pre-assembled brain memory context; replaces
+                           the default Firestore context string when provided
 
         Returns:
             Dictionary containing:
@@ -50,8 +53,11 @@ class ChatWithContextTool:
         # Build context from Firestore
         context = self.context_builder.build_story_context(story_id)
 
-        # Build system prompt with story context
-        context_text = self._build_context_string(context)
+        # Use brain-assembled context when available, fall back to legacy context
+        if brain_context:
+            context_text = brain_context
+        else:
+            context_text = self._build_context_string(context)
 
         system_prompt = f"""You are a helpful creative writing assistant for NovelSync.
 You have access to the user's story context including chapters, characters, plots, and places.

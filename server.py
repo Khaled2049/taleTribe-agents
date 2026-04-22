@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -134,10 +134,12 @@ def create_app() -> FastAPI:
         )
 
     @app.post("/agent/execute", response_model=AgentResponse)
-    async def execute_agent(request: AgentRequest) -> AgentResponse:
+    async def execute_agent(request: AgentRequest, background_tasks: BackgroundTasks) -> AgentResponse:
         try:
             validated_params = validate_action_parameters(request.action, request.parameters)
-            result = await app.state.agent.execute_agent(request.action, validated_params)
+            result = await app.state.agent.execute_agent(
+                request.action, validated_params, background_tasks=background_tasks
+            )
             return AgentResponse(success=True, data=result)
         except ValidationError as exc:
             raise HTTPException(

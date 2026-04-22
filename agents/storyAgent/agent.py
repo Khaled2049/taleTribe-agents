@@ -19,6 +19,8 @@ try:
         EnhanceWizardInputTool,
         StoryChoicesTool,
     )
+    from .llm_provider import get_llm_provider
+    from .brain import Brain, BrainConfig, ReflectionInput
 except ImportError:
     # Add parent directory to path for direct execution
     current_dir = Path(__file__).parent
@@ -37,6 +39,8 @@ except ImportError:
         EnhanceWizardInputTool,
         StoryChoicesTool,
     )
+    from agents.storyAgent.llm_provider import get_llm_provider
+    from agents.storyAgent.brain import Brain, BrainConfig, ReflectionInput
 
 
 class StoryAgent:
@@ -60,6 +64,11 @@ class StoryAgent:
 
         self.location = location
 
+        # Shared brain resources — loaded once per process
+        self._llm_provider = get_llm_provider(self.project_id, self.location)
+        self._embedder = _load_embedder()
+        self._db = _get_firestore_client(self.project_id)
+
         # Initialize tools
         self.story_tool = StoryGenerationTool(self.project_id, self.location)
         self.chapter_tool = ChapterGenerationTool(self.project_id, self.location)
@@ -71,6 +80,18 @@ class StoryAgent:
         self.enhance_text_tool = EnhanceTextTool(self.project_id, self.location)
         self.enhance_wizard_tool = EnhanceWizardInputTool(self.project_id, self.location)
         self.story_choices_tool = StoryChoicesTool(self.project_id, self.location)
+
+    def _make_brain(self, user_id: str, context_id: str) -> Brain:
+        return Brain(
+            config=BrainConfig(
+                user_id=user_id,
+                context_id=context_id,
+                project_id=self.project_id,
+            ),
+            llm_provider=self._llm_provider,
+            embedder=self._embedder,
+            db=self._db,
+        )
 
     async def generate_next_lines(
         self,
@@ -200,19 +221,47 @@ class StoryAgent:
         story_id: str,
         message: str,
         chat_history: Optional[list] = None,
+        user_id: str = "anonymous",
+        background_tasks=None,
     ) -> Dict[str, Any]:
         """
-        Generate chat response using story context (RAG).
+        Generate chat response using story context with optional brain-augmented memory.
 
         Args:
             story_id: Firestore story document ID
             message: User's message
             chat_history: Optional list of previous messages for conversational context
+            user_id: User identifier for procedural memory scoping
+            background_tasks: FastAPI BackgroundTasks for async reflection
 
         Returns:
             Dictionary containing response and context usage
         """
-        return await self.chat_tool.execute(story_id, message, chat_history)
+        brain_context = None
+        brain = None
+
+        if self._embedder is not None:
+            try:
+                brain = self._make_brain(user_id, story_id)
+                assembled = await brain.assemble(message, action_hint="chatWithContext")
+                brain_context = assembled.text
+            except Exception:
+                logger = logging.getLogger(__name__)
+                logger.warning("Brain.assemble failed for story_id=%s, falling back", story_id)
+
+        result = await self.chat_tool.execute(story_id, message, chat_history, brain_context=brain_context)
+
+        if brain is not None and background_tasks is not None:
+            response_text = result.get("response", "")
+            if response_text:
+                ri = ReflectionInput(
+                    user_message=message,
+                    assistant_response=response_text,
+                    assembled_prompt=assembled,
+                )
+                background_tasks.add_task(brain.reflect, ri)
+
+        return result
 
     async def enhance_text(
         self,
@@ -273,6 +322,7 @@ class StoryAgent:
         self,
         action: str,
         parameters: Dict[str, Any],
+        background_tasks=None,
     ) -> Dict[str, Any]:
         """
         Execute agent action dynamically.
@@ -280,6 +330,7 @@ class StoryAgent:
         Args:
             action: Action to perform (generateStory/generateChapter/brainstorm/etc.)
             parameters: Parameters for the action
+            background_tasks: Optional FastAPI BackgroundTasks for async brain reflection
 
         Returns:
             Result from the agent execution
@@ -333,6 +384,8 @@ class StoryAgent:
                 self._param(parameters, "storyId", "story_id"),
                 self._param(parameters, "message"),
                 self._param(parameters, "chatHistory", "chat_history"),
+                user_id=self._param(parameters, "userId", "user_id", "anonymous"),
+                background_tasks=background_tasks,
             )
         if action == "enhanceText":
             return await self.enhance_text(
@@ -366,4 +419,22 @@ class StoryAgent:
         if snake and snake in parameters:
             return parameters[snake]
         return default
+
+
+def _load_embedder():
+    """Load sentence-transformers model once. Returns None if unavailable."""
+    try:
+        from sentence_transformers import SentenceTransformer
+        return SentenceTransformer("all-MiniLM-L6-v2")
+    except ImportError:
+        logging.getLogger(__name__).warning(
+            "sentence-transformers not installed; brain memory retrieval disabled"
+        )
+        return None
+
+
+def _get_firestore_client(project_id: str):
+    """Get a shared Firestore client."""
+    from google.cloud import firestore as _fs
+    return _fs.Client(project=project_id)
 

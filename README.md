@@ -14,6 +14,7 @@ This repo is the AI execution layer behind NovelSync. It takes story context, va
 - Context-aware chat assistance for in-story writing help
 - Text enhancement actions for rewriting and expansion flows
 - Next-line generation for editor assistance
+- **Brain — four-layer cognitive memory system** (working, procedural, semantic, episodic) with open-source embeddings
 - Strict Pydantic validation with stable error responses
 - Optional local image-generation routes behind an environment flag
 - Cloud Run deployment with Terraform and GitHub Actions
@@ -36,6 +37,7 @@ The service listens on `http://localhost:8000` by default. Start with [docs/quic
 - [Quickstart](./docs/quickstart.md)
 - [API](./docs/api.md)
 - [Architecture](./docs/architecture.md)
+- [Brain — cognitive memory system](./docs/brain.md)
 - [Deployment](./docs/deployment.md)
 
 ## How it fits into NovelSync

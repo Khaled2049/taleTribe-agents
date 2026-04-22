@@ -107,6 +107,9 @@ Error response:
 - `storyId`
 - `message`
 - `chatHistory` optional
+- `userId` optional — used to scope procedural memory (tone, style preferences) to the user; defaults to `"anonymous"` when omitted
+
+When `userId` is provided, the brain memory system augments the prompt with relevant facts, past events, and user style preferences retrieved from Firestore. After the response is sent, memory is updated in the background via reflection.
 
 ### `enhanceText`
 
