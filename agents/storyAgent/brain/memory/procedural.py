@@ -55,3 +55,8 @@ class ProceduralMemoryLayer:
         def _set():
             self._context_ref().set(fields, merge=True)
         await anyio.to_thread.run_sync(_set)
+
+    async def clear_context(self) -> None:
+        def _delete():
+            self._context_ref().delete()
+        await anyio.to_thread.run_sync(_delete)

@@ -76,6 +76,13 @@ class SemanticMemoryLayer:
         return doc_id
 
 
+    async def clear(self) -> None:
+        def _delete_all():
+            for doc in self._collection().stream():
+                doc.reference.delete()
+        await anyio.to_thread.run_sync(_delete_all)
+
+
 def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     norm_a = np.linalg.norm(a)
     norm_b = np.linalg.norm(b)

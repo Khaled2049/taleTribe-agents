@@ -14,6 +14,7 @@ ActionName = Literal[
     "enhanceText",
     "enhanceWizardInput",
     "generateStoryChoices",
+    "clearMemory",
 ]
 
 
@@ -147,6 +148,15 @@ class GenerateStoryChoicesParams(StrictModel):
     )
 
 
+class ClearMemoryParams(StrictModel):
+    story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
+    user_id: str = Field(
+        default="anonymous",
+        validation_alias=AliasChoices("userId", "user_id"),
+        serialization_alias="userId",
+    )
+
+
 class EnhanceWizardInputParams(StrictModel):
     wizard_type: Literal["premise", "character", "place", "conflict", "blueprint"] = Field(
         validation_alias=AliasChoices("type", "wizard_type"),
@@ -170,6 +180,7 @@ _ACTION_SCHEMAS = {
     "enhanceText": EnhanceTextParams,
     "enhanceWizardInput": EnhanceWizardInputParams,
     "generateStoryChoices": GenerateStoryChoicesParams,
+    "clearMemory": ClearMemoryParams,
 }
 
 

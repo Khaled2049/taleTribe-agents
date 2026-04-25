@@ -47,3 +47,8 @@ class WorkingMemoryLayer:
         def _update():
             self._doc_ref().set(fields, merge=True)
         await anyio.to_thread.run_sync(_update)
+
+    async def clear(self) -> None:
+        def _delete():
+            self._doc_ref().delete()
+        await anyio.to_thread.run_sync(_delete)

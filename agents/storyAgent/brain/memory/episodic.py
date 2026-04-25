@@ -57,6 +57,12 @@ class EpisodicMemoryLayer:
             ))
         return results
 
+    async def clear(self) -> None:
+        def _delete_all():
+            for doc in self._collection().stream():
+                doc.reference.delete()
+        await anyio.to_thread.run_sync(_delete_all)
+
     async def store(self, text: str, summary: str) -> str:
         embedding = await anyio.to_thread.run_sync(
             lambda: self._embedder.encode(text, convert_to_numpy=True).tolist()

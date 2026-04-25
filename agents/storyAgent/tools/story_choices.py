@@ -198,8 +198,8 @@ class StoryChoicesTool:
 
         try:
             context = self.context_builder.build_story_context(story_id)
-            # Use brain-assembled context when available, fall back to legacy formatted string
-            formatted_context = brain_context if brain_context else self.context_builder.format_context_for_prompt(context)
+            firestore_context = self.context_builder.format_context_for_prompt(context)
+            formatted_context = (brain_context + "\n\n" + firestore_context) if brain_context else firestore_context
             plain_text = _strip_html(current_content) if current_content else ""
 
             if mode == "opening":

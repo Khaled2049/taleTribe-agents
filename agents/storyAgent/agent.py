@@ -244,7 +244,9 @@ class StoryAgent:
             try:
                 brain = self._make_brain(user_id, story_id)
                 assembled = await brain.assemble(message, action_hint="chatWithContext")
-                brain_context = assembled.text
+                brain_context = assembled.text if _assembled_has_memory(assembled) else None
+                if brain_context:
+                    brain_context = brain_context.split("\n=== CURRENT REQUEST ===")[0].strip() or None
                 logging.getLogger(__name__).info(
                     "Full brain_context for chat story_id=%s:\n%s",
                     story_id,
@@ -326,7 +328,13 @@ class StoryAgent:
                 brain = self._make_brain(user_id, story_id)
                 query = f"{mode} scene. {current_content[:200]}" if current_content else f"{mode} scene"
                 assembled = await brain.assemble(query, action_hint="generateStoryChoices")
-                brain_context = assembled.text
+                logging.getLogger(__name__).info(
+                    "Full assembled prompt for generateStoryChoices story_id=%s mode=%s:\n%s",
+                    story_id, mode, assembled.text,
+                )
+                brain_context = assembled.text if _assembled_has_memory(assembled) else None
+                if brain_context:
+                    brain_context = brain_context.split("\n=== CURRENT REQUEST ===")[0].strip() or None
                 logger.info(
                     "Full brain_context for generateStoryChoices story_id=%s mode=%s:\n%s",
                     story_id, mode, brain_context,
@@ -369,6 +377,13 @@ class StoryAgent:
     ) -> Dict[str, Any]:
         """Enhance wizard input across premise/character/place/conflict/blueprint."""
         return await self.enhance_wizard_tool.execute(user_id, wizard_type, data)
+
+    async def clear_memory(self, story_id: str, user_id: str = "anonymous") -> Dict[str, Any]:
+        """Clear all story-scoped brain memory. Global procedural is kept."""
+        brain = self._make_brain(user_id, story_id)
+        await brain.clear()
+        logging.getLogger(__name__).info("Brain memory cleared story_id=%s user_id=%s", story_id, user_id)
+        return {"cleared": True, "storyId": story_id}
 
     async def execute_agent(
         self,
@@ -464,6 +479,12 @@ class StoryAgent:
                 background_tasks=background_tasks,
             )
 
+        if action == "clearMemory":
+            return await self.clear_memory(
+                self._param(parameters, "storyId", "story_id"),
+                user_id=self._param(parameters, "userId", "user_id", "anonymous"),
+            )
+
         raise ValueError(f"Unknown action: {action}")
     @staticmethod
     def _param(parameters: Dict[str, Any], camel: str, snake: Optional[str] = None, default: Any = None) -> Any:
@@ -473,6 +494,16 @@ class StoryAgent:
         if snake and snake in parameters:
             return parameters[snake]
         return default
+
+
+def _assembled_has_memory(assembled) -> bool:
+    """Return True if the assembled prompt contains at least one real memory layer."""
+    return bool(
+        assembled.semantic_count
+        or assembled.episodic_count
+        or assembled.working_injected
+        or assembled.procedural_injected
+    )
 
 
 def _extract_choices_prose(result: dict) -> str:

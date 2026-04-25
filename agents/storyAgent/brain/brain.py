@@ -84,6 +84,15 @@ class Brain:
 
         return self._assembler.assemble(user_message, working, procedural, semantic_docs, episodic_docs)
 
+    async def clear(self) -> None:
+        """Delete all story-scoped brain memory. Global procedural is kept."""
+        await asyncio.gather(
+            self._working.clear(),
+            self._procedural.clear_context(),
+            self._semantic.clear(),
+            self._episodic.clear(),
+        )
+
     async def reflect(self, reflection_input: ReflectionInput) -> None:
         """Update all memory layers based on assistant response. Never raises."""
         try:
