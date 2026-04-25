@@ -22,7 +22,10 @@
 
 ## Brain — cognitive memory
 
-`brain/` is a self-contained sub-package that gives the agent persistent, retrieval-augmented memory. It is currently integrated into `chatWithContext` and can be extended to other tools.
+`brain/` is a self-contained sub-package that gives the agent persistent, retrieval-augmented memory. It is currently integrated into:
+
+1. `chatWithContext`
+2. `generateStoryChoices`
 
 ### Four memory layers
 

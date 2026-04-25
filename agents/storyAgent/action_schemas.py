@@ -101,6 +101,11 @@ class ChatWithContextParams(StrictModel):
         validation_alias=AliasChoices("chatHistory", "chat_history"),
         serialization_alias="chatHistory",
     )
+    user_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("userId", "user_id"),
+        serialization_alias="userId",
+    )
 
 
 class EnhanceTextParams(StrictModel):
@@ -134,6 +139,11 @@ class GenerateStoryChoicesParams(StrictModel):
         default=0,
         validation_alias=AliasChoices("turnCount", "turn_count"),
         serialization_alias="turnCount",
+    )
+    user_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("userId", "user_id"),
+        serialization_alias="userId",
     )
 
 

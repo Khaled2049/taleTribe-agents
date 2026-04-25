@@ -114,7 +114,10 @@ class TestActionDispatch:
         )
 
         assert result == mock_result
-        agent.generate_story_choices.assert_awaited_once_with("s1", "opening", "", None, 0)
+        agent.generate_story_choices.assert_awaited_once_with(
+            "s1", "opening", "", None, 0,
+            user_id="anonymous", background_tasks=None,
+        )
 
     async def test_execute_agent_generate_story_choices_continuation(self):
         agent = StoryAgent(project_id="test-project")
@@ -140,7 +143,8 @@ class TestActionDispatch:
 
         assert result == mock_result
         agent.generate_story_choices.assert_awaited_once_with(
-            "s1", "continuation", "<p>Some existing prose.</p>", "ch1", 0
+            "s1", "continuation", "<p>Some existing prose.</p>", "ch1", 0,
+            user_id="anonymous", background_tasks=None,
         )
 
     async def test_execute_agent_generate_story_choices_accepts_snake_case(self):
@@ -157,4 +161,19 @@ class TestActionDispatch:
             },
         )
 
-        agent.generate_story_choices.assert_awaited_once_with("s2", "opening", "", None, 0)
+        agent.generate_story_choices.assert_awaited_once_with(
+            "s2", "opening", "", None, 0,
+            user_id="anonymous", background_tasks=None,
+        )
+
+    async def test_execute_agent_generate_story_choices_passes_user_id(self):
+        agent = StoryAgent(project_id="test-project")
+        agent.generate_story_choices = AsyncMock(return_value={"storyId": "s1", "choices": []})
+
+        await agent.execute_agent(
+            "generateStoryChoices",
+            {"storyId": "s1", "mode": "opening", "userId": "user-42"},
+        )
+
+        _, kwargs = agent.generate_story_choices.await_args
+        assert kwargs["user_id"] == "user-42"

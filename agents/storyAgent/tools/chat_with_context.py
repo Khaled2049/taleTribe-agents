@@ -1,4 +1,5 @@
 """Tool for chat with RAG (Retrieval-Augmented Generation) using story context."""
+import logging
 import sys
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -15,6 +16,8 @@ except ImportError:
         sys.path.insert(0, str(parent_dir))
     from agents.storyAgent.context_builder import StoryContextBuilder
     from agents.storyAgent.llm_provider import get_llm_provider, LLMProvider
+
+logger = logging.getLogger(__name__)
 
 
 class ChatWithContextTool:
@@ -92,6 +95,7 @@ STORY CONTEXT:
         full_prompt += f"User: {message}\n\nAssistant:"
 
         # Generate response using LLM provider
+        logger.info("Full chat prompt story_id=%s:\n%s", story_id, full_prompt)
         response = await self.llm_provider.generate_content_async(full_prompt)
 
         # Calculate context usage

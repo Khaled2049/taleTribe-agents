@@ -165,6 +165,7 @@ class StoryChoicesTool:
         current_content: str = "",
         chapter_id: Optional[str] = None,
         turn_count: int = 0,
+        brain_context: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Generate story choices for opening, continuation, or ending mode.
@@ -175,13 +176,18 @@ class StoryChoicesTool:
             current_content: HTML content already in the editor (empty for opening)
             chapter_id: Optional chapter document ID (reserved for future chapter-scoped context)
             turn_count: How many choices the user has selected so far (used for arc guidance)
+            brain_context: Optional pre-assembled brain memory context; replaces the legacy
+                           formatted Firestore context string when provided
 
         Returns:
             For opening: {"storyId": ..., "openingScene": ..., "choices": [...]}
             For continuation: {"storyId": ..., "choices": [...]}
             For ending: {"storyId": ..., "choices": [{"label": ..., "sceneText": ..., "isFinal": true}]}
         """
-        logger.info("StoryChoicesTool story_id=%s mode=%s turn_count=%s", story_id, mode, turn_count)
+        logger.info(
+            "StoryChoicesTool story_id=%s mode=%s turn_count=%s brain_context=%s",
+            story_id, mode, turn_count, "yes" if brain_context else "no",
+        )
 
         if mode not in ("opening", "continuation", "ending"):
             return {
@@ -192,7 +198,8 @@ class StoryChoicesTool:
 
         try:
             context = self.context_builder.build_story_context(story_id)
-            formatted_context = self.context_builder.format_context_for_prompt(context)
+            # Use brain-assembled context when available, fall back to legacy formatted string
+            formatted_context = brain_context if brain_context else self.context_builder.format_context_for_prompt(context)
             plain_text = _strip_html(current_content) if current_content else ""
 
             if mode == "opening":
@@ -203,6 +210,10 @@ class StoryChoicesTool:
                 prompt = self._build_continuation_prompt(formatted_context, plain_text, turn_count)
 
             try:
+                logger.info(
+                    "Full story choices prompt story_id=%s mode=%s:\n%s",
+                    story_id, mode, prompt,
+                )
                 raw_response = await self.llm_provider.generate_content_async(prompt)
 
                 parsed = _safe_json_parse(raw_response or "")

@@ -245,6 +245,11 @@ class StoryAgent:
                 brain = self._make_brain(user_id, story_id)
                 assembled = await brain.assemble(message, action_hint="chatWithContext")
                 brain_context = assembled.text
+                logging.getLogger(__name__).info(
+                    "Full brain_context for chat story_id=%s:\n%s",
+                    story_id,
+                    brain_context,
+                )
             except Exception:
                 logger = logging.getLogger(__name__)
                 logger.warning("Brain.assemble failed for story_id=%s, falling back", story_id)
@@ -291,6 +296,8 @@ class StoryAgent:
         current_content: str = "",
         chapter_id: Optional[str] = None,
         turn_count: int = 0,
+        user_id: str = "anonymous",
+        background_tasks=None,
     ) -> Dict[str, Any]:
         """
         Generate interactive story choices for the co-write feature.
@@ -301,13 +308,58 @@ class StoryAgent:
             current_content: HTML already in the editor (empty string for opening)
             chapter_id: Optional chapter document ID for chapter-specific context
             turn_count: How many choices the user has selected (used for arc-aware prompting)
+            user_id: User identifier for procedural memory scoping
+            background_tasks: FastAPI BackgroundTasks for async brain reflection
 
         Returns:
             For opening: {"storyId", "openingScene", "choices": [{label, sceneText}, ...]}
             For continuation: {"storyId", "choices": [{label, sceneText}, ...]}
             For ending: {"storyId", "choices": [{label, sceneText, isFinal: true}]}
         """
-        return await self.story_choices_tool.execute(story_id, mode, current_content, chapter_id, turn_count)
+        logger = logging.getLogger(__name__)
+        brain_context = None
+        brain = None
+        assembled = None
+
+        if self._embedder is not None:
+            try:
+                brain = self._make_brain(user_id, story_id)
+                query = f"{mode} scene. {current_content[:200]}" if current_content else f"{mode} scene"
+                assembled = await brain.assemble(query, action_hint="generateStoryChoices")
+                brain_context = assembled.text
+                logger.info(
+                    "Full brain_context for generateStoryChoices story_id=%s mode=%s:\n%s",
+                    story_id, mode, brain_context,
+                )
+                logger.info(
+                    "Brain assembled for generateStoryChoices story_id=%s mode=%s semantic=%d episodic=%d",
+                    story_id, mode, assembled.semantic_count, assembled.episodic_count,
+                )
+            except Exception:
+                logger.warning(
+                    "Brain assembly failed for generateStoryChoices story_id=%s, falling back to legacy context",
+                    story_id,
+                )
+
+        result = await self.story_choices_tool.execute(
+            story_id, mode, current_content, chapter_id, turn_count, brain_context=brain_context
+        )
+
+        if brain is not None and background_tasks is not None:
+            prose = _extract_choices_prose(result)
+            if prose:
+                ri = ReflectionInput(
+                    user_message=f"Generate {mode} story choices",
+                    assistant_response=prose,
+                    assembled_prompt=assembled,
+                )
+                background_tasks.add_task(brain.reflect, ri)
+                logger.info(
+                    "Brain reflection scheduled for generateStoryChoices story_id=%s mode=%s",
+                    story_id, mode,
+                )
+
+        return result
 
     async def enhance_wizard_input(
         self,
@@ -408,6 +460,8 @@ class StoryAgent:
                 self._param(parameters, "currentContent", "current_content", ""),
                 self._param(parameters, "chapterId", "chapter_id"),
                 int(self._param(parameters, "turnCount", "turn_count", 0) or 0),
+                user_id=self._param(parameters, "userId", "user_id", "anonymous"),
+                background_tasks=background_tasks,
             )
 
         raise ValueError(f"Unknown action: {action}")
@@ -419,6 +473,17 @@ class StoryAgent:
         if snake and snake in parameters:
             return parameters[snake]
         return default
+
+
+def _extract_choices_prose(result: dict) -> str:
+    """Extract narrative prose from a generateStoryChoices result for brain reflection."""
+    parts = []
+    if result.get("openingScene"):
+        parts.append(result["openingScene"])
+    for choice in result.get("choices", []):
+        if choice.get("sceneText"):
+            parts.append(choice["sceneText"])
+    return "\n\n".join(parts)
 
 
 def _load_embedder():
