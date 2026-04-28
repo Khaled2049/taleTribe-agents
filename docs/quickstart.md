@@ -30,7 +30,7 @@ Cloud Run-compatible dependency set:
 pip install -r requirements-prod.txt
 ```
 
-`requirements.txt` includes local image-generation dependencies, including a `transformers` 4.x version and `sentencepiece` required by the Stable Diffusion pipeline stack. `requirements-prod.txt` excludes the large ML packages used only for local image generation.
+`requirements.txt` includes local image-generation dependencies (torch, diffusers, transformers, sentencepiece) and the brain memory system dependencies (`sentence-transformers`, `numpy`). `requirements-prod.txt` excludes the large image-generation ML packages but keeps `sentence-transformers` and `numpy` since the brain system runs in production.
 
 ## Configure environment
 

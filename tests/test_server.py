@@ -1,6 +1,6 @@
 """Tests for FastAPI server endpoints."""
 import os
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 from fastapi.testclient import TestClient
 
@@ -91,6 +91,7 @@ class TestAgentExecution:
                     "chapters": [],
                 },
             },
+            background_tasks=ANY,
         )
 
     def test_enhance_wizard_input_success(self):
@@ -119,6 +120,7 @@ class TestAgentExecution:
                 "data": {"title": "The Last Lantern", "premise": "A girl finds a magic lamp"},
                 "userId": "user-1",
             },
+            background_tasks=ANY,
         )
 
     def test_enhance_wizard_input_invalid_type_returns_422(self):
@@ -169,6 +171,7 @@ class TestGenerateStoryChoices:
         app.state.agent.execute_agent.assert_awaited_once_with(
             "generateStoryChoices",
             {"storyId": "s1", "mode": "opening", "currentContent": "", "turnCount": 0},
+            background_tasks=ANY,
         )
 
     def test_continuation_mode_success(self):
@@ -209,6 +212,7 @@ class TestGenerateStoryChoices:
                 "chapterId": "ch1",
                 "turnCount": 0,
             },
+            background_tasks=ANY,
         )
 
     def test_missing_mode_returns_422(self):

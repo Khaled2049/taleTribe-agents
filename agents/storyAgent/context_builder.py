@@ -139,3 +139,51 @@ class StoryContextBuilder:
 
         return "\n".join(prompt_parts)
 
+    def format_slim_context_for_chat(self, context: Dict[str, Any]) -> str:
+        """
+        Minimal context for chat — metadata + names/roles + plot titles + chapter list.
+        No chapter text, no backstories, no plot events. ~90% smaller than full context.
+        Brain memory fills in depth over time via semantic/episodic recall.
+        """
+        story = context.get("story", {})
+        characters = context.get("characters", [])
+        plots = context.get("plots", [])
+        chapters = context.get("chapters", [])
+
+        parts = []
+
+        meta_parts = [f"Title: {story.get('title', 'Untitled')}"]
+        if story.get("genre"):
+            meta_parts.append(f"Genre: {story.get('genre')}")
+        if story.get("tone"):
+            meta_parts.append(f"Tone: {story.get('tone')}")
+        parts.append(" | ".join(meta_parts))
+
+        if story.get("description"):
+            desc = story["description"]
+            parts.append(desc[:150] + ("…" if len(desc) > 150 else ""))
+
+        if characters:
+            char_list = ", ".join(
+                f"{c.get('name', '?')} ({c.get('role', 'character')})"
+                for c in characters
+            )
+            parts.append(f"\nCharacters: {char_list}")
+
+        if plots:
+            parts.append("\nPlots:")
+            for p in plots:
+                title = p.get("title") or p.get("name") or "Untitled"
+                desc = (p.get("description") or "")[:100]
+                suffix = "…" if len(p.get("description") or "") > 100 else ""
+                parts.append(f"- {title}: {desc}{suffix}")
+
+        if chapters:
+            chapter_refs = " | ".join(
+                f"Ch{c.get('chapterNumber', i + 1)}: {c.get('title', 'Untitled')}"
+                for i, c in enumerate(chapters)
+            )
+            parts.append(f"\nChapters ({len(chapters)} total): {chapter_refs}")
+
+        return "\n".join(parts)
+

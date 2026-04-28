@@ -14,6 +14,7 @@ ActionName = Literal[
     "enhanceText",
     "enhanceWizardInput",
     "generateStoryChoices",
+    "clearMemory",
 ]
 
 
@@ -101,6 +102,11 @@ class ChatWithContextParams(StrictModel):
         validation_alias=AliasChoices("chatHistory", "chat_history"),
         serialization_alias="chatHistory",
     )
+    user_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("userId", "user_id"),
+        serialization_alias="userId",
+    )
 
 
 class EnhanceTextParams(StrictModel):
@@ -135,6 +141,20 @@ class GenerateStoryChoicesParams(StrictModel):
         validation_alias=AliasChoices("turnCount", "turn_count"),
         serialization_alias="turnCount",
     )
+    user_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("userId", "user_id"),
+        serialization_alias="userId",
+    )
+
+
+class ClearMemoryParams(StrictModel):
+    story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
+    user_id: str = Field(
+        default="anonymous",
+        validation_alias=AliasChoices("userId", "user_id"),
+        serialization_alias="userId",
+    )
 
 
 class EnhanceWizardInputParams(StrictModel):
@@ -160,6 +180,7 @@ _ACTION_SCHEMAS = {
     "enhanceText": EnhanceTextParams,
     "enhanceWizardInput": EnhanceWizardInputParams,
     "generateStoryChoices": GenerateStoryChoicesParams,
+    "clearMemory": ClearMemoryParams,
 }
 
 

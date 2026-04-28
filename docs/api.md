@@ -107,6 +107,9 @@ Error response:
 - `storyId`
 - `message`
 - `chatHistory` optional
+- `userId` optional — used to scope procedural memory (tone, style preferences) to the user; defaults to `"anonymous"` when omitted
+
+When `userId` is provided, the brain memory system augments the prompt with relevant facts, past events, and user style preferences retrieved from Firestore. After the response is sent, memory is updated in the background via reflection.
 
 ### `enhanceText`
 
@@ -133,6 +136,7 @@ Generates an opening scene with branching choices (first launch) or continuation
 - `currentContent` optional, HTML from the editor — empty string for opening, defaults to `""`
 - `chapterId` optional
 - `turnCount` optional, number of choices selected so far — used for arc-aware prompting, defaults to `0`
+- `userId` optional — scopes procedural memory (tone, style preferences) to the user; enables brain memory augmentation when provided
 
 Response for `mode: "opening"`:
 

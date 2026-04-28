@@ -90,6 +90,32 @@ Wire the new tool into **`StoryAgent`**:
 
 `_param` checks **camelCase first**, then **snake_case**, matching how clients and tests send data.
 
+### Optional: brain memory integration
+
+If the new tool benefits from persistent memory (e.g. it generates story content), you can augment it with the brain system:
+
+```python
+async def my_action(self, story_id, message, user_id="anonymous", background_tasks=None):
+    brain_context = None
+    brain = None
+    if self._embedder is not None:
+        brain = self._make_brain(user_id, story_id)
+        assembled = await brain.assemble(message, action_hint="myAction")
+        brain_context = assembled.text
+
+    result = await self.my_tool.execute(story_id, message, brain_context=brain_context)
+
+    if brain and background_tasks and result.get("response"):
+        ri = ReflectionInput(user_message=message, assistant_response=result["response"], assembled_prompt=assembled)
+        background_tasks.add_task(brain.reflect, ri)
+
+    return result
+```
+
+Then pass `background_tasks=background_tasks` from `execute_agent`. The tool's `execute` method should accept `brain_context: str | None = None` and use it when provided (falling back to the legacy `StoryContextBuilder` context when `None`).
+
+`self._embedder`, `self._db`, and `self._llm_provider` are already instantiated on `StoryAgent` and shared across all brain instances — no extra initialization needed.
+
 ---
 
 ## 5. Tests and manual checks

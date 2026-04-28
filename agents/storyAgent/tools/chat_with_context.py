@@ -1,4 +1,5 @@
 """Tool for chat with RAG (Retrieval-Augmented Generation) using story context."""
+import logging
 import sys
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -16,6 +17,8 @@ except ImportError:
     from agents.storyAgent.context_builder import StoryContextBuilder
     from agents.storyAgent.llm_provider import get_llm_provider, LLMProvider
 
+logger = logging.getLogger(__name__)
+
 
 class ChatWithContextTool:
     """Tool for chatting with context-aware AI assistant."""
@@ -32,6 +35,7 @@ class ChatWithContextTool:
         story_id: str,
         message: str,
         chat_history: Optional[List[Dict[str, str]]] = None,
+        brain_context: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Generate chat response using story context (RAG).
@@ -41,28 +45,29 @@ class ChatWithContextTool:
             message: User's message
             chat_history: List of previous messages for conversational context
                          Each message should have "role" ("user" or "assistant") and "content"
+            brain_context: Optional pre-assembled brain memory context; replaces
+                           the default Firestore context string when provided
 
         Returns:
             Dictionary containing:
             - response: AI-generated response
             - contextUsed: Counts of story elements used
         """
-        # Build context from Firestore
+        # Build context from Firestore — slim format keeps prompt focused
         context = self.context_builder.build_story_context(story_id)
+        slim_firestore = self.context_builder.format_slim_context_for_chat(context)
 
-        # Build system prompt with story context
-        context_text = self._build_context_string(context)
+        # Brain context (style/memory) prepended to slim Firestore summary
+        context_text = (brain_context + "\n\n" + slim_firestore) if brain_context else slim_firestore
 
-        system_prompt = f"""You are a helpful creative writing assistant for NovelSync.
-You have access to the user's story context including chapters, characters, plots, and places.
+        system_prompt = f"""You are a writing assistant inside NovelSync. You know this story.
 
-Use this context to provide:
-- Writing assistance (improve prose, grammar, enhance descriptions)
-- Story development advice (plot holes, character arcs, pacing, themes)
-- Creative brainstorming (plot twists, character traits, dialogue ideas)
-- Q&A about the story content
-
-Be encouraging, constructive, and specific in your feedback.
+Rules:
+- Reply in 1-3 sentences unless the user asks for more, a list, or prose help.
+- No filler openers ("Great question!", "Of course!", "Sure!").
+- For prose help: show a rewritten example, not just advice.
+- For story questions: answer directly from context.
+- For brainstorming: give 2-3 specific ideas, not a numbered essay.
 
 STORY CONTEXT:
 {context_text}
@@ -86,6 +91,7 @@ STORY CONTEXT:
         full_prompt += f"User: {message}\n\nAssistant:"
 
         # Generate response using LLM provider
+        logger.info("Full chat prompt story_id=%s:\n%s", story_id, full_prompt)
         response = await self.llm_provider.generate_content_async(full_prompt)
 
         # Calculate context usage
