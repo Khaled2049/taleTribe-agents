@@ -88,7 +88,7 @@ variable "concurrency" {
 variable "google_ai_studio_model" {
   description = "Google AI Studio model name (Free tier stable)"
   type        = string
-  default     = "gemini-2.5-flash" 
+  default     = "gemini-2.5-flash"
 }
 
 variable "enable_public_access" {

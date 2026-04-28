@@ -239,6 +239,7 @@ class StoryAgent:
         """
         brain_context = None
         brain = None
+        assembled = None
 
         if self._embedder is not None:
             try:
@@ -258,7 +259,7 @@ class StoryAgent:
 
         result = await self.chat_tool.execute(story_id, message, chat_history, brain_context=brain_context)
 
-        if brain is not None and background_tasks is not None:
+        if brain is not None and assembled is not None and background_tasks is not None:
             response_text = result.get("response", "")
             if response_text:
                 ri = ReflectionInput(
@@ -353,7 +354,7 @@ class StoryAgent:
             story_id, mode, current_content, chapter_id, turn_count, brain_context=brain_context
         )
 
-        if brain is not None and background_tasks is not None:
+        if brain is not None and assembled is not None and background_tasks is not None:
             prose = _extract_choices_prose(result)
             if prose:
                 ri = ReflectionInput(
