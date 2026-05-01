@@ -519,15 +519,10 @@ def _extract_choices_prose(result: dict) -> str:
 
 
 def _load_embedder():
-    """Load sentence-transformers model once. Returns None if unavailable."""
-    try:
-        from sentence_transformers import SentenceTransformer
-        return SentenceTransformer("all-MiniLM-L6-v2")
-    except ImportError:
-        logging.getLogger(__name__).warning(
-            "sentence-transformers not installed; brain memory retrieval disabled"
-        )
-        return None
+    """Load embedding provider once. Returns None if unavailable."""
+    from agents.storyAgent.brain.embedding_provider import get_embedding_provider  # noqa: PLC0415
+
+    return get_embedding_provider(os.getenv("GOOGLE_AI_STUDIO_API_KEY"))
 
 
 def _get_firestore_client(project_id: str):

@@ -25,9 +25,8 @@ class SemanticMemoryLayer:
         if not query:
             return []
 
-        query_vec = await anyio.to_thread.run_sync(
-            lambda: self._embedder.encode(query, convert_to_numpy=True)
-        )
+        embedding_list = await self._embedder.embed(query)
+        query_vec = np.array(embedding_list, dtype=np.float32)
 
         def _fetch_all():
             return [doc for doc in self._collection().stream()]
@@ -59,9 +58,7 @@ class SemanticMemoryLayer:
         return results
 
     async def store(self, text: str, type: str = "", data: dict[str, Any] | None = None) -> str:
-        embedding = await anyio.to_thread.run_sync(
-            lambda: self._embedder.encode(text, convert_to_numpy=True).tolist()
-        )
+        embedding = await self._embedder.embed(text)
         doc_id = str(uuid.uuid4())
         doc = {
             "text": text,
@@ -84,6 +81,8 @@ class SemanticMemoryLayer:
 
 
 def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    if a.shape != b.shape:  # mismatched dims (e.g. old 384-dim vs new 768-dim) → skip
+        return 0.0
     norm_a = np.linalg.norm(a)
     norm_b = np.linalg.norm(b)
     if norm_a == 0 or norm_b == 0:

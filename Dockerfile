@@ -15,9 +15,6 @@ COPY requirements-prod.txt /app/requirements.txt
 # Install Python dependencies
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# Pre-download sentence-transformers model to avoid cold-start latency
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
-
 # Copy the entire agents directory
 COPY agents/ /app/agents/
 

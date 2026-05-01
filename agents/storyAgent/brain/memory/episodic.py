@@ -25,9 +25,8 @@ class EpisodicMemoryLayer:
         if not query:
             return []
 
-        query_vec = await anyio.to_thread.run_sync(
-            lambda: self._embedder.encode(query, convert_to_numpy=True)
-        )
+        embedding_list = await self._embedder.embed(query)
+        query_vec = np.array(embedding_list, dtype=np.float32)
 
         def _fetch_all():
             return [doc for doc in self._collection().stream()]
@@ -64,9 +63,7 @@ class EpisodicMemoryLayer:
         await anyio.to_thread.run_sync(_delete_all)
 
     async def store(self, text: str, summary: str) -> str:
-        embedding = await anyio.to_thread.run_sync(
-            lambda: self._embedder.encode(text, convert_to_numpy=True).tolist()
-        )
+        embedding = await self._embedder.embed(text)
         doc_id = str(uuid.uuid4())
         doc = {
             "text": text,

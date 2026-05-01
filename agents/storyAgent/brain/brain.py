@@ -29,7 +29,7 @@ class Brain:
         self,
         config: BrainConfig,
         llm_provider,
-        embedder,
+        embedder,  # EmbeddingProvider | None
         db: Optional[firestore.Client] = None,
     ):
         if db is None:
