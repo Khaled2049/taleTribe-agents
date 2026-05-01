@@ -92,7 +92,13 @@ variable "google_ai_studio_model" {
 }
 
 variable "enable_public_access" {
-  description = "Enable public (unauthenticated) access to the service"
+  description = "Enable public (unauthenticated) access to the service. Keep false in production — Firebase Functions authenticates via OIDC identity tokens."
   type        = bool
-  default     = true
+  default     = false
+}
+
+variable "firebase_functions_service_account" {
+  description = "Service account email used by Firebase Functions to invoke the agent (e.g. story-6f89f@appspot.gserviceaccount.com). Granted roles/run.invoker on the Cloud Run service."
+  type        = string
+  default     = ""
 }

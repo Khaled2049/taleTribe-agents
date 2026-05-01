@@ -18,6 +18,7 @@ env:
   REGION: us-central1
   SERVICE_NAME: novelsync-agents
   ARTIFACT_REGISTRY_REPO: novelsync-agents
+  FIREBASE_FUNCTIONS_SA: 793308156964-compute@developer.gserviceaccount.com
 
 jobs:
   deploy:
@@ -150,6 +151,7 @@ jobs:
         run: |
           terraform plan \
             -var="image=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/app:${{ github.sha }}" \
+            -var="firebase_functions_service_account=${{ env.FIREBASE_FUNCTIONS_SA }}" \
             -out=tfplan
 
       - name: Terraform Apply
@@ -166,8 +168,9 @@ jobs:
       - name: Test deployment health check
         run: |
           URL="${{ steps.get_url.outputs.service_url }}/health"
+          TOKEN=$(gcloud auth print-identity-token --audiences="${{ steps.get_url.outputs.service_url }}")
           for i in 1 2 3 4 5; do
-            if curl -sf --max-time 10 "$URL" > /dev/null; then
+            if curl -sf --max-time 10 -H "Authorization: Bearer $TOKEN" "$URL" > /dev/null; then
               echo "Health check passed on attempt $i"
               exit 0
             fi

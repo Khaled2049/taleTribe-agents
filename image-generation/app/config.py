@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     api_description: str = "A FastAPI application for generating images locally using Stable Diffusion"
     api_version: str = "1.0.0"
     
+    # CORS
+    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:8080"]
+
     # Logging
     log_level: str = "INFO"
 

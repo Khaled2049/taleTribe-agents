@@ -2,6 +2,7 @@
 # This file contains all dependencies for bots, agents, and image-generation
 
 # Firebase and Google Cloud
+google-auth>=2.23.0
 google-cloud-firestore>=2.13.0
 
 # HTTP and API

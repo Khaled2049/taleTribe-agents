@@ -1,4 +1,5 @@
 """Unified HTTP server for NovelSync services (agents and optional image generation)."""
+import json
 import logging
 import os
 import sys
@@ -6,10 +7,12 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token as google_id_token
 from pydantic import BaseModel, Field, ValidationError
 
 from agents.storyAgent.action_schemas import ActionName, validate_action_parameters
@@ -17,6 +20,43 @@ from agents.storyAgent.agent import StoryAgent
 
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 logger = logging.getLogger(__name__)
+
+
+async def _verify_internal_token(request: Request) -> None:
+    """Verify that the request comes from Firebase Functions via Google OIDC token.
+
+    No-op outside production so local dev works without credentials.
+    In production: validates Bearer token signature + expiry, then checks the
+    caller email matches FIREBASE_FUNCTIONS_SERVICE_ACCOUNT if that env var is set.
+    """
+    if os.getenv("ENVIRONMENT") != "production":
+        return
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "UNAUTHORIZED", "message": "Missing Authorization header", "details": None},
+        )
+
+    token = auth_header.split(" ", 1)[1]
+    service_url = os.getenv("AGENT_SERVICE_URL") or None
+    expected_sa = os.getenv("FIREBASE_FUNCTIONS_SERVICE_ACCOUNT", "")
+
+    try:
+        claims = google_id_token.verify_oauth2_token(
+            token,
+            google_requests.Request(),
+            audience=service_url,
+        )
+        if expected_sa and claims.get("email") != expected_sa:
+            raise ValueError(f"Unexpected caller email: {claims.get('email')}")
+    except Exception as exc:
+        logger.warning("Token validation failed: %s", exc)
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "UNAUTHORIZED", "message": "Invalid or unauthorized token", "details": None},
+        )
 
 
 class ErrorDetail(BaseModel):
@@ -88,12 +128,20 @@ def create_app() -> FastAPI:
         description="Unified API for story agents and optional image generation",
     )
 
+    cors_origins_raw = os.getenv("CORS_ORIGINS", "[]")
+    try:
+        cors_origins = json.loads(cors_origins_raw)
+        if not isinstance(cors_origins, list):
+            cors_origins = []
+    except (json.JSONDecodeError, ValueError):
+        cors_origins = []
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=cors_origins,
+        allow_credentials=False,
+        allow_methods=["POST", "GET"],
+        allow_headers=["Content-Type", "Authorization"],
     )
 
     project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
@@ -134,7 +182,11 @@ def create_app() -> FastAPI:
         )
 
     @app.post("/agent/execute", response_model=AgentResponse)
-    async def execute_agent(request: AgentRequest, background_tasks: BackgroundTasks) -> AgentResponse:
+    async def execute_agent(
+        request: AgentRequest,
+        background_tasks: BackgroundTasks,
+        _: None = Depends(_verify_internal_token),
+    ) -> AgentResponse:
         try:
             validated_params = validate_action_parameters(request.action, request.parameters)
             result = await app.state.agent.execute_agent(

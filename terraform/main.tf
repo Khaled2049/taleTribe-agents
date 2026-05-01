@@ -108,6 +108,17 @@ resource "google_cloud_run_v2_service" "app" {
         value = "false"
       }
 
+      # Agent is internal-only — no browser origins allowed
+      env {
+        name  = "CORS_ORIGINS"
+        value = "[]"
+      }
+
+      env {
+        name  = "FIREBASE_FUNCTIONS_SERVICE_ACCOUNT"
+        value = var.firebase_functions_service_account
+      }
+
       # Secret from Secret Manager (accessed via service account)
       env {
         name = "GOOGLE_AI_STUDIO_API_KEY"
@@ -164,12 +175,20 @@ resource "google_cloud_run_v2_service" "app" {
   ]
 }
 
-# IAM: Allow public access (unauthenticated invocations)
-# Comment out if you want authenticated-only access
+# IAM: Allow public access (unauthenticated invocations) — disabled by default
 resource "google_cloud_run_v2_service_iam_member" "public_access" {
   count    = var.enable_public_access ? 1 : 0
   name     = google_cloud_run_v2_service.app.name
   location = google_cloud_run_v2_service.app.location
   role     = "roles/run.invoker"
   member   = "allUsers"
+}
+
+# IAM: Allow Firebase Functions service account to invoke the agent
+resource "google_cloud_run_v2_service_iam_member" "firebase_functions_invoker" {
+  count    = var.firebase_functions_service_account != "" ? 1 : 0
+  name     = google_cloud_run_v2_service.app.name
+  location = google_cloud_run_v2_service.app.location
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${var.firebase_functions_service_account}"
 }
