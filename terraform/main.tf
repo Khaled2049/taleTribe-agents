@@ -84,7 +84,7 @@ resource "google_cloud_run_v2_service" "app" {
           memory = var.memory
         }
         cpu_idle          = true  # Only charge for CPU during request execution
-        startup_cpu_boost = false # Free tier compatible
+        startup_cpu_boost = true
       }
 
       # Environment variables (non-secret configuration)
@@ -137,9 +137,9 @@ resource "google_cloud_run_v2_service" "app" {
           port = 8080
         }
         initial_delay_seconds = 10
-        timeout_seconds       = 3
-        period_seconds        = 10
-        failure_threshold     = 3
+        timeout_seconds       = 5
+        period_seconds        = 15
+        failure_threshold     = 8
       }
 
       # Liveness probe - restarts container if unhealthy
