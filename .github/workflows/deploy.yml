@@ -165,12 +165,22 @@ jobs:
           SERVICE_URL=$(terraform output -raw service_url)
           echo "service_url=$SERVICE_URL" >> $GITHUB_OUTPUT
 
+      - name: Authenticate for health check
+        id: auth_health_check
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.get_url.outputs.service_url }}
+
       - name: Test deployment health check
+        env:
+          HEALTH_CHECK_TOKEN: ${{ steps.auth_health_check.outputs.id_token }}
         run: |
           URL="${{ steps.get_url.outputs.service_url }}/health"
-          TOKEN=$(gcloud auth print-identity-token --audiences="${{ steps.get_url.outputs.service_url }}")
           for i in 1 2 3 4 5; do
-            if curl -sf --max-time 10 -H "Authorization: Bearer $TOKEN" "$URL" > /dev/null; then
+            if curl -sf --max-time 10 -H "Authorization: Bearer $HEALTH_CHECK_TOKEN" "$URL" > /dev/null; then
               echo "Health check passed on attempt $i"
               exit 0
             fi
