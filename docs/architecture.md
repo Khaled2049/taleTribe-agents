@@ -141,7 +141,7 @@ agents/storyAgent/brain/
 
 - `self._embedder` — `SentenceTransformer("all-MiniLM-L6-v2")`
 - `self._db` — `firestore.Client`
-- `self._llm_provider` — existing `LLMProvider` (Gemini / Ollama / Mock)
+- `self._llm_provider` — `CreditProxyProvider` (routes all LLM calls through creditProxy gateway)
 
 If `sentence-transformers` is not installed, `_embedder` is `None` and brain memory retrieval is silently skipped. The tool falls back to the legacy Firestore context string.
 

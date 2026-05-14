@@ -17,6 +17,16 @@ from pydantic import BaseModel, Field, ValidationError
 
 from agents.storyAgent.action_schemas import ActionName, validate_action_parameters
 from agents.storyAgent.agent import StoryAgent
+from agents.storyAgent.llm_provider import (
+    _byok_config,
+    BackendUnavailableError,
+    InsufficientCreditsError,
+    LLMProviderError,
+    LLMTimeoutError,
+    ProviderAuthError,
+    ProviderNotFoundError,
+    RateLimitedError,
+)
 
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 logger = logging.getLogger(__name__)
@@ -67,11 +77,21 @@ class ErrorDetail(BaseModel):
     details: Optional[Any] = None
 
 
+class ProviderConfig(BaseModel):
+    """Per-request BYOK provider override."""
+
+    provider: str  # "gemini" | "claude" | "openai"
+    api_key: str
+    model: Optional[str] = None
+
+
 class AgentRequest(BaseModel):
     """Request model for agent execution."""
 
     action: ActionName
     parameters: Dict[str, Any] = Field(default_factory=dict)
+    user_id: Optional[str] = None
+    provider_config: Optional[ProviderConfig] = None
 
 
 class AgentResponse(BaseModel):
@@ -189,9 +209,24 @@ def create_app() -> FastAPI:
     ) -> AgentResponse:
         try:
             validated_params = validate_action_parameters(request.action, request.parameters)
-            result = await app.state.agent.execute_agent(
-                request.action, validated_params, background_tasks=background_tasks
-            )
+
+            # Set per-request config in ContextVar so CreditProxyProvider picks it up.
+            # Always set user_id so platform users are billed individually, not to shared "platform" pool.
+            # ContextVar is async-safe: this context copy is isolated to this request's task.
+            pc = request.provider_config
+            byok_token = _byok_config.set({
+                "user_id": request.user_id or "anonymous",
+                "provider": pc.provider if pc else "",
+                "api_key": pc.api_key if pc else "",
+                "model": pc.model or "" if pc else "",
+            })
+
+            try:
+                result = await app.state.agent.execute_agent(
+                    request.action, validated_params, background_tasks=background_tasks
+                )
+            finally:
+                _byok_config.reset(byok_token)
             return AgentResponse(success=True, data=result)
         except ValidationError as exc:
             raise HTTPException(
@@ -203,11 +238,46 @@ def create_app() -> FastAPI:
                 status_code=400,
                 detail={"code": "BAD_REQUEST", "message": str(exc), "details": None},
             ) from exc
-        except Exception as exc:  # pragma: no cover - defensive boundary
+        except InsufficientCreditsError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail={"code": "INSUFFICIENT_CREDITS", "message": "Insufficient AI credits. Please add your own API key in Settings.", "details": None},
+            ) from exc
+        except ProviderAuthError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail={"code": "UNAUTHORIZED", "message": "AI provider authentication failed. Please check your API key in Settings.", "details": None},
+            ) from exc
+        except BackendUnavailableError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail={"code": "BACKEND_UNAVAILABLE", "message": "AI backend is unreachable. Please try again later.", "details": None},
+            ) from exc
+        except ProviderNotFoundError as exc:
+            if not exc.model:
+                msg = f'No model selected for provider "{exc.provider}". Please choose a model in Settings.' if exc.provider else "No AI model configured. Please add your API key and select a model in Settings."
+            else:
+                model_label = f"{exc.provider}/{exc.model}" if exc.provider else exc.model
+                msg = f'AI model "{model_label}" not found. Please check your model name in Settings.'
+            raise HTTPException(
+                status_code=500,
+                detail={"code": "PROVIDER_NOT_FOUND", "message": msg, "details": None},
+            ) from exc
+        except RateLimitedError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail={"code": "RATE_LIMITED", "message": "AI provider rate limit reached. Please try again in a few minutes.", "details": None},
+            ) from exc
+        except LLMTimeoutError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail={"code": "TIMEOUT", "message": "AI request timed out. Please try again.", "details": None},
+            ) from exc
+        except (LLMProviderError, Exception) as exc:
             logger.exception("Unhandled error for action=%s", request.action)
             raise HTTPException(
                 status_code=500,
-                detail={"code": "INTERNAL_ERROR", "message": "Internal server error", "details": None},
+                detail={"code": "INTERNAL_ERROR", "message": "AI service is temporarily unavailable. Please try again.", "details": None},
             ) from exc
 
     @app.get("/health")

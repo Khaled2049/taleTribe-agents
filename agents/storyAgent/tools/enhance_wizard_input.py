@@ -4,7 +4,7 @@ import logging
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 # Handle imports for both direct execution and module import
 try:
@@ -23,10 +23,10 @@ logger = logging.getLogger(__name__)
 class EnhanceWizardInputTool:
     """Enhance wizard inputs for premise, character, place, conflict, and blueprint."""
 
-    def __init__(self, project_id: str, location: str = "us-central1"):
+    def __init__(self, project_id: str, location: str = "us-central1", llm_provider: Optional[LLMProvider] = None):
         self.project_id = project_id
         self.location = location
-        self.llm_provider: LLMProvider = get_llm_provider(project_id, location)
+        self.llm_provider: LLMProvider = llm_provider or get_llm_provider(project_id, location)
 
     async def execute(self, user_id: str, wizard_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """

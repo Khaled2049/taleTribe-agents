@@ -24,11 +24,11 @@ logger = logging.getLogger(__name__)
 class NextLineGenerationTool:
     """Specialized tool for generating next lines."""
 
-    def __init__(self, project_id: str, location: str = "us-central1"):
+    def __init__(self, project_id: str, location: str = "us-central1", llm_provider: Optional[LLMProvider] = None):
         """Initialize the next line generation tool."""
         self.project_id = project_id
         self.location = location
-        self.llm_provider: LLMProvider = get_llm_provider(project_id, location)
+        self.llm_provider: LLMProvider = llm_provider or get_llm_provider(project_id, location)
         self.context_builder = StoryContextBuilder(project_id)
 
     def _slice_content(self, content: str, cursor_pos: int) -> Tuple[str, str]:
@@ -179,69 +179,50 @@ Respond ONLY with the JSON array containing the {NUMBER_OF_SUGGESTIONS} generate
             bool(chapter_id),
         )
         
-        try:
-            # Build Macro Context
-            context = self.context_builder.build_story_context(story_id)
-            chapters_count = len(context.get('chapters', []))
-            logger.info("Story context built, chapters count=%s", chapters_count)
-    
-            # If chapter_id is provided, enhance context with chapter-specific information
-            current_chapter_number = None
-            previous_chapters_text = ""
-            if chapter_id:
-                current_chapter = self._get_chapter(story_id, chapter_id)
-                if current_chapter:
-                    current_chapter_number = current_chapter.get("chapterNumber") or current_chapter.get("order")
-                    logger.info("Found chapter number=%s", current_chapter_number)
-                    # Get previous chapters for continuity
-                    previous_chapters_text = self._get_previous_chapters_context(
-                        context.get("chapters", []), 
-                        current_chapter_number
-                    )
-                    logger.info("Previous chapters context length=%s", len(previous_chapters_text))
-            
-            formatted_context = self.context_builder.format_context_for_prompt(context)
-            
-            # Build Micro Context
-            prefix_text, suffix_text = self._slice_content(content, cursorPosition)
-            logger.info("Prefix length=%s Suffix length=%s", len(prefix_text), len(suffix_text))
-            
-            system_prompt = self._build_system_prompt()
-            user_prompt = self._build_user_prompt(formatted_context, prefix_text, suffix_text, previous_chapters_text)
-            response_schema = self._get_response_schema()
-            
-            logger.debug("Calling LLM provider for next line generation")
+        # Build Macro Context
+        context = self.context_builder.build_story_context(story_id)
+        chapters_count = len(context.get('chapters', []))
+        logger.info("Story context built, chapters count=%s", chapters_count)
 
-            try:
-                generated_suggestions = await self.llm_provider.generate_structured_content(
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    response_schema=response_schema
+        # If chapter_id is provided, enhance context with chapter-specific information
+        current_chapter_number = None
+        previous_chapters_text = ""
+        if chapter_id:
+            current_chapter = self._get_chapter(story_id, chapter_id)
+            if current_chapter:
+                current_chapter_number = current_chapter.get("chapterNumber") or current_chapter.get("order")
+                logger.info("Found chapter number=%s", current_chapter_number)
+                previous_chapters_text = self._get_previous_chapters_context(
+                    context.get("chapters", []),
+                    current_chapter_number
                 )
-                suggestions_count = len(generated_suggestions) if isinstance(generated_suggestions, list) else 'non-list'
-                logger.info("LLM returned %s suggestions", suggestions_count)
-                
-                if not isinstance(generated_suggestions, list) or len(generated_suggestions) != NUMBER_OF_SUGGESTIONS:
-                     raise ValueError("LLM returned improperly formatted or missing suggestions.")
+                logger.info("Previous chapters context length=%s", len(previous_chapters_text))
 
-                result = {
-                    "storyId": story_id,                
-                    "suggestions": generated_suggestions,
-                }
-                logger.info("Successfully generated %s suggestions", len(generated_suggestions))
-                return result
+        formatted_context = self.context_builder.format_context_for_prompt(context)
 
-            except Exception as error:
-                logger.error("Error in next-line LLM generation: %s", error, exc_info=True)
-                return {
-                    "storyId": story_id,
-                    "suggestions": [],
-                    "error": f"Failed to generate lines: {error}"
-                }
-        except Exception as error:
-            logger.error("Error in NextLineGenerationTool.execute: %s", error, exc_info=True)
-            return {
-                "storyId": story_id,
-                "suggestions": [],
-                "error": f"Failed to execute next line generation: {error}"
-            }
+        # Build Micro Context
+        prefix_text, suffix_text = self._slice_content(content, cursorPosition)
+        logger.info("Prefix length=%s Suffix length=%s", len(prefix_text), len(suffix_text))
+
+        system_prompt = self._build_system_prompt()
+        user_prompt = self._build_user_prompt(formatted_context, prefix_text, suffix_text, previous_chapters_text)
+        response_schema = self._get_response_schema()
+
+        logger.debug("Calling LLM provider for next line generation")
+        generated_suggestions = await self.llm_provider.generate_structured_content(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_schema=response_schema
+        )
+        suggestions_count = len(generated_suggestions) if isinstance(generated_suggestions, list) else 'non-list'
+        logger.info("LLM returned %s suggestions", suggestions_count)
+
+        if not isinstance(generated_suggestions, list) or len(generated_suggestions) != NUMBER_OF_SUGGESTIONS:
+            raise ValueError("LLM returned improperly formatted or missing suggestions.")
+
+        result = {
+            "storyId": story_id,
+            "suggestions": generated_suggestions,
+        }
+        logger.info("Successfully generated %s suggestions", len(generated_suggestions))
+        return result

@@ -1,7 +1,7 @@
 """Specialized tool for plot brainstorming."""
 import sys
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 # Handle imports for both direct execution and module import
 try:
@@ -20,11 +20,11 @@ except ImportError:
 class PlotBrainstormingTool:
     """Specialized tool for plot brainstorming."""
 
-    def __init__(self, project_id: str, location: str = "us-central1"):
+    def __init__(self, project_id: str, location: str = "us-central1", llm_provider: Optional[LLMProvider] = None):
         """Initialize the plot brainstorming tool."""
         self.project_id = project_id
         self.location = location
-        self.llm_provider: LLMProvider = get_llm_provider(project_id, location)
+        self.llm_provider: LLMProvider = llm_provider or get_llm_provider(project_id, location)
         self.context_builder = StoryContextBuilder(project_id)
 
     async def execute(

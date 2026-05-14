@@ -56,10 +56,10 @@ def _safe_json_parse(text: str) -> Any:
 class StoryChoicesTool:
     """Generate opening scene + choices (opening mode) or continuation choices (co-write mode)."""
 
-    def __init__(self, project_id: str, location: str = "us-central1"):
+    def __init__(self, project_id: str, location: str = "us-central1", llm_provider: Optional[LLMProvider] = None):
         self.project_id = project_id
         self.location = location
-        self.llm_provider: LLMProvider = get_llm_provider(project_id, location)
+        self.llm_provider: LLMProvider = llm_provider or get_llm_provider(project_id, location)
         self.context_builder = StoryContextBuilder(project_id)
 
     # ------------------------------------------------------------------
@@ -196,53 +196,35 @@ class StoryChoicesTool:
                 "error": f"Invalid mode '{mode}'. Must be 'opening', 'continuation', or 'ending'.",
             }
 
-        try:
-            context = self.context_builder.build_story_context(story_id)
-            firestore_context = self.context_builder.format_context_for_prompt(context)
-            formatted_context = (brain_context + "\n\n" + firestore_context) if brain_context else firestore_context
-            plain_text = _strip_html(current_content) if current_content else ""
+        context = self.context_builder.build_story_context(story_id)
+        firestore_context = self.context_builder.format_context_for_prompt(context)
+        formatted_context = (brain_context + "\n\n" + firestore_context) if brain_context else firestore_context
+        plain_text = _strip_html(current_content) if current_content else ""
 
-            if mode == "opening":
-                prompt = self._build_opening_prompt(formatted_context)
-            elif mode == "ending":
-                prompt = self._build_ending_prompt(formatted_context, plain_text)
-            else:
-                prompt = self._build_continuation_prompt(formatted_context, plain_text, turn_count)
+        if mode == "opening":
+            prompt = self._build_opening_prompt(formatted_context)
+        elif mode == "ending":
+            prompt = self._build_ending_prompt(formatted_context, plain_text)
+        else:
+            prompt = self._build_continuation_prompt(formatted_context, plain_text, turn_count)
 
-            try:
-                logger.info(
-                    "Full story choices prompt story_id=%s mode=%s:\n%s",
-                    story_id, mode, prompt,
-                )
-                raw_response = await self.llm_provider.generate_content_async(prompt)
+        logger.info(
+            "Full story choices prompt story_id=%s mode=%s:\n%s",
+            story_id, mode, prompt,
+        )
+        raw_response = await self.llm_provider.generate_content_async(prompt)
 
-                parsed = _safe_json_parse(raw_response or "")
-                if not isinstance(parsed, dict) or "choices" not in parsed:
-                    raise ValueError(f"LLM returned unexpected structure: {(raw_response or '')[:200]}")
+        parsed = _safe_json_parse(raw_response or "")
+        if not isinstance(parsed, dict) or "choices" not in parsed:
+            raise ValueError(f"LLM returned unexpected structure: {(raw_response or '')[:200]}")
 
-                choices: List[Dict[str, Any]] = parsed.get("choices", [])
-                expected = 1 if mode == "ending" else NUMBER_OF_CHOICES
-                if len(choices) != expected:
-                    raise ValueError(f"Expected {expected} choice(s) for mode '{mode}', got {len(choices)}.")
+        choices: List[Dict[str, Any]] = parsed.get("choices", [])
+        expected = 1 if mode == "ending" else NUMBER_OF_CHOICES
+        if len(choices) != expected:
+            raise ValueError(f"Expected {expected} choice(s) for mode '{mode}', got {len(choices)}.")
 
-                output: Dict[str, Any] = {"storyId": story_id, "choices": choices}
-                if mode == "opening":
-                    output["openingScene"] = parsed.get("openingScene", "")
+        output: Dict[str, Any] = {"storyId": story_id, "choices": choices}
+        if mode == "opening":
+            output["openingScene"] = parsed.get("openingScene", "")
 
-                return output
-
-            except Exception as llm_error:
-                logger.error("StoryChoicesTool LLM error story_id=%s mode=%s: %s", story_id, mode, llm_error, exc_info=True)
-                return {
-                    "storyId": story_id,
-                    "choices": [],
-                    "error": f"Failed to generate choices: {llm_error}",
-                }
-
-        except Exception as error:
-            logger.error("StoryChoicesTool error story_id=%s: %s", story_id, error, exc_info=True)
-            return {
-                "storyId": story_id,
-                "choices": [],
-                "error": f"Failed to execute story choices generation: {error}",
-            }
+        return output

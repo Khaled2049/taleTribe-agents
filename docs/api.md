@@ -33,6 +33,25 @@ Request body:
   "action": "generateStory",
   "parameters": {
     "storyId": "story-123"
+  },
+  "user_id": "firebase-uid-123",
+  "provider_config": {
+    "provider": "claude",
+    "api_key": "sk-ant-...",
+    "model": "claude-sonnet-4-6"
+  }
+}
+```
+
+`user_id` and `provider_config` are optional. When `provider_config` is present and `CREDIT_PROXY_URL` is set, the agent forwards the BYOK credentials to creditProxy for that request; the platform's default API key is not used.
+
+Standard request (no BYOK):
+
+```json
+{
+  "action": "generateStory",
+  "parameters": {
+    "storyId": "story-123"
   }
 }
 ```

@@ -119,6 +119,11 @@ resource "google_cloud_run_v2_service" "app" {
         value = var.firebase_functions_service_account
       }
 
+      env {
+        name  = "CREDIT_PROXY_URL"
+        value = var.credit_proxy_url
+      }
+
       # Secret from Secret Manager (accessed via service account)
       env {
         name = "GOOGLE_AI_STUDIO_API_KEY"

@@ -21,11 +21,11 @@ except ImportError:
 class EnhanceTextTool:
     """Tool for enhancing text based on different action types."""
 
-    def __init__(self, project_id: str, location: str = "us-central1"):
+    def __init__(self, project_id: str, location: str = "us-central1", llm_provider: Optional[LLMProvider] = None):
         """Initialize the enhance text tool."""
         self.project_id = project_id
         self.location = location
-        self.llm_provider: LLMProvider = get_llm_provider(project_id, location)
+        self.llm_provider: LLMProvider = llm_provider or get_llm_provider(project_id, location)
         self.context_builder = StoryContextBuilder(project_id)
 
     def _get_chapter(self, story_id: str, chapter_id: str) -> Optional[Dict[str, Any]]:

@@ -70,16 +70,16 @@ class StoryAgent:
         self._db = _get_firestore_client(self.project_id)
 
         # Initialize tools
-        self.story_tool = StoryGenerationTool(self.project_id, self.location)
-        self.chapter_tool = ChapterGenerationTool(self.project_id, self.location)
-        self.brainstorm_tool = BrainstormingTool(self.project_id, self.location)
-        self.character_tool = CharacterBrainstormingTool(self.project_id, self.location)
-        self.plot_tool = PlotBrainstormingTool(self.project_id, self.location)
-        self.next_line_tool = NextLineGenerationTool(self.project_id, self.location)
-        self.chat_tool = ChatWithContextTool(self.project_id, self.location)
-        self.enhance_text_tool = EnhanceTextTool(self.project_id, self.location)
-        self.enhance_wizard_tool = EnhanceWizardInputTool(self.project_id, self.location)
-        self.story_choices_tool = StoryChoicesTool(self.project_id, self.location)
+        self.story_tool = StoryGenerationTool(self.project_id, self.location, llm_provider=self._llm_provider)
+        self.chapter_tool = ChapterGenerationTool(self.project_id, self.location, llm_provider=self._llm_provider)
+        self.brainstorm_tool = BrainstormingTool(self.project_id, self.location, llm_provider=self._llm_provider)
+        self.character_tool = CharacterBrainstormingTool(self.project_id, self.location, llm_provider=self._llm_provider)
+        self.plot_tool = PlotBrainstormingTool(self.project_id, self.location, llm_provider=self._llm_provider)
+        self.next_line_tool = NextLineGenerationTool(self.project_id, self.location, llm_provider=self._llm_provider)
+        self.chat_tool = ChatWithContextTool(self.project_id, self.location, llm_provider=self._llm_provider)
+        self.enhance_text_tool = EnhanceTextTool(self.project_id, self.location, llm_provider=self._llm_provider)
+        self.enhance_wizard_tool = EnhanceWizardInputTool(self.project_id, self.location, llm_provider=self._llm_provider)
+        self.story_choices_tool = StoryChoicesTool(self.project_id, self.location, llm_provider=self._llm_provider)
 
     def _make_brain(self, user_id: str, context_id: str) -> Brain:
         return Brain(

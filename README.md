@@ -15,6 +15,7 @@ This repo is the AI execution layer behind NovelSync. It takes story context, va
 - Text enhancement actions for rewriting and expansion flows
 - Next-line generation for editor assistance
 - **Brain — four-layer cognitive memory system** (working, procedural, semantic, episodic) with open-source embeddings
+- **All LLM calls route through creditProxy** — provider (Gemini, OpenAI, Anthropic, Ollama, mock) is configured in creditProxy; individual requests can carry BYOK credentials that bypass platform quota and route through the user's own key
 - Strict Pydantic validation with stable error responses
 - Optional local image-generation routes behind an environment flag
 - Cloud Run deployment with Terraform and GitHub Actions

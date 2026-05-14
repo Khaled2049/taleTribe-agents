@@ -42,7 +42,8 @@ GitHub Actions expects:
 
 - `WIF_PROVIDER`
 - `WIF_SERVICE_ACCOUNT`
-- `GOOGLE_AI_STUDIO_API_KEY`
+
+LLM API keys (Gemini, OpenAI, etc.) are configured in the **creditProxy** deployment, not here. The agents service only needs `CREDIT_PROXY_URL` pointing at the creditProxy gateway.
 
 ## Local Docker build
 
@@ -68,5 +69,5 @@ terraform validate
 
 - keep `.env` local and uncommitted
 - keep `terraform.tfvars` free of secrets
-- rotate the Google AI Studio key in GitHub Secrets and redeploy when needed
+- LLM API keys live in creditProxy — rotate them there, not in this repo
 - if you need local image generation, run the app locally with `requirements.txt`; production intentionally uses the slimmer dependency set

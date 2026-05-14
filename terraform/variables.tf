@@ -102,3 +102,9 @@ variable "firebase_functions_service_account" {
   type        = string
   default     = ""
 }
+
+variable "credit_proxy_url" {
+  description = "Internal URL of the creditProxy gateway Cloud Run service (INGRESS_INTERNAL_ONLY). All LLM calls route through here."
+  type        = string
+  default     = "https://credit-proxy-gateway-ukvrbnaddq-uc.a.run.app"
+}

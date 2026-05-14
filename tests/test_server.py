@@ -5,7 +5,7 @@ from unittest.mock import ANY, AsyncMock
 from fastapi.testclient import TestClient
 
 # Set environment for testing before importing app
-os.environ["USE_MOCK"] = "true"
+os.environ["CREDIT_PROXY_URL"] = "http://localhost:8080"
 os.environ["GOOGLE_CLOUD_PROJECT"] = "test-project"
 
 from server import app

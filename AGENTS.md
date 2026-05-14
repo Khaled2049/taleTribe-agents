@@ -37,10 +37,13 @@ This repo is one of three in the NovelSync project:
 | Variable | Required | Description |
 |---|---|---|
 | `GOOGLE_CLOUD_PROJECT` | Yes | GCP project ID |
+| `CREDIT_PROXY_URL` | Yes | creditProxy gateway URL — all LLM calls route here (e.g. `http://localhost:8080`) |
 | `VERTEX_AI_LOCATION` | No (default `us-central1`) | Vertex AI region |
-| `FIRESTORE_EMULATOR_HOST` | No | Set automatically to `localhost:8080` in non-production if unset |
+| `FIRESTORE_EMULATOR_HOST` | No | Firestore emulator address. **Note:** Firebase emulator also uses `:8080` by default — set a different port if running alongside creditProxy |
 | `ENABLE_LOCAL_IMAGE_GENERATION` | No (default `true`) | Set to `false` to disable image generation module |
 | `PORT` | No (default `8000`) | HTTP server port |
+
+Provider and model selection is configured in **creditProxy** via `LLM_PROVIDER` — not in this repo. See `../creditProxy/.env.example`.
 
 Copy `.env.example` to `.env` for local setup; never commit `.env`.
 
