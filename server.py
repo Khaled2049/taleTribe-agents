@@ -19,6 +19,7 @@ from agents.storyAgent.action_schemas import ActionName, validate_action_paramet
 from agents.storyAgent.agent import StoryAgent
 from agents.storyAgent.llm_provider import (
     _byok_config,
+    _firebase_token,
     BackendUnavailableError,
     InsufficientCreditsError,
     LLMProviderError,
@@ -91,6 +92,7 @@ class AgentRequest(BaseModel):
     action: ActionName
     parameters: Dict[str, Any] = Field(default_factory=dict)
     user_id: Optional[str] = None
+    firebase_token: Optional[str] = None
     provider_config: Optional[ProviderConfig] = None
 
 
@@ -204,6 +206,7 @@ def create_app() -> FastAPI:
     @app.post("/agent/execute", response_model=AgentResponse)
     async def execute_agent(
         request: AgentRequest,
+        raw_request: Request,
         background_tasks: BackgroundTasks,
         _: None = Depends(_verify_internal_token),
     ) -> AgentResponse:
@@ -220,13 +223,19 @@ def create_app() -> FastAPI:
                 "api_key": pc.api_key if pc else "",
                 "model": pc.model or "" if pc else "",
             })
+            incoming_firebase_token = (request.firebase_token or raw_request.headers.get("X-Firebase-Token", "")).strip() or None
+            firebase_token = _firebase_token.set(incoming_firebase_token)
 
             try:
                 result = await app.state.agent.execute_agent(
-                    request.action, validated_params, background_tasks=background_tasks
+                    request.action,
+                    validated_params,
+                    background_tasks=background_tasks,
+                    user_id=request.user_id or "anonymous",
                 )
             finally:
                 _byok_config.reset(byok_token)
+                _firebase_token.reset(firebase_token)
             return AgentResponse(success=True, data=result)
         except ValidationError as exc:
             raise HTTPException(

@@ -17,6 +17,8 @@ ActionName = Literal[
     "clearMemory",
 ]
 
+MAX_LLM_INPUT_CHARS = 5000
+
 
 class StrictModel(BaseModel):
     """Base model with strict unknown-field handling."""
@@ -80,7 +82,7 @@ class BrainstormPlotParams(StrictModel):
 
 class GenerateNextLinesParams(StrictModel):
     story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
-    content: str
+    content: str = Field(max_length=MAX_LLM_INPUT_CHARS)
     cursor_position: int = Field(
         ge=0,
         validation_alias=AliasChoices("cursorPosition", "cursor_position"),
@@ -95,7 +97,7 @@ class GenerateNextLinesParams(StrictModel):
 
 class ChatWithContextParams(StrictModel):
     story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
-    message: str
+    message: str = Field(max_length=MAX_LLM_INPUT_CHARS)
     context: Optional[Dict[str, Any]] = None
     chat_history: Optional[List[Dict[str, str]]] = Field(
         default=None,
@@ -128,6 +130,7 @@ class GenerateStoryChoicesParams(StrictModel):
     mode: Literal["opening", "continuation", "ending"]
     current_content: str = Field(
         default="",
+        max_length=MAX_LLM_INPUT_CHARS,
         validation_alias=AliasChoices("currentContent", "current_content"),
         serialization_alias="currentContent",
     )

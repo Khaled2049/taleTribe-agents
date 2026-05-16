@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 # Per-request BYOK config. Set in server.py before each agent call.
 # ContextVar is async-safe: each asyncio Task sees its own copy.
 _byok_config: ContextVar[Optional[Dict[str, str]]] = ContextVar("byok_config", default=None)
+_firebase_token: ContextVar[Optional[str]] = ContextVar("firebase_token", default=None)
 
 
 class LLMProviderError(Exception):
@@ -145,6 +146,8 @@ class CreditProxyProvider(LLMProvider):
         headers = {}
         if token := _gcp_id_token(self.base_url):
             headers["Authorization"] = f"Bearer {token}"
+        if firebase_token := _firebase_token.get():
+            headers["X-Firebase-Token"] = firebase_token
         try:
             resp = httpx.post(
                 f"{self.base_url}/v1/generate",

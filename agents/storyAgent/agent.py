@@ -326,24 +326,13 @@ class StoryAgent:
 
         if self._embedder is not None:
             try:
+                logger.info("Generating story choices for story_id=%s mode=%s", story_id, mode)
                 brain = self._make_brain(user_id, story_id)
                 query = f"{mode} scene. {current_content[:200]}" if current_content else f"{mode} scene"
                 assembled = await brain.assemble(query, action_hint="generateStoryChoices")
-                logging.getLogger(__name__).info(
-                    "Full assembled prompt for generateStoryChoices story_id=%s mode=%s:\n%s",
-                    story_id, mode, assembled.text,
-                )
                 brain_context = assembled.text if _assembled_has_memory(assembled) else None
                 if brain_context:
                     brain_context = brain_context.split("\n=== CURRENT REQUEST ===")[0].strip() or None
-                logger.info(
-                    "Full brain_context for generateStoryChoices story_id=%s mode=%s:\n%s",
-                    story_id, mode, brain_context,
-                )
-                logger.info(
-                    "Brain assembled for generateStoryChoices story_id=%s mode=%s semantic=%d episodic=%d",
-                    story_id, mode, assembled.semantic_count, assembled.episodic_count,
-                )
             except Exception:
                 logger.warning(
                     "Brain assembly failed for generateStoryChoices story_id=%s, falling back to legacy context",
@@ -391,6 +380,7 @@ class StoryAgent:
         action: str,
         parameters: Dict[str, Any],
         background_tasks=None,
+        user_id: str = "anonymous",
     ) -> Dict[str, Any]:
         """
         Execute agent action dynamically.
@@ -452,7 +442,7 @@ class StoryAgent:
                 self._param(parameters, "storyId", "story_id"),
                 self._param(parameters, "message"),
                 self._param(parameters, "chatHistory", "chat_history"),
-                user_id=self._param(parameters, "userId", "user_id", "anonymous"),
+                user_id=user_id,
                 background_tasks=background_tasks,
             )
         if action == "enhanceText":
@@ -464,7 +454,7 @@ class StoryAgent:
             )
         if action == "enhanceWizardInput":
             return await self.enhance_wizard_input(
-                self._param(parameters, "userId", "user_id"),
+                user_id,
                 self._param(parameters, "type", "wizard_type"),
                 self._param(parameters, "data", default={}) or {},
             )
@@ -476,14 +466,14 @@ class StoryAgent:
                 self._param(parameters, "currentContent", "current_content", ""),
                 self._param(parameters, "chapterId", "chapter_id"),
                 int(self._param(parameters, "turnCount", "turn_count", 0) or 0),
-                user_id=self._param(parameters, "userId", "user_id", "anonymous"),
+                user_id=user_id,
                 background_tasks=background_tasks,
             )
 
         if action == "clearMemory":
             return await self.clear_memory(
                 self._param(parameters, "storyId", "story_id"),
-                user_id=self._param(parameters, "userId", "user_id", "anonymous"),
+                user_id=user_id,
             )
 
         raise ValueError(f"Unknown action: {action}")
