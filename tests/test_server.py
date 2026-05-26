@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 # Set environment for testing before importing app
 os.environ["CREDIT_PROXY_URL"] = "http://localhost:8080"
 os.environ["GOOGLE_CLOUD_PROJECT"] = "test-project"
+os.environ["MAX_REQUESTS_PER_MINUTE_PER_USER"] = "1000"
 
 from server import app
 
@@ -92,6 +93,7 @@ class TestAgentExecution:
                 },
             },
             background_tasks=ANY,
+            user_id="anonymous",
         )
 
     def test_enhance_wizard_input_success(self):
@@ -121,6 +123,7 @@ class TestAgentExecution:
                 "userId": "user-1",
             },
             background_tasks=ANY,
+            user_id="anonymous",
         )
 
     def test_enhance_wizard_input_invalid_type_returns_422(self):
@@ -172,6 +175,7 @@ class TestGenerateStoryChoices:
             "generateStoryChoices",
             {"storyId": "s1", "mode": "opening", "currentContent": "", "turnCount": 0},
             background_tasks=ANY,
+            user_id="anonymous",
         )
 
     def test_continuation_mode_success(self):
@@ -213,6 +217,7 @@ class TestGenerateStoryChoices:
                 "turnCount": 0,
             },
             background_tasks=ANY,
+            user_id="anonymous",
         )
 
     def test_missing_mode_returns_422(self):

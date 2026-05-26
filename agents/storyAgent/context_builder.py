@@ -3,6 +3,9 @@ import os
 from typing import Dict, List, Any, Optional
 from google.cloud import firestore
 
+# Cap Firestore reads per subcollection (characters/places/plots rarely exceed this).
+COLLECTION_FETCH_LIMIT = 200
+
 
 class StoryContextBuilder:
     """Builds comprehensive context from Firestore for story generation."""
@@ -46,10 +49,14 @@ class StoryContextBuilder:
         characters = self._fetch_collection(story_ref.collection("characters"))
         places = self._fetch_collection(story_ref.collection("places"))
         plots = self._fetch_collection(story_ref.collection("plots"))
-        chapters = self._fetch_collection(story_ref.collection("chapters"))
+        chapters = self._fetch_collection(
+            story_ref.collection("chapters"),
+            order_by_field="order",
+            direction=firestore.Query.ASCENDING,
+        )
 
-        # Sort chapters by number if available
-        chapters.sort(key=lambda x: x.get("chapterNumber", 0))
+        # Sort chapters by number if available (frontend uses `order`; agent may use chapterNumber).
+        chapters.sort(key=lambda x: x.get("chapterNumber") or x.get("order", 0))
 
         return {
             "story": story_data,
@@ -59,10 +66,21 @@ class StoryContextBuilder:
             "chapters": chapters,
         }
 
-    def _fetch_collection(self, collection_ref) -> List[Dict[str, Any]]:
-        """Fetch all documents from a collection."""
-        docs = collection_ref.stream()
-        return [{"id": doc.id, **doc.to_dict()} for doc in docs]
+    def _fetch_collection(
+        self,
+        collection_ref,
+        *,
+        order_by_field: Optional[str] = None,
+        direction: str = firestore.Query.DESCENDING,
+    ) -> List[Dict[str, Any]]:
+        """Fetch up to COLLECTION_FETCH_LIMIT documents from a collection."""
+        query = collection_ref
+        if order_by_field:
+            query = query.order_by(order_by_field, direction=direction)
+        return [
+            {"id": doc.id, **doc.to_dict()}
+            for doc in query.limit(COLLECTION_FETCH_LIMIT).stream()
+        ]
 
     @staticmethod
     def _sanitize_for_prompt(value: Any, max_chars: int = 800) -> str:

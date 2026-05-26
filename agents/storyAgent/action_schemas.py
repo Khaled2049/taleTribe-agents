@@ -17,7 +17,21 @@ ActionName = Literal[
     "clearMemory",
 ]
 
-MAX_LLM_INPUT_CHARS = 5000
+MAX_CONTENT_CHARS = 100_000
+MAX_ID_CHARS = 128
+MAX_PROMPT_CHARS = 10_000
+
+_STORY_ID = Field(
+    max_length=MAX_ID_CHARS,
+    validation_alias=AliasChoices("storyId", "story_id"),
+    serialization_alias="storyId",
+)
+_CHAPTER_ID = Field(
+    default=None,
+    max_length=MAX_ID_CHARS,
+    validation_alias=AliasChoices("chapterId", "chapter_id"),
+    serialization_alias="chapterId",
+)
 
 
 class StrictModel(BaseModel):
@@ -27,10 +41,10 @@ class StrictModel(BaseModel):
 
 
 class GenerateStoryParams(StrictModel):
-    story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
-    genre: Optional[str] = None
-    tone: Optional[str] = None
-    length: Optional[str] = None
+    story_id: str = _STORY_ID
+    genre: Optional[str] = Field(default=None, max_length=MAX_PROMPT_CHARS)
+    tone: Optional[str] = Field(default=None, max_length=MAX_PROMPT_CHARS)
+    length: Optional[str] = Field(default=None, max_length=MAX_PROMPT_CHARS)
     generate_first_chapter_only: bool = Field(
         default=True,
         validation_alias=AliasChoices("generateFirstChapterOnly", "generate_first_chapter_only"),
@@ -38,14 +52,18 @@ class GenerateStoryParams(StrictModel):
     )
     plot_context: Optional[str] = Field(
         default=None,
+        max_length=MAX_PROMPT_CHARS,
         validation_alias=AliasChoices("plotContext", "plot_context"),
         serialization_alias="plotContext",
     )
 
 
 class GenerateChapterParams(StrictModel):
-    story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
-    chapter_number: int = Field(validation_alias=AliasChoices("chapterNumber", "chapter_number"), serialization_alias="chapterNumber")
+    story_id: str = _STORY_ID
+    chapter_number: int = Field(
+        validation_alias=AliasChoices("chapterNumber", "chapter_number"),
+        serialization_alias="chapterNumber",
+    )
     previous_chapters: Optional[List[Dict[str, Any]]] = Field(
         default=None,
         validation_alias=AliasChoices("previousChapters", "previous_chapters"),
@@ -53,51 +71,53 @@ class GenerateChapterParams(StrictModel):
     )
     plot_context: Optional[str] = Field(
         default=None,
+        max_length=MAX_PROMPT_CHARS,
         validation_alias=AliasChoices("plotContext", "plot_context"),
         serialization_alias="plotContext",
     )
 
 
 class BrainstormIdeasParams(StrictModel):
-    story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
-    idea_type: str = Field(validation_alias=AliasChoices("type", "idea_type"), serialization_alias="type")
-    prompt: Optional[str] = None
+    story_id: str = _STORY_ID
+    idea_type: str = Field(
+        max_length=MAX_PROMPT_CHARS,
+        validation_alias=AliasChoices("type", "idea_type"),
+        serialization_alias="type",
+    )
+    prompt: Optional[str] = Field(default=None, max_length=MAX_PROMPT_CHARS)
     count: int = Field(default=5, ge=1, le=20)
 
 
 class BrainstormCharacterParams(StrictModel):
-    story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
-    role: Optional[str] = None
-    archetype: Optional[str] = None
+    story_id: str = _STORY_ID
+    role: Optional[str] = Field(default=None, max_length=MAX_PROMPT_CHARS)
+    archetype: Optional[str] = Field(default=None, max_length=MAX_PROMPT_CHARS)
 
 
 class BrainstormPlotParams(StrictModel):
-    story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
+    story_id: str = _STORY_ID
     plot_type: str = Field(
         default="conflict",
+        max_length=MAX_PROMPT_CHARS,
         validation_alias=AliasChoices("plotType", "plot_type"),
         serialization_alias="plotType",
     )
 
 
 class GenerateNextLinesParams(StrictModel):
-    story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
-    content: str = Field(max_length=MAX_LLM_INPUT_CHARS)
+    story_id: str = _STORY_ID
+    content: str = Field(max_length=MAX_CONTENT_CHARS)
     cursor_position: int = Field(
         ge=0,
         validation_alias=AliasChoices("cursorPosition", "cursor_position"),
         serialization_alias="cursorPosition",
     )
-    chapter_id: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("chapterId", "chapter_id"),
-        serialization_alias="chapterId",
-    )
+    chapter_id: Optional[str] = _CHAPTER_ID
 
 
 class ChatWithContextParams(StrictModel):
-    story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
-    message: str = Field(max_length=MAX_LLM_INPUT_CHARS)
+    story_id: str = _STORY_ID
+    message: str = Field(max_length=MAX_CONTENT_CHARS)
     context: Optional[Dict[str, Any]] = None
     chat_history: Optional[List[Dict[str, str]]] = Field(
         default=None,
@@ -106,39 +126,33 @@ class ChatWithContextParams(StrictModel):
     )
     user_id: Optional[str] = Field(
         default=None,
+        max_length=MAX_ID_CHARS,
         validation_alias=AliasChoices("userId", "user_id"),
         serialization_alias="userId",
     )
 
 
 class EnhanceTextParams(StrictModel):
-    story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
+    story_id: str = _STORY_ID
     action: Literal["expand", "dialogue", "rewrite"]
     selected_text: str = Field(
+        max_length=MAX_CONTENT_CHARS,
         validation_alias=AliasChoices("selectedText", "selected_text"),
         serialization_alias="selectedText",
     )
-    chapter_id: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("chapterId", "chapter_id"),
-        serialization_alias="chapterId",
-    )
+    chapter_id: Optional[str] = _CHAPTER_ID
 
 
 class GenerateStoryChoicesParams(StrictModel):
-    story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
+    story_id: str = _STORY_ID
     mode: Literal["opening", "continuation", "ending"]
     current_content: str = Field(
         default="",
-        max_length=MAX_LLM_INPUT_CHARS,
+        max_length=MAX_CONTENT_CHARS,
         validation_alias=AliasChoices("currentContent", "current_content"),
         serialization_alias="currentContent",
     )
-    chapter_id: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("chapterId", "chapter_id"),
-        serialization_alias="chapterId",
-    )
+    chapter_id: Optional[str] = _CHAPTER_ID
     turn_count: int = Field(
         default=0,
         validation_alias=AliasChoices("turnCount", "turn_count"),
@@ -146,15 +160,17 @@ class GenerateStoryChoicesParams(StrictModel):
     )
     user_id: Optional[str] = Field(
         default=None,
+        max_length=MAX_ID_CHARS,
         validation_alias=AliasChoices("userId", "user_id"),
         serialization_alias="userId",
     )
 
 
 class ClearMemoryParams(StrictModel):
-    story_id: str = Field(validation_alias=AliasChoices("storyId", "story_id"), serialization_alias="storyId")
+    story_id: str = _STORY_ID
     user_id: str = Field(
         default="anonymous",
+        max_length=MAX_ID_CHARS,
         validation_alias=AliasChoices("userId", "user_id"),
         serialization_alias="userId",
     )
@@ -167,6 +183,7 @@ class EnhanceWizardInputParams(StrictModel):
     )
     data: Dict[str, Any]
     user_id: str = Field(
+        max_length=MAX_ID_CHARS,
         validation_alias=AliasChoices("userId", "user_id"),
         serialization_alias="userId",
     )

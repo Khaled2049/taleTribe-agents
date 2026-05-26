@@ -17,6 +17,15 @@ Every AI feature in NovelSync flows through this service. It reads the writer's 
 ## Quick start
 
 ```bash
-pip install -r requirements.txt
-python server.py
+# Install Poetry (if not already installed)
+pip install poetry
+
+# Install dependencies (no image generation)
+poetry install --with dev
+
+# Install with local image generation (heavy — ~5 GB)
+poetry install --with dev,image-gen
+
+# Run the server
+poetry run python server.py
 ```

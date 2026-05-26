@@ -17,6 +17,8 @@ except ImportError:
     from agents.storyAgent.context_builder import StoryContextBuilder
     from agents.storyAgent.llm_provider import get_llm_provider, LLMProvider
 
+logger = logging.getLogger(__name__)
+
 
 class EnhanceTextTool:
     """Tool for enhancing text based on different action types."""
@@ -50,7 +52,7 @@ class EnhanceTextTool:
                 return {"id": chapter_doc.id, **chapter_doc.to_dict()}
         except Exception as e:
             # Log error but don't fail - chapter_id is optional
-            self.logger.warning("Could not fetch chapter %s: %s", chapter_id, e)
+            logger.warning("Could not fetch chapter %s: %s", chapter_id, e)
         return None
 
     def _build_action_prompt(self, action: str) -> str:

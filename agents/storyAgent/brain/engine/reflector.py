@@ -29,73 +29,113 @@ class MemoryReflector:
         self._episodic = episodic
 
     async def reflect(self, inp: ReflectionInput) -> None:
-        results = await asyncio.gather(
-            self._update_working(inp),
-            self._update_procedural(inp),
-            self._extract_semantic(inp),
-            self._extract_episodic(inp),
-            return_exceptions=True,
-        )
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                task_names = ["working", "procedural", "semantic", "episodic"]
-                logger.warning("Brain reflect[%s] failed: %s", task_names[i], result)
+        try:
+            payload = await self._extract_reflection(inp)
+        except Exception as exc:
+            logger.warning("Brain reflect extraction failed: %s", exc, exc_info=True)
+            return
 
-    async def _update_working(self, inp: ReflectionInput) -> None:
+        if not payload:
+            return
+
+        await self._apply_reflection(inp, payload)
+
+    async def _extract_reflection(self, inp: ReflectionInput) -> dict:
+        """Single LLM call to extract all memory-layer updates."""
+        passage = inp.assistant_response[:3000]
         prompt = (
-            "Extract the current scene state from this story passage.\n"
+            "Analyze this story assistant passage and propose memory updates.\n"
             "Respond ONLY with valid JSON (no markdown, no extra text):\n"
-            '{"current_scene": "...", "active_characters": ["..."], "recent_events": ["..."], "mood": "..."}\n\n'
-            f"Passage:\n{inp.assistant_response[:2000]}"
+            "{\n"
+            '  "working": {\n'
+            '    "current_scene": "...",\n'
+            '    "active_characters": ["..."],\n'
+            '    "recent_events": ["..."],\n'
+            '    "mood": "..."\n'
+            "  },\n"
+            '  "procedural": {},\n'
+            '  "semantic_facts": ["self-contained fact sentence", ...],\n'
+            '  "episodic_summary": "1-2 sentence past-tense summary or empty string"\n'
+            "}\n\n"
+            "Rules:\n"
+            "- working: current scene state from the passage.\n"
+            "- procedural: only changed author style fields (tone, pov, style, genre, "
+            "narrative_rules, preferences); use {} if none.\n"
+            "- semantic_facts: up to 5 NEW factual sentences about characters/world/lore; [] if none.\n"
+            '- episodic_summary: key narrative event in past tense, or "" if none.\n\n'
+            f"Passage:\n{passage}"
         )
         raw = await self._llm.generate_content_async(prompt)
-        data = _parse_json_object(raw)
-        if data:
-            # Keep recent_events bounded to last 5
-            events = data.get("recent_events", [])
+        return _parse_reflection_payload(raw)
+
+    async def _apply_reflection(self, inp: ReflectionInput, payload: dict) -> None:
+        tasks: list[tuple[str, object]] = []
+
+        working = payload.get("working")
+        if isinstance(working, dict) and working:
+            events = working.get("recent_events", [])
             if isinstance(events, list) and len(events) > 5:
-                data["recent_events"] = events[-5:]
-            await self._working.patch(data)
+                working = {**working, "recent_events": events[-5:]}
+            tasks.append(("working", self._working.patch(working)))
 
-    async def _update_procedural(self, inp: ReflectionInput) -> None:
-        prompt = (
-            "Did this story passage reveal any author style preferences "
-            "(tone, POV, narrative rules, genre)?\n"
-            "If yes, respond with ONLY a JSON object of changed fields (e.g. {\"tone\": \"melancholic\"}).\n"
-            "If no style signals, respond with ONLY: {}\n\n"
-            f"Passage:\n{inp.assistant_response[:1000]}"
-        )
-        raw = await self._llm.generate_content_async(prompt)
-        data = _parse_json_object(raw)
-        if data:
-            await self._procedural.write_global(data)
+        procedural = payload.get("procedural")
+        if isinstance(procedural, dict) and procedural:
+            tasks.append(("procedural", self._procedural.write_global(procedural)))
 
-    async def _extract_semantic(self, inp: ReflectionInput) -> None:
-        prompt = (
-            "Extract NEW factual statements about characters, world, or lore from this text.\n"
-            "Each fact must be a single self-contained sentence.\n"
-            "Respond ONLY with a JSON array of strings. Max 5 facts. If none, return [].\n\n"
-            f"Text:\n{inp.assistant_response[:3000]}"
-        )
-        raw = await self._llm.generate_content_async(prompt)
-        facts = _parse_json_array(raw)
-        for fact in facts[:5]:
-            if isinstance(fact, str) and fact.strip():
-                await self._semantic.store(fact.strip(), type="extracted_fact")
+        facts = payload.get("semantic_facts", [])
+        if isinstance(facts, list):
+            for fact in facts[:5]:
+                if isinstance(fact, str) and fact.strip():
+                    tasks.append(
+                        ("semantic", self._semantic.store(fact.strip(), type="extracted_fact"))
+                    )
 
-    async def _extract_episodic(self, inp: ReflectionInput) -> None:
-        prompt = (
-            "Summarize the key narrative event(s) in this story passage as 1-2 sentences in past tense.\n"
-            "This will be stored as a memory entry.\n"
-            "If no significant event occurred, respond with an empty string.\n\n"
-            f"Passage:\n{inp.assistant_response[:3000]}"
-        )
-        summary = (await self._llm.generate_content_async(prompt)).strip()
-        if summary:
-            await self._episodic.store(
-                text=inp.assistant_response[:500],
-                summary=summary,
+        summary = payload.get("episodic_summary", "")
+        if isinstance(summary, str) and summary.strip():
+            tasks.append(
+                (
+                    "episodic",
+                    self._episodic.store(
+                        text=inp.assistant_response[:500],
+                        summary=summary.strip(),
+                    ),
+                )
             )
+
+        if not tasks:
+            return
+
+        results = await asyncio.gather(*(coro for _, coro in tasks), return_exceptions=True)
+        for (name, _), result in zip(tasks, results):
+            if isinstance(result, Exception):
+                logger.warning("Brain reflect[%s] failed: %s", name, result)
+
+
+def _parse_reflection_payload(raw: str) -> dict:
+    data = _parse_json_object(raw)
+    if not data:
+        return {}
+
+    working = data.get("working")
+    procedural = data.get("procedural")
+    facts = data.get("semantic_facts", [])
+    summary = data.get("episodic_summary", "")
+
+    if not isinstance(working, dict):
+        working = {}
+    if not isinstance(procedural, dict):
+        procedural = {}
+    if not isinstance(facts, list):
+        facts = _parse_json_array(json.dumps(facts)) if facts else []
+    if not isinstance(summary, str):
+        summary = str(summary) if summary else ""
+
+    return {
+        "working": working,
+        "procedural": procedural,
+        "semantic_facts": facts,
+        "episodic_summary": summary,
+    }
 
 
 def _parse_json_object(raw: str) -> dict | None:

@@ -396,6 +396,9 @@ class StoryAgent:
         logger = logging.getLogger(__name__)
         logger.info("Executing action=%s with parameter_keys=%s", action, sorted(parameters.keys()))
 
+        param_user_id = self._param(parameters, "userId", "user_id")
+        effective_user_id = param_user_id or user_id
+
         if action == "generateStory":
             return await self.generate_story(
                 self._param(parameters, "storyId", "story_id"),
@@ -442,7 +445,7 @@ class StoryAgent:
                 self._param(parameters, "storyId", "story_id"),
                 self._param(parameters, "message"),
                 self._param(parameters, "chatHistory", "chat_history"),
-                user_id=user_id,
+                user_id=effective_user_id,
                 background_tasks=background_tasks,
             )
         if action == "enhanceText":
@@ -454,7 +457,7 @@ class StoryAgent:
             )
         if action == "enhanceWizardInput":
             return await self.enhance_wizard_input(
-                user_id,
+                effective_user_id,
                 self._param(parameters, "type", "wizard_type"),
                 self._param(parameters, "data", default={}) or {},
             )
@@ -466,14 +469,14 @@ class StoryAgent:
                 self._param(parameters, "currentContent", "current_content", ""),
                 self._param(parameters, "chapterId", "chapter_id"),
                 int(self._param(parameters, "turnCount", "turn_count", 0) or 0),
-                user_id=user_id,
+                user_id=effective_user_id,
                 background_tasks=background_tasks,
             )
 
         if action == "clearMemory":
             return await self.clear_memory(
                 self._param(parameters, "storyId", "story_id"),
-                user_id=user_id,
+                user_id=effective_user_id,
             )
 
         raise ValueError(f"Unknown action: {action}")

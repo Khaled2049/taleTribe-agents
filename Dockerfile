@@ -9,11 +9,14 @@ RUN apt-get update && apt-get install -y \
   gcc \
   && rm -rf /var/lib/apt/lists/*
 
-# Copy production requirements (excludes large ML libraries for Cloud Run)
-COPY requirements-prod.txt /app/requirements.txt
+# Copy Poetry manifests
+COPY pyproject.toml poetry.lock ./
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r /app/requirements.txt
+# Install Poetry, export main deps to requirements, then remove Poetry
+RUN pip install --no-cache-dir poetry \
+    && poetry export -f requirements.txt --only main --without-hashes -o /tmp/requirements.txt \
+    && pip install --no-cache-dir -r /tmp/requirements.txt \
+    && pip uninstall -y poetry
 
 # Copy the entire agents directory
 COPY agents/ /app/agents/

@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from agents.storyAgent.action_schemas import ActionName, validate_action_parameters
 from agents.storyAgent.agent import StoryAgent
+from rate_limit import PerUserRateLimiter
 from agents.storyAgent.llm_provider import (
     _byok_config,
     _firebase_token,
@@ -32,15 +33,72 @@ from agents.storyAgent.llm_provider import (
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 logger = logging.getLogger(__name__)
 
+DEFAULT_MAX_REQUESTS_PER_MINUTE_PER_USER = 20
+
+
+def _max_requests_per_minute_per_user() -> int:
+    raw = os.getenv("MAX_REQUESTS_PER_MINUTE_PER_USER", str(DEFAULT_MAX_REQUESTS_PER_MINUTE_PER_USER))
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return DEFAULT_MAX_REQUESTS_PER_MINUTE_PER_USER
+
+
+def _normalize_service_url(url: str) -> str:
+    """Normalize Cloud Run URL for OIDC audience checks (no trailing slash)."""
+    return url.strip().rstrip("/")
+
+
+def _production_oidc_audience() -> Optional[str]:
+    """Return required OIDC audience in production; None in other environments."""
+    if os.getenv("ENVIRONMENT") != "production":
+        return None
+
+    raw = os.getenv("AGENT_SERVICE_URL", "").strip()
+    if not raw:
+        raise ValueError(
+            "AGENT_SERVICE_URL must be set when ENVIRONMENT=production "
+            "(OIDC token audience for Firebase Functions → agents calls)"
+        )
+    return _normalize_service_url(raw)
+
+
+def _parse_allowed_service_accounts() -> frozenset[str]:
+    """Parse trusted caller service account emails from environment."""
+    raw_list = os.getenv("ALLOWED_SERVICE_ACCOUNTS", "").strip()
+    if raw_list:
+        return frozenset(part.strip() for part in raw_list.split(",") if part.strip())
+
+    single = os.getenv("FIREBASE_FUNCTIONS_SERVICE_ACCOUNT", "").strip()
+    if single:
+        return frozenset({single})
+    return frozenset()
+
+
+def _production_allowed_callers() -> frozenset[str]:
+    """Return required OIDC caller allowlist in production; empty in other environments."""
+    if os.getenv("ENVIRONMENT") != "production":
+        return frozenset()
+
+    allowed = _parse_allowed_service_accounts()
+    if not allowed:
+        raise ValueError(
+            "FIREBASE_FUNCTIONS_SERVICE_ACCOUNT or ALLOWED_SERVICE_ACCOUNTS must be set "
+            "when ENVIRONMENT=production (trusted OIDC caller allowlist)"
+        )
+    return allowed
+
 
 async def _verify_internal_token(request: Request) -> None:
     """Verify that the request comes from Firebase Functions via Google OIDC token.
 
     No-op outside production so local dev works without credentials.
-    In production: validates Bearer token signature + expiry, then checks the
-    caller email matches FIREBASE_FUNCTIONS_SERVICE_ACCOUNT if that env var is set.
+    In production: validates Bearer token signature, expiry, audience (AGENT_SERVICE_URL),
+    and requires the token email claim to be on the configured caller allowlist.
     """
-    if os.getenv("ENVIRONMENT") != "production":
+    audience: Optional[str] = request.app.state.oidc_audience
+    allowed_callers: frozenset[str] = request.app.state.allowed_callers
+    if not audience:
         return
 
     auth_header = request.headers.get("Authorization", "")
@@ -51,17 +109,16 @@ async def _verify_internal_token(request: Request) -> None:
         )
 
     token = auth_header.split(" ", 1)[1]
-    service_url = os.getenv("AGENT_SERVICE_URL") or None
-    expected_sa = os.getenv("FIREBASE_FUNCTIONS_SERVICE_ACCOUNT", "")
 
     try:
         claims = google_id_token.verify_oauth2_token(
             token,
             google_requests.Request(),
-            audience=service_url,
+            audience=audience,
         )
-        if expected_sa and claims.get("email") != expected_sa:
-            raise ValueError(f"Unexpected caller email: {claims.get('email')}")
+        caller_email = claims.get("email")
+        if caller_email not in allowed_callers:
+            raise ValueError(f"Unexpected caller email: {caller_email}")
     except Exception as exc:
         logger.warning("Token validation failed: %s", exc)
         raise HTTPException(
@@ -170,7 +227,23 @@ def create_app() -> FastAPI:
     if not project_id:
         raise ValueError("GOOGLE_CLOUD_PROJECT environment variable must be set")
 
+    app.state.oidc_audience = _production_oidc_audience()
+    app.state.allowed_callers = _production_allowed_callers()
+    if app.state.oidc_audience:
+        logger.info("OIDC audience for service auth: %s", app.state.oidc_audience)
+    if app.state.allowed_callers:
+        logger.info(
+            "OIDC allowed callers (%d): %s",
+            len(app.state.allowed_callers),
+            ", ".join(sorted(app.state.allowed_callers)),
+        )
+
     app.state.project_id = project_id
+    max_rpm = _max_requests_per_minute_per_user()
+    app.state.rate_limiter = PerUserRateLimiter(max_rpm)
+    if max_rpm > 0:
+        logger.info("Per-user rate limit: %s requests/minute on /agent/execute", max_rpm)
+
     app.state.agent = StoryAgent(
         project_id=project_id,
         location=os.getenv("VERTEX_AI_LOCATION", "us-central1"),
@@ -210,6 +283,18 @@ def create_app() -> FastAPI:
         background_tasks: BackgroundTasks,
         _: None = Depends(_verify_internal_token),
     ) -> AgentResponse:
+        user_id = request.user_id or "anonymous"
+        if not await raw_request.app.state.rate_limiter.allow(user_id):
+            logger.warning("Rate limit exceeded for user_id=%s", user_id)
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "code": "RATE_LIMITED",
+                    "message": "Too many AI requests. Please try again in a minute.",
+                    "details": None,
+                },
+            )
+
         try:
             validated_params = validate_action_parameters(request.action, request.parameters)
 

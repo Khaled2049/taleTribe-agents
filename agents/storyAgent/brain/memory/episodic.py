@@ -11,6 +11,8 @@ from .semantic import _cosine_similarity
 
 logger = logging.getLogger(__name__)
 
+MEMORY_FETCH_LIMIT = 200
+
 
 class EpisodicMemoryLayer:
     def __init__(self, db: firestore.Client, context_id: str, embedder):
@@ -28,10 +30,16 @@ class EpisodicMemoryLayer:
         embedding_list = await self._embedder.embed(query)
         query_vec = np.array(embedding_list, dtype=np.float32)
 
-        def _fetch_all():
-            return [doc for doc in self._collection().stream()]
+        def _fetch_recent():
+            return [
+                doc
+                for doc in self._collection()
+                .order_by("created_at", direction=firestore.Query.DESCENDING)
+                .limit(MEMORY_FETCH_LIMIT)
+                .stream()
+            ]
 
-        docs = await anyio.to_thread.run_sync(_fetch_all)
+        docs = await anyio.to_thread.run_sync(_fetch_recent)
         if not docs:
             return []
 
