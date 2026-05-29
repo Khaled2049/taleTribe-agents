@@ -122,7 +122,7 @@ resource "google_cloud_run_v2_service" "app" {
       # Must match the audience Firebase Functions uses when minting identity tokens.
       env {
         name  = "AGENT_SERVICE_URL"
-        value = google_cloud_run_v2_service.app.uri
+        value = var.agent_service_url
       }
 
       env {

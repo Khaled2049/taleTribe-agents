@@ -16,6 +16,12 @@ variable "service_name" {
   default     = "novelsync-agents"
 }
 
+variable "agent_service_url" {
+  description = "Public URL of THIS Cloud Run service, used as the OIDC token audience. Set from the service's status.url (gcloud run services describe <service> --region <region> --format='value(status.url)'). Stable for the life of the service. Must match the AGENT_SERVICE_URL Firebase Functions uses to mint identity tokens."
+  type        = string
+  default     = "https://novelsync-agents-ukvrbnaddq-uc.a.run.app"
+}
+
 variable "image" {
   description = "Docker image URI for Cloud Run deployment"
   type        = string
