@@ -1,14 +1,52 @@
 """Context builder for aggregating story context from Firestore."""
 
+import copy
+import logging
 import os
-from typing import Any, Dict, List, Optional
+import threading
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 from google.cloud import firestore
 
 from .utils import sanitize_for_prompt
 
+logger = logging.getLogger(__name__)
+
 # Cap Firestore reads per subcollection (characters/places/plots rarely exceed this).
 COLLECTION_FETCH_LIMIT = 200
+
+
+def _read_cache_ttl() -> float:
+    """TTL (seconds) for the story-context cache. 0 (or negative) disables caching.
+
+    Read from STORY_CONTEXT_CACHE_TTL_SECONDS so the budget can be tuned per
+    environment without code changes. A short default keeps Firestore reads down
+    when a user fires several AI actions on the same story in quick succession,
+    while staying fresh enough that edits show up almost immediately.
+    """
+    raw = os.getenv("STORY_CONTEXT_CACHE_TTL_SECONDS", "30")
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        logger.warning(
+            "story_context_cache_ttl_invalid: STORY_CONTEXT_CACHE_TTL_SECONDS=%r "
+            "is not a number; defaulting to 30s",
+            raw,
+        )
+        return 30.0
+
+
+# Module-level cache shared across all StoryContextBuilder instances (each tool
+# builds its own instance per request). Keyed by (project, story_id).
+_CONTEXT_CACHE: Dict[Tuple[str, str], Tuple[float, Dict[str, Any]]] = {}
+_CONTEXT_CACHE_LOCK = threading.Lock()
+
+
+def clear_context_cache() -> None:
+    """Drop all cached story contexts (useful for tests / manual invalidation)."""
+    with _CONTEXT_CACHE_LOCK:
+        _CONTEXT_CACHE.clear()
 
 
 class StoryContextBuilder:
@@ -34,12 +72,52 @@ class StoryContextBuilder:
         """
         Build complete context for a story from Firestore.
 
+        Results are cached per (project, story_id) for a short TTL to avoid
+        re-reading every subcollection on each AI call. A deep copy is returned
+        so callers may safely mutate the result (e.g. sort chapters) without
+        corrupting the cached entry.
+
         Args:
             story_id: The Firestore document ID of the story
 
         Returns:
             Dictionary containing story data, characters, places, plots, and chapters
         """
+        ttl = _read_cache_ttl()
+        if ttl <= 0:
+            return self._fetch_story_context(story_id)
+
+        cache_key = (str(self.db.project), story_id)
+        now = time.monotonic()
+
+        with _CONTEXT_CACHE_LOCK:
+            cached = _CONTEXT_CACHE.get(cache_key)
+            if cached is not None and (now - cached[0]) < ttl:
+                logger.debug("story_context_cache_hit story_id=%s", story_id)
+                return copy.deepcopy(cached[1])
+
+        # Fetch outside the lock so concurrent requests for different stories
+        # don't serialize on Firestore I/O. A brief duplicate fetch on a cold
+        # cache is cheaper than holding the lock across a network round-trip.
+        context = self._fetch_story_context(story_id)
+
+        stored_at = time.monotonic()
+        with _CONTEXT_CACHE_LOCK:
+            # Purge expired entries so one-off stories can't grow the map without
+            # bound on a long-lived instance. Cheap: runs only on cache misses.
+            expired = [
+                key
+                for key, (ts, _) in _CONTEXT_CACHE.items()
+                if (stored_at - ts) >= ttl
+            ]
+            for key in expired:
+                del _CONTEXT_CACHE[key]
+            _CONTEXT_CACHE[cache_key] = (stored_at, context)
+
+        return copy.deepcopy(context)
+
+    def _fetch_story_context(self, story_id: str) -> Dict[str, Any]:
+        """Read the story document and all subcollections from Firestore (uncached)."""
         story_ref = self.db.collection("stories").document(story_id)
         story_doc = story_ref.get()
 

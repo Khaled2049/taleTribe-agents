@@ -4,9 +4,9 @@ on:
   push:
     branches: [main]
     paths-ignore:
-      - '**.md'
-      - 'LICENSE'
-      - '.gitignore'
+      - "**.md"
+      - "LICENSE"
+      - ".gitignore"
   workflow_dispatch:
 
 concurrency:
@@ -19,6 +19,7 @@ env:
   SERVICE_NAME: novelsync-agents
   ARTIFACT_REGISTRY_REPO: novelsync-agents
   FIREBASE_FUNCTIONS_SA: 793308156964-compute@developer.gserviceaccount.com
+  KEEP_IMAGE_COUNT: 10
 
 jobs:
   deploy:
@@ -55,6 +56,31 @@ jobs:
           else
             echo "Repository already exists"
           fi
+
+      - name: Apply Artifact Registry cleanup policy
+        run: |
+          # Keep only the most recent KEEP_IMAGE_COUNT image versions to stop
+          # storage from growing forever (each :sha tag pins an immutable digest).
+          # The keep policy protects the newest N; the delete policy removes the
+          # rest. --no-dry-run makes deletions take effect.
+          cat > /tmp/cleanup-policy.json <<EOF
+          [
+            {
+              "name": "keep-recent",
+              "action": {"type": "Keep"},
+              "mostRecentVersions": {"keepCount": ${{ env.KEEP_IMAGE_COUNT }}}
+            },
+            {
+              "name": "delete-stale",
+              "action": {"type": "Delete"},
+              "condition": {"tagState": "ANY"}
+            }
+          ]
+          EOF
+          gcloud artifacts repositories set-cleanup-policies ${{ env.ARTIFACT_REGISTRY_REPO }} \
+            --location=${{ env.REGION }} \
+            --policy=/tmp/cleanup-policy.json \
+            --no-dry-run
 
       - name: Create Firestore database if needed
         run: |
