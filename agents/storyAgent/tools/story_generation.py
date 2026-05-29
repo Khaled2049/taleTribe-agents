@@ -1,20 +1,8 @@
 """Tool for generating complete stories."""
-import sys
-from pathlib import Path
 from typing import Dict, Any, Optional
 
-# Handle imports for both direct execution and module import
-try:
-    from ..context_builder import StoryContextBuilder
-    from ..llm_provider import get_llm_provider, LLMProvider
-except ImportError:
-    # Add parent directory to path for direct execution
-    current_dir = Path(__file__).parent.parent
-    parent_dir = current_dir.parent.parent
-    if str(parent_dir) not in sys.path:
-        sys.path.insert(0, str(parent_dir))
-    from agents.storyAgent.context_builder import StoryContextBuilder
-    from agents.storyAgent.llm_provider import get_llm_provider, LLMProvider
+from ..context_builder import StoryContextBuilder
+from ..llm_provider import get_llm_provider, LLMProvider
 
 
 class StoryGenerationTool:

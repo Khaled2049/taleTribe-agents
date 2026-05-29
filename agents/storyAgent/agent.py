@@ -75,9 +75,9 @@ class StoryAgent:
         self.brainstorm_tool = BrainstormingTool(self.project_id, self.location, llm_provider=self._llm_provider)
         self.character_tool = CharacterBrainstormingTool(self.project_id, self.location, llm_provider=self._llm_provider)
         self.plot_tool = PlotBrainstormingTool(self.project_id, self.location, llm_provider=self._llm_provider)
-        self.next_line_tool = NextLineGenerationTool(self.project_id, self.location, llm_provider=self._llm_provider)
+        self.next_line_tool = NextLineGenerationTool(self.project_id, self.location, llm_provider=self._llm_provider, db=self._db)
         self.chat_tool = ChatWithContextTool(self.project_id, self.location, llm_provider=self._llm_provider)
-        self.enhance_text_tool = EnhanceTextTool(self.project_id, self.location, llm_provider=self._llm_provider)
+        self.enhance_text_tool = EnhanceTextTool(self.project_id, self.location, llm_provider=self._llm_provider, db=self._db)
         self.enhance_wizard_tool = EnhanceWizardInputTool(self.project_id, self.location, llm_provider=self._llm_provider)
         self.story_choices_tool = StoryChoicesTool(self.project_id, self.location, llm_provider=self._llm_provider)
 

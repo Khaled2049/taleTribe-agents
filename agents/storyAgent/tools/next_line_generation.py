@@ -1,19 +1,9 @@
-"""Specialized tool for plot brainstorming."""
-import sys
+"""Tool for generating next line suggestions."""
 import logging
-from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional
 
-try:
-    from ..context_builder import StoryContextBuilder
-    from ..llm_provider import get_llm_provider, LLMProvider
-except ImportError:    
-    current_dir = Path(__file__).parent.parent
-    parent_dir = current_dir.parent.parent
-    if str(parent_dir) not in sys.path:
-        sys.path.insert(0, str(parent_dir))
-    from agents.storyAgent.context_builder import StoryContextBuilder
-    from agents.storyAgent.llm_provider import get_llm_provider, LLMProvider
+from ..context_builder import StoryContextBuilder
+from ..llm_provider import get_llm_provider, LLMProvider
 
 
 PREFIX_CHAR_LENGTH = 1200 
@@ -24,12 +14,19 @@ logger = logging.getLogger(__name__)
 class NextLineGenerationTool:
     """Specialized tool for generating next lines."""
 
-    def __init__(self, project_id: str, location: str = "us-central1", llm_provider: Optional[LLMProvider] = None):
+    def __init__(
+        self,
+        project_id: str,
+        location: str = "us-central1",
+        llm_provider: Optional[LLMProvider] = None,
+        db=None,
+    ):
         """Initialize the next line generation tool."""
         self.project_id = project_id
         self.location = location
         self.llm_provider: LLMProvider = llm_provider or get_llm_provider(project_id, location)
         self.context_builder = StoryContextBuilder(project_id)
+        self._db = db
 
     def _slice_content(self, content: str, cursor_pos: int) -> Tuple[str, str]:
         """Slices the chapter content into a prefix and suffix based on cursor position."""
@@ -45,27 +42,21 @@ class NextLineGenerationTool:
         return prefix, suffix
 
     def _get_chapter(self, story_id: str, chapter_id: str) -> Optional[Dict[str, Any]]:
-        """Fetch a specific chapter from Firestore."""
+        """Fetch a specific chapter from Firestore using the shared client."""
+        if self._db is None:
+            logger.warning("No Firestore client injected; skipping chapter fetch")
+            return None
         try:
-            from google.cloud import firestore
-            import os
-            
-            # Create Firestore client (same way as context_builder)
-            emulator_host = os.getenv("FIRESTORE_EMULATOR_HOST")
-            if self.project_id:
-                db = firestore.Client(project=self.project_id)
-            else:
-                db = firestore.Client()
-            
-            if emulator_host:
-                os.environ["FIRESTORE_EMULATOR_HOST"] = emulator_host
-            
-            chapter_ref = db.collection("stories").document(story_id).collection("chapters").document(chapter_id)
+            chapter_ref = (
+                self._db.collection("stories")
+                .document(story_id)
+                .collection("chapters")
+                .document(chapter_id)
+            )
             chapter_doc = chapter_ref.get()
             if chapter_doc.exists:
                 return {"id": chapter_doc.id, **chapter_doc.to_dict()}
         except Exception as e:
-            # Log error but don't fail - chapter_id is optional
             logger.warning("Could not fetch chapter %s: %s", chapter_id, e)
         return None
 

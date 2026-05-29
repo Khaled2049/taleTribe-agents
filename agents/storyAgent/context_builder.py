@@ -3,6 +3,8 @@ import os
 from typing import Dict, List, Any, Optional
 from google.cloud import firestore
 
+from .utils import sanitize_for_prompt
+
 # Cap Firestore reads per subcollection (characters/places/plots rarely exceed this).
 COLLECTION_FETCH_LIMIT = 200
 
@@ -84,20 +86,8 @@ class StoryContextBuilder:
 
     @staticmethod
     def _sanitize_for_prompt(value: Any, max_chars: int = 800) -> str:
-        """Render user-authored content as inert prompt text.
-
-        We keep semantic content but remove control chars and aggressively bound size
-        so attacker-controlled fields cannot dominate instructions.
-        """
-        if value is None:
-            return ""
-        text = str(value)
-        # Drop non-printable control chars except newline/tab/carriage return.
-        text = "".join(ch for ch in text if ch.isprintable() or ch in "\n\t\r")
-        text = text.replace("```", "\\`\\`\\`").strip()
-        if len(text) > max_chars:
-            text = text[:max_chars] + "..."
-        return text
+        """Delegate to shared sanitize_for_prompt utility."""
+        return sanitize_for_prompt(value, max_chars)
 
     def format_context_for_prompt(self, context: Dict[str, Any]) -> str:
         """
