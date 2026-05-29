@@ -132,7 +132,7 @@ resource "google_cloud_run_v2_service" "app" {
 
       env {
         name  = "MAX_REQUESTS_PER_MINUTE_PER_USER"
-        value = "20"
+        value = tostring(var.max_requests_per_minute_per_user)
       }
 
       # Secret from Secret Manager (accessed via service account)

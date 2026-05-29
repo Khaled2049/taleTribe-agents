@@ -31,13 +31,24 @@ class TestAgentExecution:
 
         response = client.post(
             "/agent/execute",
-            json={"action": "generateStory", "parameters": {"storyId": "s1"}},
+            json={"action": "generateStory", "parameters": {"storyId": "s1"}, "user_id": "u1"},
         )
 
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
         assert data["data"]["storyId"] == "s1"
+
+    def test_agent_execute_missing_user_id_returns_422(self):
+        response = client.post(
+            "/agent/execute",
+            json={"action": "generateStory", "parameters": {"storyId": "s1"}},
+        )
+
+        assert response.status_code == 422
+        data = response.json()
+        assert data["success"] is False
+        assert data["error"]["code"] == "VALIDATION_ERROR"
 
     def test_agent_execute_unknown_action_validation_error(self):
         response = client.post(
@@ -76,6 +87,7 @@ class TestAgentExecution:
                         "chapters": [],
                     },
                 },
+                "user_id": "u1",
             },
         )
 
@@ -93,7 +105,7 @@ class TestAgentExecution:
                 },
             },
             background_tasks=ANY,
-            user_id="anonymous",
+            user_id="u1",
         )
 
     def test_enhance_wizard_input_success(self):
@@ -108,6 +120,7 @@ class TestAgentExecution:
                     "data": {"title": "The Last Lantern", "premise": "A girl finds a magic lamp"},
                     "userId": "user-1",
                 },
+                "user_id": "u-session",
             },
         )
 
@@ -123,7 +136,7 @@ class TestAgentExecution:
                 "userId": "user-1",
             },
             background_tasks=ANY,
-            user_id="anonymous",
+            user_id="u-session",
         )
 
     def test_enhance_wizard_input_invalid_type_returns_422(self):
@@ -163,6 +176,7 @@ class TestGenerateStoryChoices:
             json={
                 "action": "generateStoryChoices",
                 "parameters": {"storyId": "s1", "mode": "opening"},
+                "user_id": "u1",
             },
         )
 
@@ -175,7 +189,7 @@ class TestGenerateStoryChoices:
             "generateStoryChoices",
             {"storyId": "s1", "mode": "opening", "currentContent": "", "turnCount": 0},
             background_tasks=ANY,
-            user_id="anonymous",
+            user_id="u1",
         )
 
     def test_continuation_mode_success(self):
@@ -199,6 +213,7 @@ class TestGenerateStoryChoices:
                     "currentContent": "<p>Some prose.</p>",
                     "chapterId": "ch1",
                 },
+                "user_id": "u1",
             },
         )
 
@@ -217,7 +232,7 @@ class TestGenerateStoryChoices:
                 "turnCount": 0,
             },
             background_tasks=ANY,
-            user_id="anonymous",
+            user_id="u1",
         )
 
     def test_missing_mode_returns_422(self):
@@ -270,6 +285,7 @@ class TestGenerateStoryChoices:
             json={
                 "action": "generateStoryChoices",
                 "parameters": {"storyId": "s1", "mode": "opening"},
+                "user_id": "u1",
             },
         )
 

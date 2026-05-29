@@ -81,6 +81,12 @@ class StoryAgent:
         self.enhance_wizard_tool = EnhanceWizardInputTool(self.project_id, self.location, llm_provider=self._llm_provider)
         self.story_choices_tool = StoryChoicesTool(self.project_id, self.location, llm_provider=self._llm_provider)
 
+    async def aclose(self) -> None:
+        """Release process-lifetime resources (e.g. the LLM HTTP client)."""
+        close = getattr(self._llm_provider, "aclose", None)
+        if close is not None:
+            await close()
+
     def _make_brain(self, user_id: str, context_id: str) -> Brain:
         return Brain(
             config=BrainConfig(
@@ -396,6 +402,12 @@ class StoryAgent:
         logger = logging.getLogger(__name__)
         logger.info("Executing action=%s with parameter_keys=%s", action, sorted(parameters.keys()))
 
+        # effective_user_id is only plumbed to actions that personalize via the brain
+        # memory system or are billed per user (chat, story choices, wizard input,
+        # clear memory). The other actions (generateStory, generateChapter,
+        # brainstorm*, generateNextLines, enhanceText) are stateless from the brain's
+        # perspective and don't take a user_id parameter — adding one here would be
+        # dead plumbing until those actions opt in.
         param_user_id = self._param(parameters, "userId", "user_id")
         effective_user_id = param_user_id or user_id
 

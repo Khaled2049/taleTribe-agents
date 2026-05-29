@@ -54,3 +54,31 @@ def test_agent_execute_returns_429_when_rate_limited(monkeypatch):
     body = response.json()
     assert body["success"] is False
     assert body["error"]["code"] == "RATE_LIMITED"
+
+
+def test_agent_execute_rejects_missing_user_id(monkeypatch):
+    """user_id is required so anonymous traffic cannot share one rate-limit bucket."""
+    monkeypatch.setenv("MAX_REQUESTS_PER_MINUTE_PER_USER", "1000")
+    test_app = create_app()
+
+    with TestClient(test_app) as client:
+        response = client.post(
+            "/agent/execute",
+            json={"action": "generateStory", "parameters": {"storyId": "s1"}},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_agent_execute_rejects_empty_user_id(monkeypatch):
+    monkeypatch.setenv("MAX_REQUESTS_PER_MINUTE_PER_USER", "1000")
+    test_app = create_app()
+
+    with TestClient(test_app) as client:
+        response = client.post(
+            "/agent/execute",
+            json={"action": "generateStory", "parameters": {"storyId": "s1"}, "user_id": ""},
+        )
+
+    assert response.status_code == 422

@@ -1,4 +1,11 @@
-"""In-memory per-user token bucket rate limiter for /agent/execute."""
+"""In-memory per-user token bucket rate limiter for /agent/execute.
+
+NOTE: state is held in process memory. On horizontally-scaled deployments
+(e.g. Cloud Run with N instances), each instance maintains its own buckets,
+so the *effective* per-user ceiling is `N * max_per_minute`, not the
+configured value. For a true global cap, swap this for a Redis/Memorystore
+backed bucket. As a coarse abuse guard this is sufficient.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -13,7 +20,10 @@ class _Bucket:
 
 
 class PerUserRateLimiter:
-    """Token bucket keyed by user_id. Limit applies per rolling minute."""
+    """Token bucket keyed by user_id. Limit applies per rolling minute.
+
+    Process-local: see module docstring for horizontal-scaling caveat.
+    """
 
     def __init__(self, max_per_minute: int) -> None:
         self._max_per_minute = max(0, max_per_minute)

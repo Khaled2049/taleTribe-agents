@@ -4,10 +4,13 @@ Reads from environment variables (and optionally a .env file loaded by server.py
 Instantiated once inside create_app() so tests can monkeypatch env vars before creation.
 """
 import json
+import logging
 from typing import Optional
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -54,15 +57,35 @@ class Settings(BaseSettings):
     @field_validator("cors_origins", mode="before")
     @classmethod
     def validate_cors(cls, v: object) -> str:
-        """Ensure cors_origins is a valid JSON list; fall back to '[]'."""
+        """Ensure cors_origins is a valid JSON list; fall back to '[]' (logged)."""
         raw = str(v) if v is not None else "[]"
         try:
             parsed = json.loads(raw)
             if not isinstance(parsed, list):
+                logger.warning(
+                    "cors_origins_invalid_shape: CORS_ORIGINS=%r is not a JSON list; "
+                    "browser requests will be blocked",
+                    raw,
+                )
                 return "[]"
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.warning(
+                "cors_origins_parse_failed: CORS_ORIGINS=%r is not valid JSON (%s); "
+                "browser requests will be blocked",
+                raw,
+                exc,
+            )
             return "[]"
         return raw
+
+    @model_validator(mode="after")
+    def warn_empty_cors_in_production(self) -> "Settings":
+        if self.environment == "production" and not self.parsed_cors_origins:
+            logger.warning(
+                "cors_origins_empty_in_production: no CORS origins configured; "
+                "browser-side callers will be blocked"
+            )
+        return self
 
     @model_validator(mode="after")
     def check_production_fields(self) -> "Settings":
