@@ -127,6 +127,10 @@ class CreditProxyProvider(LLMProvider):
         # Timeout covers the full LLM round-trip (up to 300 s).
         self._client = httpx.AsyncClient(timeout=300.0)
 
+    async def aclose(self) -> None:
+        """Close the underlying HTTP client. Idempotent."""
+        await self._client.aclose()
+
     def _build_payload(self, prompt: str) -> Dict[str, Any]:
         config = _byok_config.get()
         user_id = config.get("user_id", self.platform_user_id) if config else self.platform_user_id
@@ -149,7 +153,7 @@ class CreditProxyProvider(LLMProvider):
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((BackendUnavailableError, httpx.RequestError)),
+        retry=retry_if_exception_type(BackendUnavailableError),
         reraise=True,
     )
     async def generate_content_async(self, prompt: str) -> str:

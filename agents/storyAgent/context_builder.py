@@ -58,7 +58,11 @@ class StoryContextBuilder:
         )
 
         # Sort chapters by number if available (frontend uses `order`; agent may use chapterNumber).
-        chapters.sort(key=lambda x: x.get("chapterNumber") or x.get("order", 0))
+        # Explicit None check so chapterNumber=0 (legitimate prologue) does not fall through to order.
+        def _chapter_sort_key(ch: Dict[str, Any]) -> int:
+            n = ch.get("chapterNumber")
+            return n if n is not None else ch.get("order", 0)
+        chapters.sort(key=_chapter_sort_key)
 
         return {
             "story": story_data,

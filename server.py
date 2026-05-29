@@ -122,11 +122,17 @@ class ProviderConfig(BaseModel):
 
 
 class AgentRequest(BaseModel):
-    """Request model for agent execution."""
+    """Request model for agent execution.
+
+    `user_id` is the end-user identifier from Firebase Functions (the upstream
+    OIDC service-account caller is validated separately in _verify_internal_token).
+    Required so the rate limiter and billing pool are keyed per actual user — not
+    a shared "anonymous" bucket.
+    """
 
     action: ActionName
     parameters: Dict[str, Any] = Field(default_factory=dict)
-    user_id: Optional[str] = None
+    user_id: str = Field(min_length=1, max_length=128)
     firebase_token: Optional[str] = None
     provider_config: Optional[ProviderConfig] = None
 
@@ -139,9 +145,9 @@ class AgentResponse(BaseModel):
     error: Optional[ErrorDetail] = None
 
 
-def _try_load_image_router(current_dir: Path):
+def _try_load_image_router(current_dir: Path, enabled: bool):
     """Try to load image generation router when enabled."""
-    if not os.getenv("ENABLE_LOCAL_IMAGE_GENERATION", "true").lower() == "true":
+    if not enabled:
         logger.info("image_generation_disabled")
         return None
 
@@ -207,7 +213,7 @@ def create_app() -> FastAPI:
         location=settings.vertex_ai_location,
     )
 
-    image_router = _try_load_image_router(current_dir)
+    image_router = _try_load_image_router(current_dir, settings.enable_local_image_generation)
     app.state.image_generation_available = image_router is not None
     if image_router is not None:
         app.include_router(image_router, tags=["Image Generation"])
@@ -241,7 +247,7 @@ def create_app() -> FastAPI:
         background_tasks: BackgroundTasks,
         _: None = Depends(_verify_internal_token),
     ) -> AgentResponse:
-        user_id = request.user_id or "anonymous"
+        user_id = request.user_id
         if not await raw_request.app.state.rate_limiter.allow(user_id):
             logger.warning("rate_limit_exceeded", user_id=user_id)
             raise HTTPException(
@@ -260,7 +266,7 @@ def create_app() -> FastAPI:
             # ContextVar is async-safe: this context copy is isolated to this request's task.
             pc = request.provider_config
             byok_token = _byok_config.set({
-                "user_id": request.user_id or "anonymous",
+                "user_id": request.user_id,
                 "provider": pc.provider if pc else "",
                 "api_key": pc.api_key if pc else "",
                 "model": pc.model or "" if pc else "",
@@ -275,7 +281,7 @@ def create_app() -> FastAPI:
                     request.action,
                     validated_params,
                     background_tasks=background_tasks,
-                    user_id=request.user_id or "anonymous",
+                    user_id=request.user_id,
                 )
             finally:
                 _byok_config.reset(byok_token)
@@ -326,7 +332,13 @@ def create_app() -> FastAPI:
                 status_code=500,
                 detail={"code": "TIMEOUT", "message": "AI request timed out. Please try again.", "details": None},
             ) from exc
-        except (LLMProviderError, Exception) as exc:
+        except LLMProviderError as exc:
+            logger.exception("llm_provider_error", action=request.action)
+            raise HTTPException(
+                status_code=500,
+                detail={"code": "INTERNAL_ERROR", "message": "AI service is temporarily unavailable. Please try again.", "details": None},
+            ) from exc
+        except Exception as exc:
             logger.exception("unhandled_error", action=request.action)
             raise HTTPException(
                 status_code=500,
@@ -344,10 +356,23 @@ def create_app() -> FastAPI:
             },
         }
 
+    @app.on_event("shutdown")
+    async def _shutdown():
+        await app.state.agent.aclose()
+
     return app
 
 
-app = create_app()
+try:
+    app = create_app()
+except Exception as exc:
+    # _configure_logging is the first line of create_app, so the structlog
+    # JSON renderer is wired up by the time most failures happen. Worst case
+    # (logging itself failing) the stderr fallback still captures the message
+    # before the worker exits. Without this guard, missing prod env vars
+    # surface as a raw Pydantic stacktrace easy to miss in Cloud Run logs.
+    logger.critical("startup_failed", error=str(exc), error_type=type(exc).__name__)
+    raise
 
 
 if __name__ == "__main__":
