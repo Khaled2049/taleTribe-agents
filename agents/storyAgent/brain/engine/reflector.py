@@ -35,7 +35,9 @@ class MemoryReflector:
             logger.warning("Brain reflect extraction failed: %s", exc, exc_info=True)
             return
 
-        if not payload:
+        # Salvage: proceed if ANY layer key carries content. Old behavior required
+        # a fully-parseable top-level object; partial JSON now still writes what it can.
+        if not any(payload.get(k) for k in ("working", "procedural", "semantic_facts", "episodic_summary")):
             return
 
         await self._apply_reflection(inp, payload)

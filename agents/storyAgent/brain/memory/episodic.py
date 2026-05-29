@@ -7,11 +7,10 @@ import anyio
 import numpy as np
 
 from ..types import MemoryDocument
+from .constants import MEMORY_FETCH_LIMIT
 from .semantic import _cosine_similarity
 
 logger = logging.getLogger(__name__)
-
-MEMORY_FETCH_LIMIT = 200
 
 
 class EpisodicMemoryLayer:

@@ -8,11 +8,9 @@ import anyio
 import numpy as np
 
 from ..types import MemoryDocument
+from .constants import MEMORY_FETCH_LIMIT
 
 logger = logging.getLogger(__name__)
-
-# Recent memories are enough for cosine-similarity ranking (top_k is typically 5).
-MEMORY_FETCH_LIMIT = 200
 
 
 class SemanticMemoryLayer:

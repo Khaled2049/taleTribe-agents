@@ -49,9 +49,21 @@ def test_enhance_text_rejects_oversized_selected_text():
             {
                 "storyId": "s1",
                 "action": "expand",
-                "selectedText": "t" * (MAX_CONTENT_CHARS + 1),
+                "selectedText": "t" * (MAX_PROMPT_CHARS + 1),
             },
         )
+
+
+def test_enhance_text_accepts_selected_text_at_prompt_limit():
+    result = validate_action_parameters(
+        "enhanceText",
+        {
+            "storyId": "s1",
+            "action": "expand",
+            "selectedText": "t" * MAX_PROMPT_CHARS,
+        },
+    )
+    assert len(result["selectedText"]) == MAX_PROMPT_CHARS
 
 
 def test_story_id_max_length():

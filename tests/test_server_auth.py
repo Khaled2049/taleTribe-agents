@@ -1,6 +1,7 @@
 """Tests for production OIDC / auth configuration via Settings and _verify_internal_token."""
 import os
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
@@ -135,12 +136,22 @@ def test_create_app_sets_production_auth_state(monkeypatch):
 # _verify_internal_token
 # ------------------------------------------------------------------
 
+def _fake_request(allowed_callers: frozenset) -> SimpleNamespace:
+    """Build a request stub with the exact app.state attrs _verify_internal_token reads."""
+    state = SimpleNamespace(
+        oidc_audience=AGENT_URL,
+        allowed_callers=allowed_callers,
+        google_auth_request=object(),  # opaque — verify_oauth2_token is patched
+    )
+    return SimpleNamespace(
+        app=SimpleNamespace(state=state),
+        headers={"Authorization": "Bearer fake-token"},
+    )
+
+
 @pytest.mark.asyncio
 async def test_verify_rejects_caller_not_on_allowlist():
-    request = MagicMock()
-    request.app.state.oidc_audience = AGENT_URL
-    request.app.state.allowed_callers = frozenset({TRUSTED_SA})
-    request.headers.get.return_value = "Bearer fake-token"
+    request = _fake_request(frozenset({TRUSTED_SA}))
 
     with patch(
         "server.google_id_token.verify_oauth2_token",
@@ -154,10 +165,7 @@ async def test_verify_rejects_caller_not_on_allowlist():
 
 @pytest.mark.asyncio
 async def test_verify_accepts_allowlisted_caller():
-    request = MagicMock()
-    request.app.state.oidc_audience = AGENT_URL
-    request.app.state.allowed_callers = frozenset({TRUSTED_SA})
-    request.headers.get.return_value = "Bearer fake-token"
+    request = _fake_request(frozenset({TRUSTED_SA}))
 
     with patch(
         "server.google_id_token.verify_oauth2_token",

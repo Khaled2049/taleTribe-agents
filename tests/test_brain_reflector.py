@@ -86,6 +86,35 @@ async def test_reflect_survives_llm_failure():
 
 
 @pytest.mark.asyncio
+async def test_reflect_writes_procedural_when_present():
+    payload = """{
+      "working": {},
+      "procedural": {"tone": "melancholic", "pov": "first"},
+      "semantic_facts": [],
+      "episodic_summary": ""
+    }"""
+    reflector, working, procedural, semantic, episodic = _make_reflector(payload)
+    await reflector.reflect(_make_input())
+    procedural.write_global.assert_awaited_once_with({"tone": "melancholic", "pov": "first"})
+    working.patch.assert_not_awaited()
+    semantic.store.assert_not_awaited()
+    episodic.store.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reflect_salvages_partial_payload():
+    # Only semantic_facts present — other keys missing entirely. Old code returned
+    # early; new salvage logic should still write the one good layer.
+    payload = '{"semantic_facts": ["Marcus drinks black coffee"]}'
+    reflector, working, procedural, semantic, episodic = _make_reflector(payload)
+    await reflector.reflect(_make_input())
+    semantic.store.assert_awaited_once()
+    working.patch.assert_not_awaited()
+    procedural.write_global.assert_not_awaited()
+    episodic.store.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_reflect_skips_episodic_on_empty_summary():
     payload = """{
       "working": {"current_scene": "x", "active_characters": [], "recent_events": [], "mood": ""},
