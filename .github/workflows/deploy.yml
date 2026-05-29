@@ -19,7 +19,7 @@ env:
   SERVICE_NAME: novelsync-agents
   ARTIFACT_REGISTRY_REPO: novelsync-agents
   FIREBASE_FUNCTIONS_SA: 793308156964-compute@developer.gserviceaccount.com
-  KEEP_IMAGE_COUNT: 10
+  KEEP_IMAGE_COUNT: 3
 
 jobs:
   deploy:
