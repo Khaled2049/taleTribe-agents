@@ -2,6 +2,7 @@
 import logging
 import os
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -176,9 +177,17 @@ def create_app() -> FastAPI:
     if settings.environment != "production" and not settings.firestore_emulator_host:
         os.environ["FIRESTORE_EMULATOR_HOST"] = "localhost:8080"
 
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # Startup: nothing to do — state is populated below before the app accepts
+        # traffic. Shutdown: release the LLM HTTP client.
+        yield
+        await app.state.agent.aclose()
+
     app = FastAPI(
         title="NovelSync Unified Service",
         description="Unified API for story agents and optional image generation",
+        lifespan=lifespan,
     )
 
     app.add_middleware(
@@ -355,10 +364,6 @@ def create_app() -> FastAPI:
                 "image_generation": "available" if app.state.image_generation_available else "unavailable",
             },
         }
-
-    @app.on_event("shutdown")
-    async def _shutdown():
-        await app.state.agent.aclose()
 
     return app
 
