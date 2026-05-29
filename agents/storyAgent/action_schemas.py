@@ -1,4 +1,5 @@
 """Validation schemas for StoryAgent actions."""
+
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
@@ -61,7 +62,9 @@ class GenerateStoryParams(StrictModel):
     length: Optional[str] = Field(default=None, max_length=MAX_PROMPT_CHARS)
     generate_first_chapter_only: bool = Field(
         default=True,
-        validation_alias=AliasChoices("generateFirstChapterOnly", "generate_first_chapter_only"),
+        validation_alias=AliasChoices(
+            "generateFirstChapterOnly", "generate_first_chapter_only"
+        ),
         serialization_alias="generateFirstChapterOnly",
     )
     plot_context: Optional[str] = Field(
@@ -176,9 +179,11 @@ class ClearMemoryParams(StrictModel):
 
 
 class EnhanceWizardInputParams(StrictModel):
-    wizard_type: Literal["premise", "character", "place", "conflict", "blueprint"] = Field(
-        validation_alias=AliasChoices("type", "wizard_type"),
-        serialization_alias="type",
+    wizard_type: Literal["premise", "character", "place", "conflict", "blueprint"] = (
+        Field(
+            validation_alias=AliasChoices("type", "wizard_type"),
+            serialization_alias="type",
+        )
     )
     data: Dict[str, Any]
     user_id: str = _user_id_field(default=...)
@@ -199,7 +204,9 @@ _ACTION_SCHEMAS = {
 }
 
 
-def validate_action_parameters(action: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
+def validate_action_parameters(
+    action: str, parameters: Dict[str, Any]
+) -> Dict[str, Any]:
     """Validate action parameters and return normalized camelCase payload."""
     schema = _ACTION_SCHEMAS.get(action)
     if not schema:

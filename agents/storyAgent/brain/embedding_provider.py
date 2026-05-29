@@ -1,4 +1,5 @@
 """Embedding provider abstraction — mirrors the LLM provider pattern."""
+
 import hashlib
 import logging
 import os
@@ -68,7 +69,6 @@ def get_embedding_provider(api_key: str | None = None) -> EmbeddingProvider | No
         return MockEmbeddingProvider()
 
     if api_key:
-        model = os.getenv("GOOGLE_AI_STUDIO_MODEL", _GOOGLE_DEFAULT_MODEL)
         # text-embedding-004 is the dedicated embedding model; don't use a generative model name
         embed_model = os.getenv("GOOGLE_EMBEDDING_MODEL", _GOOGLE_DEFAULT_MODEL)
         logger.info("Embedding provider: GoogleAI (%s)", embed_model)
@@ -79,5 +79,7 @@ def get_embedding_provider(api_key: str | None = None) -> EmbeddingProvider | No
         logger.info("Embedding provider: SentenceTransformer (local)")
         return provider
     except ImportError:
-        logger.warning("No embedding provider available; brain memory retrieval disabled")
+        logger.warning(
+            "No embedding provider available; brain memory retrieval disabled"
+        )
         return None

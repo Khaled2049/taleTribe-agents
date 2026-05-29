@@ -1,18 +1,26 @@
 """Specialized tool for plot brainstorming."""
-from typing import Dict, Any, Optional
+
+from typing import Any, Dict, Optional
 
 from ..context_builder import StoryContextBuilder
-from ..llm_provider import get_llm_provider, LLMProvider
+from ..llm_provider import LLMProvider, get_llm_provider
 
 
 class PlotBrainstormingTool:
     """Specialized tool for plot brainstorming."""
 
-    def __init__(self, project_id: str, location: str = "us-central1", llm_provider: Optional[LLMProvider] = None):
+    def __init__(
+        self,
+        project_id: str,
+        location: str = "us-central1",
+        llm_provider: Optional[LLMProvider] = None,
+    ):
         """Initialize the plot brainstorming tool."""
         self.project_id = project_id
         self.location = location
-        self.llm_provider: LLMProvider = llm_provider or get_llm_provider(project_id, location)
+        self.llm_provider: LLMProvider = llm_provider or get_llm_provider(
+            project_id, location
+        )
         self.context_builder = StoryContextBuilder(project_id)
 
     async def execute(

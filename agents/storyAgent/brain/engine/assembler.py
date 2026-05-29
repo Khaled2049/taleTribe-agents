@@ -1,5 +1,11 @@
 """Prompt assembler — builds layered context string from memory layers."""
-from ..types import AssembledPrompt, WorkingMemoryState, ProceduralMemoryState, MemoryDocument
+
+from ..types import (
+    AssembledPrompt,
+    MemoryDocument,
+    ProceduralMemoryState,
+    WorkingMemoryState,
+)
 
 
 class PromptAssembler:
@@ -36,7 +42,9 @@ class PromptAssembler:
             if working.current_scene:
                 parts.append(f"Scene: {working.current_scene}")
             if working.active_characters:
-                parts.append(f"Active characters: {', '.join(working.active_characters)}")
+                parts.append(
+                    f"Active characters: {', '.join(working.active_characters)}"
+                )
             if working.recent_events:
                 parts.append("Recent events:")
                 for event in working.recent_events:

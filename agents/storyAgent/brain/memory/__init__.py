@@ -1,8 +1,8 @@
 from .constants import MEMORY_FETCH_LIMIT
-from .working import WorkingMemoryLayer
+from .episodic import EpisodicMemoryLayer
 from .procedural import ProceduralMemoryLayer
 from .semantic import SemanticMemoryLayer
-from .episodic import EpisodicMemoryLayer
+from .working import WorkingMemoryLayer
 
 __all__ = [
     "MEMORY_FETCH_LIMIT",

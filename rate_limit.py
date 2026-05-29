@@ -6,6 +6,7 @@ so the *effective* per-user ceiling is `N * max_per_minute`, not the
 configured value. For a true global cap, swap this for a Redis/Memorystore
 backed bucket. As a coarse abuse guard this is sufficient.
 """
+
 from __future__ import annotations
 
 import asyncio

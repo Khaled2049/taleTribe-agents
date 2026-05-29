@@ -1,4 +1,5 @@
 """Unified HTTP server for NovelSync services (agents and optional image generation)."""
+
 import logging
 import os
 import sys
@@ -19,8 +20,6 @@ from pydantic import BaseModel, Field, ValidationError
 from agents.storyAgent.action_schemas import ActionName, validate_action_parameters
 from agents.storyAgent.agent import StoryAgent
 from agents.storyAgent.llm_provider import (
-    _byok_config,
-    _firebase_token,
     BackendUnavailableError,
     InsufficientCreditsError,
     LLMProviderError,
@@ -28,6 +27,8 @@ from agents.storyAgent.llm_provider import (
     ProviderAuthError,
     ProviderNotFoundError,
     RateLimitedError,
+    _byok_config,
+    _firebase_token,
 )
 from config import Settings
 from rate_limit import PerUserRateLimiter
@@ -84,7 +85,11 @@ async def _verify_internal_token(request: Request) -> None:
     if not auth_header.startswith("Bearer "):
         raise HTTPException(
             status_code=401,
-            detail={"code": "UNAUTHORIZED", "message": "Missing Authorization header", "details": None},
+            detail={
+                "code": "UNAUTHORIZED",
+                "message": "Missing Authorization header",
+                "details": None,
+            },
         )
 
     token = auth_header.split(" ", 1)[1]
@@ -102,7 +107,11 @@ async def _verify_internal_token(request: Request) -> None:
         logger.warning("token_validation_failed", error=str(exc))
         raise HTTPException(
             status_code=401,
-            detail={"code": "UNAUTHORIZED", "message": "Invalid or unauthorized token", "details": None},
+            detail={
+                "code": "UNAUTHORIZED",
+                "message": "Invalid or unauthorized token",
+                "details": None,
+            },
         )
 
 
@@ -213,7 +222,9 @@ def create_app() -> FastAPI:
         )
 
     app.state.project_id = settings.google_cloud_project
-    app.state.rate_limiter = PerUserRateLimiter(settings.max_requests_per_minute_per_user)
+    app.state.rate_limiter = PerUserRateLimiter(
+        settings.max_requests_per_minute_per_user
+    )
     if settings.max_requests_per_minute_per_user > 0:
         logger.info("rate_limit_enabled", rpm=settings.max_requests_per_minute_per_user)
 
@@ -222,7 +233,9 @@ def create_app() -> FastAPI:
         location=settings.vertex_ai_location,
     )
 
-    image_router = _try_load_image_router(current_dir, settings.enable_local_image_generation)
+    image_router = _try_load_image_router(
+        current_dir, settings.enable_local_image_generation
+    )
     app.state.image_generation_available = image_router is not None
     if image_router is not None:
         app.include_router(image_router, tags=["Image Generation"])
@@ -233,7 +246,11 @@ def create_app() -> FastAPI:
             status_code=422,
             content=AgentResponse(
                 success=False,
-                error=ErrorDetail(code="VALIDATION_ERROR", message="Invalid request", details=exc.errors()),
+                error=ErrorDetail(
+                    code="VALIDATION_ERROR",
+                    message="Invalid request",
+                    details=exc.errors(),
+                ),
             ).model_dump(),
         )
 
@@ -269,19 +286,24 @@ def create_app() -> FastAPI:
             )
 
         try:
-            validated_params = validate_action_parameters(request.action, request.parameters)
+            validated_params = validate_action_parameters(
+                request.action, request.parameters
+            )
 
             # Set per-request config in ContextVar so CreditProxyProvider picks it up.
             # ContextVar is async-safe: this context copy is isolated to this request's task.
             pc = request.provider_config
-            byok_token = _byok_config.set({
-                "user_id": request.user_id,
-                "provider": pc.provider if pc else "",
-                "api_key": pc.api_key if pc else "",
-                "model": pc.model or "" if pc else "",
-            })
+            byok_token = _byok_config.set(
+                {
+                    "user_id": request.user_id,
+                    "provider": pc.provider if pc else "",
+                    "api_key": pc.api_key if pc else "",
+                    "model": pc.model or "" if pc else "",
+                }
+            )
             incoming_firebase_token = (
-                request.firebase_token or raw_request.headers.get("X-Firebase-Token", "")
+                request.firebase_token
+                or raw_request.headers.get("X-Firebase-Token", "")
             ).strip() or None
             firebase_token = _firebase_token.set(incoming_firebase_token)
 
@@ -299,7 +321,11 @@ def create_app() -> FastAPI:
         except ValidationError as exc:
             raise HTTPException(
                 status_code=422,
-                detail={"code": "VALIDATION_ERROR", "message": "Invalid parameters", "details": exc.errors()},
+                detail={
+                    "code": "VALIDATION_ERROR",
+                    "message": "Invalid parameters",
+                    "details": exc.errors(),
+                },
             ) from exc
         except ValueError as exc:
             raise HTTPException(
@@ -309,23 +335,41 @@ def create_app() -> FastAPI:
         except InsufficientCreditsError as exc:
             raise HTTPException(
                 status_code=500,
-                detail={"code": "INSUFFICIENT_CREDITS", "message": "Insufficient AI credits. Please add your own API key in Settings.", "details": None},
+                detail={
+                    "code": "INSUFFICIENT_CREDITS",
+                    "message": "Insufficient AI credits. Please add your own API key in Settings.",
+                    "details": None,
+                },
             ) from exc
         except ProviderAuthError as exc:
             raise HTTPException(
                 status_code=500,
-                detail={"code": "UNAUTHORIZED", "message": "AI provider authentication failed. Please check your API key in Settings.", "details": None},
+                detail={
+                    "code": "UNAUTHORIZED",
+                    "message": "AI provider authentication failed. Please check your API key in Settings.",
+                    "details": None,
+                },
             ) from exc
         except BackendUnavailableError as exc:
             raise HTTPException(
                 status_code=500,
-                detail={"code": "BACKEND_UNAVAILABLE", "message": "AI backend is unreachable. Please try again later.", "details": None},
+                detail={
+                    "code": "BACKEND_UNAVAILABLE",
+                    "message": "AI backend is unreachable. Please try again later.",
+                    "details": None,
+                },
             ) from exc
         except ProviderNotFoundError as exc:
             if not exc.model:
-                msg = f'No model selected for provider "{exc.provider}". Please choose a model in Settings.' if exc.provider else "No AI model configured. Please add your API key and select a model in Settings."
+                msg = (
+                    f'No model selected for provider "{exc.provider}". Please choose a model in Settings.'
+                    if exc.provider
+                    else "No AI model configured. Please add your API key and select a model in Settings."
+                )
             else:
-                model_label = f"{exc.provider}/{exc.model}" if exc.provider else exc.model
+                model_label = (
+                    f"{exc.provider}/{exc.model}" if exc.provider else exc.model
+                )
                 msg = f'AI model "{model_label}" not found. Please check your model name in Settings.'
             raise HTTPException(
                 status_code=500,
@@ -334,24 +378,40 @@ def create_app() -> FastAPI:
         except RateLimitedError as exc:
             raise HTTPException(
                 status_code=500,
-                detail={"code": "RATE_LIMITED", "message": "AI provider rate limit reached. Please try again in a few minutes.", "details": None},
+                detail={
+                    "code": "RATE_LIMITED",
+                    "message": "AI provider rate limit reached. Please try again in a few minutes.",
+                    "details": None,
+                },
             ) from exc
         except LLMTimeoutError as exc:
             raise HTTPException(
                 status_code=500,
-                detail={"code": "TIMEOUT", "message": "AI request timed out. Please try again.", "details": None},
+                detail={
+                    "code": "TIMEOUT",
+                    "message": "AI request timed out. Please try again.",
+                    "details": None,
+                },
             ) from exc
         except LLMProviderError as exc:
             logger.exception("llm_provider_error", action=request.action)
             raise HTTPException(
                 status_code=500,
-                detail={"code": "INTERNAL_ERROR", "message": "AI service is temporarily unavailable. Please try again.", "details": None},
+                detail={
+                    "code": "INTERNAL_ERROR",
+                    "message": "AI service is temporarily unavailable. Please try again.",
+                    "details": None,
+                },
             ) from exc
         except Exception as exc:
             logger.exception("unhandled_error", action=request.action)
             raise HTTPException(
                 status_code=500,
-                detail={"code": "INTERNAL_ERROR", "message": "AI service is temporarily unavailable. Please try again.", "details": None},
+                detail={
+                    "code": "INTERNAL_ERROR",
+                    "message": "AI service is temporarily unavailable. Please try again.",
+                    "details": None,
+                },
             ) from exc
 
     @app.get("/health")
@@ -361,7 +421,11 @@ def create_app() -> FastAPI:
             "project_id": app.state.project_id,
             "services": {
                 "agent": "available",
-                "image_generation": "available" if app.state.image_generation_available else "unavailable",
+                "image_generation": (
+                    "available"
+                    if app.state.image_generation_available
+                    else "unavailable"
+                ),
             },
         }
 

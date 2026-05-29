@@ -3,6 +3,7 @@
 Reads from environment variables (and optionally a .env file loaded by server.py).
 Instantiated once inside create_app() so tests can monkeypatch env vars before creation.
 """
+
 import json
 import logging
 from typing import Optional
@@ -95,7 +96,10 @@ class Settings(BaseSettings):
                     "AGENT_SERVICE_URL must be set when ENVIRONMENT=production "
                     "(OIDC token audience for Firebase Functions → agents calls)"
                 )
-            if not self.firebase_functions_service_account.strip() and not self.allowed_service_accounts.strip():
+            if (
+                not self.firebase_functions_service_account.strip()
+                and not self.allowed_service_accounts.strip()
+            ):
                 raise ValueError(
                     "FIREBASE_FUNCTIONS_SERVICE_ACCOUNT or ALLOWED_SERVICE_ACCOUNTS must be set "
                     "when ENVIRONMENT=production (trusted OIDC caller allowlist)"
@@ -120,7 +124,9 @@ class Settings(BaseSettings):
             return frozenset()
         raw_list = self.allowed_service_accounts.strip()
         if raw_list:
-            return frozenset(part.strip() for part in raw_list.split(",") if part.strip())
+            return frozenset(
+                part.strip() for part in raw_list.split(",") if part.strip()
+            )
         single = self.firebase_functions_service_account.strip()
         if single:
             return frozenset({single})

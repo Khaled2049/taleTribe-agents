@@ -1,17 +1,19 @@
 """Tests for brain integration in generateStoryChoices."""
+
 import os
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 os.environ["USE_MOCK"] = "true"
 os.environ["GOOGLE_CLOUD_PROJECT"] = "test-project"
 
 from agents.storyAgent.agent import StoryAgent, _extract_choices_prose
 
-
 # ---------------------------------------------------------------------------
 # _extract_choices_prose helper
 # ---------------------------------------------------------------------------
+
 
 class TestExtractChoicesProse:
     def test_extracts_opening_scene_and_choices(self):
@@ -19,7 +21,10 @@ class TestExtractChoicesProse:
             "storyId": "s1",
             "openingScene": "The rain had been falling for three days.",
             "choices": [
-                {"label": "Elena finds letter", "sceneText": "She found it under the floorboard."},
+                {
+                    "label": "Elena finds letter",
+                    "sceneText": "She found it under the floorboard.",
+                },
                 {"label": "Stranger arrives", "sceneText": "The door swung open."},
             ],
         }
@@ -63,7 +68,11 @@ class TestExtractChoicesProse:
         result = {
             "storyId": "s1",
             "choices": [
-                {"label": "The story reaches its end", "sceneText": "The long silence finally broke.", "isFinal": True},
+                {
+                    "label": "The story reaches its end",
+                    "sceneText": "The long silence finally broke.",
+                    "isFinal": True,
+                },
             ],
         }
         prose = _extract_choices_prose(result)
@@ -74,21 +83,24 @@ class TestExtractChoicesProse:
 # Brain wiring in generate_story_choices
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 class TestGenerateStoryChoicesBrain:
     def _make_agent(self):
         agent = StoryAgent(project_id="test-project")
         # Mock the story choices tool to avoid Firestore
         agent.story_choices_tool = MagicMock()
-        agent.story_choices_tool.execute = AsyncMock(return_value={
-            "storyId": "s1",
-            "openingScene": "Opening prose.",
-            "choices": [
-                {"label": "A", "sceneText": "Scene A."},
-                {"label": "B", "sceneText": "Scene B."},
-                {"label": "C", "sceneText": "Scene C."},
-            ],
-        })
+        agent.story_choices_tool.execute = AsyncMock(
+            return_value={
+                "storyId": "s1",
+                "openingScene": "Opening prose.",
+                "choices": [
+                    {"label": "A", "sceneText": "Scene A."},
+                    {"label": "B", "sceneText": "Scene B."},
+                    {"label": "C", "sceneText": "Scene C."},
+                ],
+            }
+        )
         return agent
 
     async def test_falls_back_gracefully_when_embedder_none(self):
@@ -144,19 +156,23 @@ class TestGenerateStoryChoicesBrain:
 
         background_tasks.add_task.assert_called_once()
         call_args = background_tasks.add_task.call_args
-        assert call_args[0][0] == mock_brain.reflect  # first positional arg is brain.reflect
+        assert (
+            call_args[0][0] == mock_brain.reflect
+        )  # first positional arg is brain.reflect
 
     async def test_no_reflection_when_no_background_tasks(self):
         agent = self._make_agent()
 
         mock_brain = MagicMock()
-        mock_brain.assemble = AsyncMock(return_value=MagicMock(
-            text="ctx", semantic_count=0, episodic_count=0
-        ))
+        mock_brain.assemble = AsyncMock(
+            return_value=MagicMock(text="ctx", semantic_count=0, episodic_count=0)
+        )
         mock_brain.reflect = AsyncMock()
 
         with patch.object(agent, "_make_brain", return_value=mock_brain):
-            await agent.generate_story_choices("s1", "opening", user_id="u1", background_tasks=None)
+            await agent.generate_story_choices(
+                "s1", "opening", user_id="u1", background_tasks=None
+            )
 
         mock_brain.reflect.assert_not_awaited()
 
@@ -178,13 +194,14 @@ class TestGenerateStoryChoicesBrain:
         agent = self._make_agent()
 
         mock_brain = MagicMock()
-        mock_brain.assemble = AsyncMock(return_value=MagicMock(
-            text="ctx", semantic_count=0, episodic_count=0
-        ))
+        mock_brain.assemble = AsyncMock(
+            return_value=MagicMock(text="ctx", semantic_count=0, episodic_count=0)
+        )
 
         with patch.object(agent, "_make_brain", return_value=mock_brain):
             await agent.generate_story_choices(
-                "s1", "continuation",
+                "s1",
+                "continuation",
                 current_content="<p>Elena reached the door.</p>",
                 user_id="u1",
             )
@@ -196,16 +213,18 @@ class TestGenerateStoryChoicesBrain:
 
     async def test_no_reflection_when_result_has_empty_choices(self):
         agent = self._make_agent()
-        agent.story_choices_tool.execute = AsyncMock(return_value={
-            "storyId": "s1",
-            "choices": [],
-            "error": "LLM failed",
-        })
+        agent.story_choices_tool.execute = AsyncMock(
+            return_value={
+                "storyId": "s1",
+                "choices": [],
+                "error": "LLM failed",
+            }
+        )
 
         mock_brain = MagicMock()
-        mock_brain.assemble = AsyncMock(return_value=MagicMock(
-            text="ctx", semantic_count=0, episodic_count=0
-        ))
+        mock_brain.assemble = AsyncMock(
+            return_value=MagicMock(text="ctx", semantic_count=0, episodic_count=0)
+        )
 
         background_tasks = MagicMock()
 

@@ -1,4 +1,5 @@
 """Shared utilities for the storyAgent package."""
+
 from typing import Any
 
 

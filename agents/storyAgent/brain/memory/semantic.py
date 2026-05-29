@@ -1,11 +1,13 @@
 """Semantic memory layer — facts, characters, lore, retrieved via embedding search."""
+
 import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any
-from google.cloud import firestore
+
 import anyio
 import numpy as np
+from google.cloud import firestore
 
 from ..types import MemoryDocument
 from .constants import MEMORY_FETCH_LIMIT
@@ -20,7 +22,11 @@ class SemanticMemoryLayer:
         self._embedder = embedder
 
     def _collection(self):
-        return self._db.collection("stories").document(self._context_id).collection("semantic_memory")
+        return (
+            self._db.collection("stories")
+            .document(self._context_id)
+            .collection("semantic_memory")
+        )
 
     async def retrieve(self, query: str, top_k: int = 5) -> list[MemoryDocument]:
         if not query:
@@ -54,17 +60,21 @@ class SemanticMemoryLayer:
         scored.sort(key=lambda x: x[0], reverse=True)
         results = []
         for score, doc_id, data in scored[:top_k]:
-            results.append(MemoryDocument(
-                id=doc_id,
-                text=data.get("text", ""),
-                embedding=data.get("embedding", []),
-                created_at=data.get("created_at", datetime.now(timezone.utc)),
-                data=data.get("data", {}),
-                type=data.get("type", ""),
-            ))
+            results.append(
+                MemoryDocument(
+                    id=doc_id,
+                    text=data.get("text", ""),
+                    embedding=data.get("embedding", []),
+                    created_at=data.get("created_at", datetime.now(timezone.utc)),
+                    data=data.get("data", {}),
+                    type=data.get("type", ""),
+                )
+            )
         return results
 
-    async def store(self, text: str, type: str = "", data: dict[str, Any] | None = None) -> str:
+    async def store(
+        self, text: str, type: str = "", data: dict[str, Any] | None = None
+    ) -> str:
         embedding = await self._embedder.embed(text)
         doc_id = str(uuid.uuid4())
         doc = {
@@ -74,16 +84,18 @@ class SemanticMemoryLayer:
             "embedding": embedding,
             "created_at": datetime.now(timezone.utc),
         }
+
         def _set():
             self._collection().document(doc_id).set(doc)
+
         await anyio.to_thread.run_sync(_set)
         return doc_id
-
 
     async def clear(self) -> None:
         def _delete_all():
             for doc in self._collection().stream():
                 doc.reference.delete()
+
         await anyio.to_thread.run_sync(_delete_all)
 
 

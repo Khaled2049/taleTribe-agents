@@ -1,4 +1,5 @@
 """Tests for per-user rate limiting."""
+
 import os
 from unittest.mock import AsyncMock
 
@@ -78,7 +79,11 @@ def test_agent_execute_rejects_empty_user_id(monkeypatch):
     with TestClient(test_app) as client:
         response = client.post(
             "/agent/execute",
-            json={"action": "generateStory", "parameters": {"storyId": "s1"}, "user_id": ""},
+            json={
+                "action": "generateStory",
+                "parameters": {"storyId": "s1"},
+                "user_id": "",
+            },
         )
 
     assert response.status_code == 422

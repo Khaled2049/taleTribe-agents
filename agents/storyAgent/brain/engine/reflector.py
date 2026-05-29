@@ -1,14 +1,15 @@
 """Memory reflector — post-response extraction pipeline."""
+
 import asyncio
 import json
 import logging
 import re
 
-from ..types import ReflectionInput
-from ..memory.working import WorkingMemoryLayer
+from ..memory.episodic import EpisodicMemoryLayer
 from ..memory.procedural import ProceduralMemoryLayer
 from ..memory.semantic import SemanticMemoryLayer
-from ..memory.episodic import EpisodicMemoryLayer
+from ..memory.working import WorkingMemoryLayer
+from ..types import ReflectionInput
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,10 @@ class MemoryReflector:
 
         # Salvage: proceed if ANY layer key carries content. Old behavior required
         # a fully-parseable top-level object; partial JSON now still writes what it can.
-        if not any(payload.get(k) for k in ("working", "procedural", "semantic_facts", "episodic_summary")):
+        if not any(
+            payload.get(k)
+            for k in ("working", "procedural", "semantic_facts", "episodic_summary")
+        ):
             return
 
         await self._apply_reflection(inp, payload)
@@ -89,7 +93,10 @@ class MemoryReflector:
             for fact in facts[:5]:
                 if isinstance(fact, str) and fact.strip():
                     tasks.append(
-                        ("semantic", self._semantic.store(fact.strip(), type="extracted_fact"))
+                        (
+                            "semantic",
+                            self._semantic.store(fact.strip(), type="extracted_fact"),
+                        )
                     )
 
         summary = payload.get("episodic_summary", "")
@@ -107,7 +114,9 @@ class MemoryReflector:
         if not tasks:
             return
 
-        results = await asyncio.gather(*(coro for _, coro in tasks), return_exceptions=True)
+        results = await asyncio.gather(
+            *(coro for _, coro in tasks), return_exceptions=True
+        )
         for (name, _), result in zip(tasks, results):
             if isinstance(result, Exception):
                 logger.warning("Brain reflect[%s] failed: %s", name, result)

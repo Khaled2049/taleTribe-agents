@@ -1,6 +1,8 @@
 """Context builder for aggregating story context from Firestore."""
+
 import os
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List, Optional
+
 from google.cloud import firestore
 
 from .utils import sanitize_for_prompt
@@ -16,14 +18,14 @@ class StoryContextBuilder:
         """Initialize Firestore client."""
         # Check if running with emulator
         emulator_host = os.getenv("FIRESTORE_EMULATOR_HOST")
-        
+
         if project_id:
             self.db = firestore.Client(project=project_id)
         else:
             self.db = firestore.Client()
-        
+
         # Configure emulator if FIRESTORE_EMULATOR_HOST is set
-        # The Firestore client automatically uses the emulator when 
+        # The Firestore client automatically uses the emulator when
         # FIRESTORE_EMULATOR_HOST environment variable is set
         if emulator_host:
             os.environ["FIRESTORE_EMULATOR_HOST"] = emulator_host
@@ -62,6 +64,7 @@ class StoryContextBuilder:
         def _chapter_sort_key(ch: Dict[str, Any]) -> int:
             n = ch.get("chapterNumber")
             return n if n is not None else ch.get("order", 0)
+
         chapters.sort(key=_chapter_sort_key)
 
         return {
@@ -113,19 +116,31 @@ class StoryContextBuilder:
 
         # Story metadata
         prompt_parts.append("=== STORY CONTEXT ===")
-        prompt_parts.append(f"Title: {self._sanitize_for_prompt(story.get('title', 'Untitled'), 200)}")
-        prompt_parts.append(f"Genre: {self._sanitize_for_prompt(story.get('genre', 'Not specified'), 100)}")
-        prompt_parts.append(f"Tone: {self._sanitize_for_prompt(story.get('tone', 'Not specified'), 100)}")
+        prompt_parts.append(
+            f"Title: {self._sanitize_for_prompt(story.get('title', 'Untitled'), 200)}"
+        )
+        prompt_parts.append(
+            f"Genre: {self._sanitize_for_prompt(story.get('genre', 'Not specified'), 100)}"
+        )
+        prompt_parts.append(
+            f"Tone: {self._sanitize_for_prompt(story.get('tone', 'Not specified'), 100)}"
+        )
         if story.get("description"):
-            prompt_parts.append(f"Description: {self._sanitize_for_prompt(story.get('description'), 1200)}")
+            prompt_parts.append(
+                f"Description: {self._sanitize_for_prompt(story.get('description'), 1200)}"
+            )
 
         # Characters
         if characters:
             prompt_parts.append("\n=== CHARACTERS ===")
             for char in characters:
-                char_info = f"- {self._sanitize_for_prompt(char.get('name', 'Unnamed'), 200)}"
+                char_info = (
+                    f"- {self._sanitize_for_prompt(char.get('name', 'Unnamed'), 200)}"
+                )
                 if char.get("role"):
-                    char_info += f" (Role: {self._sanitize_for_prompt(char.get('role'), 120)})"
+                    char_info += (
+                        f" (Role: {self._sanitize_for_prompt(char.get('role'), 120)})"
+                    )
                 if char.get("backstory"):
                     char_info += f"\n  Backstory: {self._sanitize_for_prompt(char.get('backstory'), 1500)}"
                 if char.get("traits"):
@@ -138,9 +153,13 @@ class StoryContextBuilder:
         if places:
             prompt_parts.append("\n=== PLACES ===")
             for place in places:
-                place_info = f"- {self._sanitize_for_prompt(place.get('name', 'Unnamed'), 200)}"
+                place_info = (
+                    f"- {self._sanitize_for_prompt(place.get('name', 'Unnamed'), 200)}"
+                )
                 if place.get("description"):
-                    place_info += f": {self._sanitize_for_prompt(place.get('description'), 900)}"
+                    place_info += (
+                        f": {self._sanitize_for_prompt(place.get('description'), 900)}"
+                    )
                 if place.get("atmosphere"):
                     place_info += f"\n  Atmosphere: {self._sanitize_for_prompt(place.get('atmosphere'), 500)}"
                 prompt_parts.append(place_info)
@@ -151,9 +170,13 @@ class StoryContextBuilder:
             for plot in plots:
                 plot_info = f"- {self._sanitize_for_prompt(plot.get('title', 'Untitled Plot'), 200)}"
                 if plot.get("description"):
-                    plot_info += f": {self._sanitize_for_prompt(plot.get('description'), 1200)}"
+                    plot_info += (
+                        f": {self._sanitize_for_prompt(plot.get('description'), 1200)}"
+                    )
                 if plot.get("type"):
-                    plot_info += f"\n  Type: {self._sanitize_for_prompt(plot.get('type'), 100)}"
+                    plot_info += (
+                        f"\n  Type: {self._sanitize_for_prompt(plot.get('type'), 100)}"
+                    )
                 prompt_parts.append(plot_info)
 
         # Existing chapters summary
@@ -190,10 +213,14 @@ class StoryContextBuilder:
 
         meta_parts = [f"Title: {story.get('title', 'Untitled')}"]
         if story.get("genre"):
-            meta_parts.append(f"Genre: {self._sanitize_for_prompt(story.get('genre'), 100)}")
+            meta_parts.append(
+                f"Genre: {self._sanitize_for_prompt(story.get('genre'), 100)}"
+            )
         if story.get("tone"):
-            meta_parts.append(f"Tone: {self._sanitize_for_prompt(story.get('tone'), 100)}")
-        safe_title = self._sanitize_for_prompt(story.get('title', 'Untitled'), 200)
+            meta_parts.append(
+                f"Tone: {self._sanitize_for_prompt(story.get('tone'), 100)}"
+            )
+        safe_title = self._sanitize_for_prompt(story.get("title", "Untitled"), 200)
         meta_parts = [f"Title: {safe_title}"] + [p for p in meta_parts[1:]]
         parts.append(" | ".join(meta_parts))
 
@@ -211,7 +238,9 @@ class StoryContextBuilder:
         if plots:
             parts.append("\nPlots:")
             for p in plots:
-                title = self._sanitize_for_prompt(p.get("title") or p.get("name") or "Untitled", 120)
+                title = self._sanitize_for_prompt(
+                    p.get("title") or p.get("name") or "Untitled", 120
+                )
                 raw_desc = self._sanitize_for_prompt(p.get("description") or "", 100)
                 desc = raw_desc[:100]
                 suffix = "…" if len(raw_desc) > 100 else ""
@@ -232,4 +261,3 @@ class StoryContextBuilder:
             f"{body}\n"
             "</untrusted_story_data>"
         )
-

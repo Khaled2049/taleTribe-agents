@@ -1,18 +1,26 @@
 """Tool for brainstorming ideas."""
-from typing import Dict, Any, List, Optional
+
+from typing import Any, Dict, List, Optional
 
 from ..context_builder import StoryContextBuilder
-from ..llm_provider import get_llm_provider, LLMProvider
+from ..llm_provider import LLMProvider, get_llm_provider
 
 
 class BrainstormingTool:
     """Tool for brainstorming ideas."""
 
-    def __init__(self, project_id: str, location: str = "us-central1", llm_provider: Optional[LLMProvider] = None):
+    def __init__(
+        self,
+        project_id: str,
+        location: str = "us-central1",
+        llm_provider: Optional[LLMProvider] = None,
+    ):
         """Initialize the brainstorming tool."""
         self.project_id = project_id
         self.location = location
-        self.llm_provider: LLMProvider = llm_provider or get_llm_provider(project_id, location)
+        self.llm_provider: LLMProvider = llm_provider or get_llm_provider(
+            project_id, location
+        )
         self.context_builder = StoryContextBuilder(project_id)
 
     async def execute(
@@ -55,7 +63,6 @@ For each character, provide:
 - Backstory (2-3 sentences)
 - Motivations and goals
 - How they fit into the existing story context""",
-
             "plots": f"""Generate {count} plot ideas or plot developments for this {genre} story with a {tone} tone.
 
 {formatted_context}
@@ -66,7 +73,6 @@ For each plot idea, provide:
 - How it connects to existing story elements
 - Potential conflicts or tensions
 - How it advances the story""",
-
             "places": f"""Generate {count} location or setting ideas for this {genre} story with a {tone} tone.
 
 {formatted_context}
@@ -77,7 +83,6 @@ For each place, provide:
 - Key features or landmarks
 - How it fits into the story
 - Potential events that could happen there""",
-
             "themes": f"""Generate {count} theme ideas for this {genre} story with a {tone} tone.
 
 {formatted_context}

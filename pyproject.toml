@@ -30,6 +30,7 @@ pytest-asyncio = "*"
 ruff = "*"
 black = "*"
 isort = "*"
+pre-commit = "^4.6.0"
 
 [tool.poetry.group.image-gen]
 optional = true

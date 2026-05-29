@@ -1,10 +1,11 @@
 """LLM provider abstraction — all AI calls route through creditProxy."""
+
 import json
 import logging
 import os
 from abc import ABC, abstractmethod
 from contextvars import ContextVar
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
 
 import httpx
 from tenacity import (
@@ -18,7 +19,9 @@ logger = logging.getLogger(__name__)
 
 # Per-request BYOK config. Set in server.py before each agent call.
 # ContextVar is async-safe: each asyncio Task sees its own copy.
-_byok_config: ContextVar[Optional[Dict[str, str]]] = ContextVar("byok_config", default=None)
+_byok_config: ContextVar[Optional[Dict[str, str]]] = ContextVar(
+    "byok_config", default=None
+)
 _firebase_token: ContextVar[Optional[str]] = ContextVar("firebase_token", default=None)
 
 
@@ -133,12 +136,18 @@ class CreditProxyProvider(LLMProvider):
 
     def _build_payload(self, prompt: str) -> Dict[str, Any]:
         config = _byok_config.get()
-        user_id = config.get("user_id", self.platform_user_id) if config else self.platform_user_id
+        user_id = (
+            config.get("user_id", self.platform_user_id)
+            if config
+            else self.platform_user_id
+        )
         provider = config.get("provider", "") if config else ""
         api_key = config.get("api_key", "") if config else ""
         model = config.get("model", "") if config else ""
         if api_key:
-            logger.info("[LLM] BYOK  provider=%s model=%s user=%s", provider, model, user_id)
+            logger.info(
+                "[LLM] BYOK  provider=%s model=%s user=%s", provider, model, user_id
+            )
         else:
             logger.info("[LLM] platform  user=%s proxy=%s", user_id, self.base_url)
         return {
@@ -212,7 +221,9 @@ class CreditProxyProvider(LLMProvider):
             return []
 
 
-def get_llm_provider(project_id: Optional[str] = None, location: str = "us-central1") -> LLMProvider:
+def get_llm_provider(
+    project_id: Optional[str] = None, location: str = "us-central1"
+) -> LLMProvider:
     """Return a CreditProxyProvider. CREDIT_PROXY_URL must be set.
 
     Provider/model selection is configured entirely in creditProxy via LLM_PROVIDER:

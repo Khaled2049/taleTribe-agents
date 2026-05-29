@@ -1,10 +1,12 @@
 """Episodic memory layer — past events and session summaries, retrieved via embedding search."""
+
 import logging
 import uuid
 from datetime import datetime, timezone
-from google.cloud import firestore
+
 import anyio
 import numpy as np
+from google.cloud import firestore
 
 from ..types import MemoryDocument
 from .constants import MEMORY_FETCH_LIMIT
@@ -20,7 +22,11 @@ class EpisodicMemoryLayer:
         self._embedder = embedder
 
     def _collection(self):
-        return self._db.collection("stories").document(self._context_id).collection("episodic_memory")
+        return (
+            self._db.collection("stories")
+            .document(self._context_id)
+            .collection("episodic_memory")
+        )
 
     async def retrieve(self, query: str, top_k: int = 3) -> list[MemoryDocument]:
         if not query:
@@ -54,19 +60,22 @@ class EpisodicMemoryLayer:
         scored.sort(key=lambda x: x[0], reverse=True)
         results = []
         for score, doc_id, data in scored[:top_k]:
-            results.append(MemoryDocument(
-                id=doc_id,
-                text=data.get("text", ""),
-                embedding=data.get("embedding", []),
-                created_at=data.get("created_at", datetime.now(timezone.utc)),
-                summary=data.get("summary", ""),
-            ))
+            results.append(
+                MemoryDocument(
+                    id=doc_id,
+                    text=data.get("text", ""),
+                    embedding=data.get("embedding", []),
+                    created_at=data.get("created_at", datetime.now(timezone.utc)),
+                    summary=data.get("summary", ""),
+                )
+            )
         return results
 
     async def clear(self) -> None:
         def _delete_all():
             for doc in self._collection().stream():
                 doc.reference.delete()
+
         await anyio.to_thread.run_sync(_delete_all)
 
     async def store(self, text: str, summary: str) -> str:
@@ -78,7 +87,9 @@ class EpisodicMemoryLayer:
             "embedding": embedding,
             "created_at": datetime.now(timezone.utc),
         }
+
         def _set():
             self._collection().document(doc_id).set(doc)
+
         await anyio.to_thread.run_sync(_set)
         return doc_id

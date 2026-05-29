@@ -1,11 +1,13 @@
 """Unit tests for MemoryReflector with mocked dependencies."""
-import pytest
+
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from agents.storyAgent.brain.engine.reflector import (
     MemoryReflector,
-    _parse_json_object,
     _parse_json_array,
+    _parse_json_object,
     _parse_reflection_payload,
     _strip_fences,
 )
@@ -28,11 +30,19 @@ def _make_reflector(llm_response: str = "{}"):
     episodic = MagicMock()
     episodic.store = AsyncMock(return_value="ep-id")
 
-    return MemoryReflector(llm, working, procedural, semantic, episodic), working, procedural, semantic, episodic
+    return (
+        MemoryReflector(llm, working, procedural, semantic, episodic),
+        working,
+        procedural,
+        semantic,
+        episodic,
+    )
 
 
 def _make_input(response="Elena found the letter in the library."):
-    assembled = AssembledPrompt(text="context", working_injected=True, procedural_injected=True)
+    assembled = AssembledPrompt(
+        text="context", working_injected=True, procedural_injected=True
+    )
     return ReflectionInput(
         user_message="Write the next scene",
         assistant_response=response,
@@ -55,7 +65,9 @@ _COMBINED_PAYLOAD = """{
 
 @pytest.mark.asyncio
 async def test_reflect_calls_all_four_layers():
-    reflector, working, procedural, semantic, episodic = _make_reflector(_COMBINED_PAYLOAD)
+    reflector, working, procedural, semantic, episodic = _make_reflector(
+        _COMBINED_PAYLOAD
+    )
 
     await reflector.reflect(_make_input())
 
@@ -95,7 +107,9 @@ async def test_reflect_writes_procedural_when_present():
     }"""
     reflector, working, procedural, semantic, episodic = _make_reflector(payload)
     await reflector.reflect(_make_input())
-    procedural.write_global.assert_awaited_once_with({"tone": "melancholic", "pov": "first"})
+    procedural.write_global.assert_awaited_once_with(
+        {"tone": "melancholic", "pov": "first"}
+    )
     working.patch.assert_not_awaited()
     semantic.store.assert_not_awaited()
     episodic.store.assert_not_awaited()
@@ -129,6 +143,7 @@ async def test_reflect_skips_episodic_on_empty_summary():
 
 
 # --- Helper function tests ---
+
 
 def test_parse_reflection_payload_combined():
     parsed = _parse_reflection_payload(_COMBINED_PAYLOAD)

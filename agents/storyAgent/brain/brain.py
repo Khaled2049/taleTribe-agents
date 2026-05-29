@@ -1,18 +1,19 @@
 """Brain — four-layer cognitive memory system public API."""
+
 import asyncio
 import logging
 from typing import Optional
 
 from google.cloud import firestore
 
-from .types import BrainConfig, AssembledPrompt, ReflectionInput
-from .engine.router import MemoryRouter
 from .engine.assembler import PromptAssembler
 from .engine.reflector import MemoryReflector
-from .memory.working import WorkingMemoryLayer
+from .engine.router import MemoryRouter
+from .memory.episodic import EpisodicMemoryLayer
 from .memory.procedural import ProceduralMemoryLayer
 from .memory.semantic import SemanticMemoryLayer
-from .memory.episodic import EpisodicMemoryLayer
+from .memory.working import WorkingMemoryLayer
+from .types import AssembledPrompt, BrainConfig, ReflectionInput
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +50,13 @@ class Brain:
         self._semantic = semantic
         self._episodic = episodic
 
-        self._reflector = MemoryReflector(llm_provider, working, procedural, semantic, episodic)
+        self._reflector = MemoryReflector(
+            llm_provider, working, procedural, semantic, episodic
+        )
 
-    async def assemble(self, user_message: str, action_hint: str = "") -> AssembledPrompt:
+    async def assemble(
+        self, user_message: str, action_hint: str = ""
+    ) -> AssembledPrompt:
         """Fetch all relevant memory layers concurrently and build layered prompt."""
         decision = self._router.route(user_message, action_hint)
 
@@ -59,12 +64,18 @@ class Brain:
             return []
 
         semantic_coro = (
-            self._semantic.retrieve(decision.semantic_query, self._config.semantic_top_k)
-            if decision.fetch_semantic else _noop_docs()
+            self._semantic.retrieve(
+                decision.semantic_query, self._config.semantic_top_k
+            )
+            if decision.fetch_semantic
+            else _noop_docs()
         )
         episodic_coro = (
-            self._episodic.retrieve(decision.episodic_query, self._config.episodic_top_k)
-            if decision.fetch_episodic else _noop_docs()
+            self._episodic.retrieve(
+                decision.episodic_query, self._config.episodic_top_k
+            )
+            if decision.fetch_episodic
+            else _noop_docs()
         )
         working_coro = self._working.read() if decision.fetch_working else None
         procedural_coro = self._procedural.read() if decision.fetch_procedural else None
@@ -82,7 +93,9 @@ class Brain:
         semantic_docs = results[2] if not isinstance(results[2], Exception) else []
         episodic_docs = results[3] if not isinstance(results[3], Exception) else []
 
-        return self._assembler.assemble(user_message, working, procedural, semantic_docs, episodic_docs)
+        return self._assembler.assemble(
+            user_message, working, procedural, semantic_docs, episodic_docs
+        )
 
     async def clear(self) -> None:
         """Delete all story-scoped brain memory. Global procedural is kept."""

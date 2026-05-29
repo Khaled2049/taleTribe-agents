@@ -2,16 +2,17 @@
 
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+
 from app.api.routes import router
 from app.config import settings
 from app.services.image_service import ImageService
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 # Configure logging
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper()),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
@@ -20,21 +21,23 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """
     Lifespan context manager for startup and shutdown events.
-    
+
     Loads the model on startup and cleans up on shutdown.
     """
     # Startup: Load model
     logger.info("Starting application...")
     try:
         logger.info("Loading image generation model...")
-        image_service = ImageService()
+        ImageService()  # warm-load the model into the process at startup
         logger.info("Model loaded successfully. Application ready.")
     except Exception as e:
         logger.error(f"Failed to load model during startup: {str(e)}")
-        logger.error("Application will start but image generation will fail until model is loaded.")
-    
+        logger.error(
+            "Application will start but image generation will fail until model is loaded."
+        )
+
     yield
-    
+
     # Shutdown: Cleanup (if needed)
     logger.info("Shutting down application...")
 
@@ -66,7 +69,7 @@ app.include_router(router, prefix="/api/v1", tags=["Image Generation"])
 async def root():
     """
     Root endpoint.
-    
+
     Returns:
         Welcome message and API information
     """
@@ -75,17 +78,17 @@ async def root():
         "version": settings.api_version,
         "docs": "/docs",
         "health": "/api/v1/health",
-        "generate_cover": "/api/v1/generate-cover"
+        "generate_cover": "/api/v1/generate-cover",
     }
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
         port=8000,
         reload=True,
-        log_level=settings.log_level.lower()
+        log_level=settings.log_level.lower(),
     )
-
