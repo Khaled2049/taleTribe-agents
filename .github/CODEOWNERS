@@ -1,0 +1,19 @@
+# CODEOWNERS
+# These owners are requested for review when someone opens a pull request.
+# Order matters: the last matching pattern takes precedence.
+# Docs: https://docs.github.com/articles/about-code-owners
+
+# Default owner for everything in the repo
+*       @Khaled2049
+
+# Agent implementation
+/agents/        @Khaled2049
+
+# Infrastructure & deployment
+/terraform/     @Khaled2049
+/.github/       @Khaled2049
+Dockerfile      @Khaled2049
+
+# Dependency & project config
+/pyproject.toml @Khaled2049
+/poetry.lock    @Khaled2049
