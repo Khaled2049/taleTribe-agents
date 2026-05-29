@@ -1,12 +1,18 @@
 """LLM provider abstraction — all AI calls route through creditProxy."""
-import os
 import json
+import logging
+import os
 from abc import ABC, abstractmethod
 from contextvars import ContextVar
 from typing import Optional, Dict, Any, List
-import logging
-import anyio
+
 import httpx
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,21 +76,21 @@ def _classify_http_error(
     return LLMProviderError(f"creditProxy error {status}: {body}")
 
 
-def _gcp_id_token(audience: str) -> str:
-    """Fetch a GCP OIDC identity token from the metadata server.
+async def _gcp_id_token_async(audience: str) -> str:
+    """Fetch a GCP OIDC identity token from the metadata server (async).
 
     Returns '' when not running on GCP (local dev / tests) so callers can
     skip adding the Authorization header without any special-casing.
     """
     try:
-        resp = httpx.get(
-            "http://metadata.google.internal/computeMetadata/v1/instance/"
-            f"service-accounts/default/identity?audience={audience}",
-            headers={"Metadata-Flavor": "Google"},
-            timeout=2.0,
-        )
-        resp.raise_for_status()
-        return resp.text
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get(
+                "http://metadata.google.internal/computeMetadata/v1/instance/"
+                f"service-accounts/default/identity?audience={audience}",
+                headers={"Metadata-Flavor": "Google"},
+            )
+            resp.raise_for_status()
+            return resp.text
     except Exception:
         return ""  # metadata server unreachable — not on GCP
 
@@ -93,12 +99,8 @@ class LLMProvider(ABC):
     """Abstract base class for LLM providers."""
 
     @abstractmethod
-    def generate_content(self, prompt: str) -> str:
-        pass
-
     async def generate_content_async(self, prompt: str) -> str:
-        """Generate content in a worker thread for async call sites."""
-        return await anyio.to_thread.run_sync(self.generate_content, prompt)
+        """Generate text content from a prompt."""
 
     @abstractmethod
     async def generate_structured_content(
@@ -107,11 +109,11 @@ class LLMProvider(ABC):
         user_prompt: str,
         response_schema: Dict[str, Any],
     ) -> List[str]:
-        pass
+        """Generate structured (JSON array) content from system+user prompts."""
 
 
 class CreditProxyProvider(LLMProvider):
-    """Routes LLM calls through the creditProxy gateway.
+    """Routes LLM calls through the creditProxy gateway (fully async).
 
     Platform requests use the gateway's default provider.
     BYOK requests read per-request config from the _byok_config ContextVar
@@ -121,6 +123,9 @@ class CreditProxyProvider(LLMProvider):
     def __init__(self, base_url: str, platform_user_id: str = "platform"):
         self.base_url = base_url.rstrip("/")
         self.platform_user_id = platform_user_id
+        # Shared async client — reused across all requests in this process.
+        # Timeout covers the full LLM round-trip (up to 300 s).
+        self._client = httpx.AsyncClient(timeout=300.0)
 
     def _build_payload(self, prompt: str) -> Dict[str, Any]:
         config = _byok_config.get()
@@ -141,19 +146,24 @@ class CreditProxyProvider(LLMProvider):
             "max_output_tokens": 8192,
         }
 
-    def generate_content(self, prompt: str) -> str:
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((BackendUnavailableError, httpx.RequestError)),
+        reraise=True,
+    )
+    async def generate_content_async(self, prompt: str) -> str:
         payload = self._build_payload(prompt)
-        headers = {}
-        if token := _gcp_id_token(self.base_url):
+        headers: Dict[str, str] = {}
+        if token := await _gcp_id_token_async(self.base_url):
             headers["Authorization"] = f"Bearer {token}"
         if firebase_token := _firebase_token.get():
             headers["X-Firebase-Token"] = firebase_token
         try:
-            resp = httpx.post(
+            resp = await self._client.post(
                 f"{self.base_url}/v1/generate",
                 json=payload,
                 headers=headers,
-                timeout=300.0,
             )
             resp.raise_for_status()
             data = resp.json()
