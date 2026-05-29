@@ -12,11 +12,12 @@ RUN apt-get update && apt-get install -y \
 # Copy Poetry manifests
 COPY pyproject.toml poetry.lock ./
 
-# Install Poetry, export main deps to requirements, then remove Poetry
-RUN pip install --no-cache-dir poetry \
+# Install Poetry + export plugin (export was removed from Poetry core in 2.0),
+# export main deps to requirements, then remove Poetry
+RUN pip install --no-cache-dir poetry poetry-plugin-export \
     && poetry export -f requirements.txt --only main --without-hashes -o /tmp/requirements.txt \
     && pip install --no-cache-dir -r /tmp/requirements.txt \
-    && pip uninstall -y poetry
+    && pip uninstall -y poetry poetry-plugin-export
 
 # Copy the entire agents directory
 COPY agents/ /app/agents/
