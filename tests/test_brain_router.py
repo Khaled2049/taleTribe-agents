@@ -1,4 +1,5 @@
 """Unit tests for MemoryRouter."""
+
 from agents.storyAgent.brain.engine.router import MemoryRouter
 
 
@@ -14,7 +15,12 @@ def test_default_route_fetches_all():
 
 def test_brainstorm_skips_semantic_and_episodic():
     router = MemoryRouter()
-    for hint in ["brainstorm", "brainstormCharacter", "brainstormPlot", "brainstormIdeas"]:
+    for hint in [
+        "brainstorm",
+        "brainstormCharacter",
+        "brainstormPlot",
+        "brainstormIdeas",
+    ]:
         d = router.route("Give me ideas", hint)
         assert d.fetch_semantic is False, f"Expected semantic=False for hint={hint}"
         assert d.fetch_episodic is False, f"Expected episodic=False for hint={hint}"

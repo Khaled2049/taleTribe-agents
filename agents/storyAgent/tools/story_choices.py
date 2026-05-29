@@ -1,21 +1,12 @@
 """Tool for generating interactive story choices for the co-write feature."""
+
 import json
 import logging
 import re
-import sys
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-try:
-    from ..context_builder import StoryContextBuilder
-    from ..llm_provider import get_llm_provider, LLMProvider
-except ImportError:
-    current_dir = Path(__file__).parent.parent
-    parent_dir = current_dir.parent.parent
-    if str(parent_dir) not in sys.path:
-        sys.path.insert(0, str(parent_dir))
-    from agents.storyAgent.context_builder import StoryContextBuilder
-    from agents.storyAgent.llm_provider import get_llm_provider, LLMProvider
+from ..context_builder import StoryContextBuilder
+from ..llm_provider import LLMProvider, get_llm_provider
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +47,17 @@ def _safe_json_parse(text: str) -> Any:
 class StoryChoicesTool:
     """Generate opening scene + choices (opening mode) or continuation choices (co-write mode)."""
 
-    def __init__(self, project_id: str, location: str = "us-central1", llm_provider: Optional[LLMProvider] = None):
+    def __init__(
+        self,
+        project_id: str,
+        location: str = "us-central1",
+        llm_provider: Optional[LLMProvider] = None,
+    ):
         self.project_id = project_id
         self.location = location
-        self.llm_provider: LLMProvider = llm_provider or get_llm_provider(project_id, location)
+        self.llm_provider: LLMProvider = llm_provider or get_llm_provider(
+            project_id, location
+        )
         self.context_builder = StoryContextBuilder(project_id)
 
     # ------------------------------------------------------------------
@@ -82,18 +80,20 @@ class StoryChoicesTool:
             "- `label` must be 5–8 words, action-oriented, spoiler-free.\n"
             "- Maintain the genre's tone throughout.\n"
             "- Use only characters and places from the blueprint.\n\n"
-            'Respond with this exact JSON shape (no extra keys):\n'
-            '{\n'
+            "Respond with this exact JSON shape (no extra keys):\n"
+            "{\n"
             '  "openingScene": "<2-3 paragraph prose>",\n'
             '  "choices": [\n'
             '    { "label": "<5-8 word action label>", "sceneText": "<prose paragraph>" },\n'
             '    { "label": "...", "sceneText": "..." },\n'
             '    { "label": "...", "sceneText": "..." }\n'
-            '  ]\n'
-            '}'
+            "  ]\n"
+            "}"
         )
 
-    def _build_continuation_prompt(self, formatted_context: str, current_text: str, turn_count: int = 0) -> str:
+    def _build_continuation_prompt(
+        self, formatted_context: str, current_text: str, turn_count: int = 0
+    ) -> str:
         arc_guidance = ""
         if turn_count >= 10:
             arc_guidance = (
@@ -101,7 +101,7 @@ class StoryChoicesTool:
                 "The story has been developing for many turns. One of your three choices MUST be a "
                 "conclusive direction that moves decisively toward resolving the central conflict and "
                 "providing emotional payoff. Label it clearly (e.g. 'Begin the final reckoning') and "
-                "mark it with `\"isFinal\": true` in the JSON.\n"
+                'mark it with `"isFinal": true` in the JSON.\n'
             )
         elif turn_count >= 8:
             arc_guidance = (
@@ -125,13 +125,13 @@ class StoryChoicesTool:
             "- `label` must be 5–8 words, action-oriented, spoiler-free.\n"
             "- Maintain the genre's tone and character consistency throughout.\n\n"
             'Respond with this exact JSON shape (each choice may optionally include `"isFinal": true`):\n'
-            '{\n'
+            "{\n"
             '  "choices": [\n'
             '    { "label": "<5-8 word action label>", "sceneText": "<prose paragraph>" },\n'
             '    { "label": "...", "sceneText": "..." },\n'
             '    { "label": "...", "sceneText": "..." }\n'
-            '  ]\n'
-            '}'
+            "  ]\n"
+            "}"
         )
 
     def _build_ending_prompt(self, formatted_context: str, current_text: str) -> str:
@@ -146,12 +146,12 @@ class StoryChoicesTool:
             "- Provides emotional payoff and closure for the main characters.\n"
             "- Feels like a satisfying, complete ending — not a cliffhanger.\n"
             "- Is 3–5 paragraphs of polished prose ready to insert into the editor.\n\n"
-            'Respond with this exact JSON shape:\n'
-            '{\n'
+            "Respond with this exact JSON shape:\n"
+            "{\n"
             '  "choices": [\n'
             '    { "label": "The story reaches its end", "sceneText": "<3-5 paragraph closing prose>", "isFinal": true }\n'
-            '  ]\n'
-            '}'
+            "  ]\n"
+            "}"
         )
 
     # ------------------------------------------------------------------
@@ -186,7 +186,10 @@ class StoryChoicesTool:
         """
         logger.info(
             "StoryChoicesTool story_id=%s mode=%s turn_count=%s brain_context=%s",
-            story_id, mode, turn_count, "yes" if brain_context else "no",
+            story_id,
+            mode,
+            turn_count,
+            "yes" if brain_context else "no",
         )
 
         if mode not in ("opening", "continuation", "ending"):
@@ -198,7 +201,11 @@ class StoryChoicesTool:
 
         context = self.context_builder.build_story_context(story_id)
         firestore_context = self.context_builder.format_context_for_prompt(context)
-        formatted_context = (brain_context + "\n\n" + firestore_context) if brain_context else firestore_context
+        formatted_context = (
+            (brain_context + "\n\n" + firestore_context)
+            if brain_context
+            else firestore_context
+        )
         plain_text = _strip_html(current_content) if current_content else ""
 
         if mode == "opening":
@@ -206,22 +213,30 @@ class StoryChoicesTool:
         elif mode == "ending":
             prompt = self._build_ending_prompt(formatted_context, plain_text)
         else:
-            prompt = self._build_continuation_prompt(formatted_context, plain_text, turn_count)
+            prompt = self._build_continuation_prompt(
+                formatted_context, plain_text, turn_count
+            )
 
         logger.info(
             "Full story choices prompt story_id=%s mode=%s:\n%s",
-            story_id, mode, prompt,
+            story_id,
+            mode,
+            prompt,
         )
         raw_response = await self.llm_provider.generate_content_async(prompt)
 
         parsed = _safe_json_parse(raw_response or "")
         if not isinstance(parsed, dict) or "choices" not in parsed:
-            raise ValueError(f"LLM returned unexpected structure: {(raw_response or '')[:200]}")
+            raise ValueError(
+                f"LLM returned unexpected structure: {(raw_response or '')[:200]}"
+            )
 
         choices: List[Dict[str, Any]] = parsed.get("choices", [])
         expected = 1 if mode == "ending" else NUMBER_OF_CHOICES
         if len(choices) != expected:
-            raise ValueError(f"Expected {expected} choice(s) for mode '{mode}', got {len(choices)}.")
+            raise ValueError(
+                f"Expected {expected} choice(s) for mode '{mode}', got {len(choices)}."
+            )
 
         output: Dict[str, Any] = {"storyId": story_id, "choices": choices}
         if mode == "opening":

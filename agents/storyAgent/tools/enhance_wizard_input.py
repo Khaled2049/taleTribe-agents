@@ -1,21 +1,11 @@
 """Tool for enhancing wizard input into richer story scaffolding."""
+
 import json
 import logging
 import re
-import sys
-from pathlib import Path
 from typing import Any, Dict, Optional
 
-# Handle imports for both direct execution and module import
-try:
-    from ..llm_provider import get_llm_provider, LLMProvider
-except ImportError:
-    # Add parent directory to path for direct execution
-    current_dir = Path(__file__).parent.parent
-    parent_dir = current_dir.parent.parent
-    if str(parent_dir) not in sys.path:
-        sys.path.insert(0, str(parent_dir))
-    from agents.storyAgent.llm_provider import get_llm_provider, LLMProvider
+from ..llm_provider import LLMProvider, get_llm_provider
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +13,21 @@ logger = logging.getLogger(__name__)
 class EnhanceWizardInputTool:
     """Enhance wizard inputs for premise, character, place, conflict, and blueprint."""
 
-    def __init__(self, project_id: str, location: str = "us-central1", llm_provider: Optional[LLMProvider] = None):
+    def __init__(
+        self,
+        project_id: str,
+        location: str = "us-central1",
+        llm_provider: Optional[LLMProvider] = None,
+    ):
         self.project_id = project_id
         self.location = location
-        self.llm_provider: LLMProvider = llm_provider or get_llm_provider(project_id, location)
+        self.llm_provider: LLMProvider = llm_provider or get_llm_provider(
+            project_id, location
+        )
 
-    async def execute(self, user_id: str, wizard_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute(
+        self, user_id: str, wizard_type: str, data: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
         Enhance wizard input payload into API contract output.
 
@@ -45,8 +44,12 @@ class EnhanceWizardInputTool:
 
         try:
             response = await self.llm_provider.generate_content_async(prompt)
-        except Exception as exc:
-            logger.exception("EnhanceWizardInputTool LLM call failed user_id=%s type=%s", user_id, wizard_type)
+        except Exception:
+            logger.exception(
+                "EnhanceWizardInputTool LLM call failed user_id=%s type=%s",
+                user_id,
+                wizard_type,
+            )
             raise
 
         if wizard_type == "blueprint":
@@ -54,7 +57,9 @@ class EnhanceWizardInputTool:
 
         return {"enhanced": response.strip()}
 
-    def _build_prompt(self, user_id: str, wizard_type: str, data: Dict[str, Any]) -> str:
+    def _build_prompt(
+        self, user_id: str, wizard_type: str, data: Dict[str, Any]
+    ) -> str:
         type_descriptions = {
             "premise": (
                 "Expand and improve a rough story premise in 2-4 sentences. Keep the core idea, "
@@ -77,7 +82,9 @@ class EnhanceWizardInputTool:
         }
 
         if wizard_type not in type_descriptions:
-            logger.error("EnhanceWizardInputTool unsupported wizard type=%s", wizard_type)
+            logger.error(
+                "EnhanceWizardInputTool unsupported wizard type=%s", wizard_type
+            )
             raise ValueError(f"Unsupported wizard type: {wizard_type}")
 
         payload_json = json.dumps(data, ensure_ascii=True, indent=2)
@@ -133,10 +140,14 @@ class EnhanceWizardInputTool:
 
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if not match:
-            logger.debug("EnhanceWizardInputTool JSON extraction failed: no object found")
+            logger.debug(
+                "EnhanceWizardInputTool JSON extraction failed: no object found"
+            )
             return None
         try:
             return json.loads(match.group(0))
         except json.JSONDecodeError:
-            logger.debug("EnhanceWizardInputTool JSON extraction failed: invalid JSON in matched object")
+            logger.debug(
+                "EnhanceWizardInputTool JSON extraction failed: invalid JSON in matched object"
+            )
             return None

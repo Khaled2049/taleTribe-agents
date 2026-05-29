@@ -1,8 +1,10 @@
 """Procedural memory layer — style, tone, preferences, always injected."""
+
 import logging
 from typing import Any
-from google.cloud import firestore
+
 import anyio
+from google.cloud import firestore
 
 from ..types import ProceduralMemoryState
 
@@ -16,10 +18,20 @@ class ProceduralMemoryLayer:
         self._context_id = context_id
 
     def _global_ref(self):
-        return self._db.collection("users").document(self._user_id).collection("procedural_memory").document("global")
+        return (
+            self._db.collection("users")
+            .document(self._user_id)
+            .collection("procedural_memory")
+            .document("global")
+        )
 
     def _context_ref(self):
-        return self._db.collection("stories").document(self._context_id).collection("procedural_memory").document("context")
+        return (
+            self._db.collection("stories")
+            .document(self._context_id)
+            .collection("procedural_memory")
+            .document("context")
+        )
 
     async def read(self) -> ProceduralMemoryState:
         def _get():
@@ -45,18 +57,23 @@ class ProceduralMemoryLayer:
     async def write_global(self, fields: dict[str, Any]) -> None:
         if not fields:
             return
+
         def _set():
             self._global_ref().set(fields, merge=True)
+
         await anyio.to_thread.run_sync(_set)
 
     async def write_context(self, fields: dict[str, Any]) -> None:
         if not fields:
             return
+
         def _set():
             self._context_ref().set(fields, merge=True)
+
         await anyio.to_thread.run_sync(_set)
 
     async def clear_context(self) -> None:
         def _delete():
             self._context_ref().delete()
+
         await anyio.to_thread.run_sync(_delete)

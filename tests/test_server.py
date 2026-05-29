@@ -1,4 +1,5 @@
 """Tests for FastAPI server endpoints."""
+
 import os
 from unittest.mock import ANY, AsyncMock
 
@@ -7,6 +8,7 @@ from fastapi.testclient import TestClient
 # Set environment for testing before importing app
 os.environ["CREDIT_PROXY_URL"] = "http://localhost:8080"
 os.environ["GOOGLE_CLOUD_PROJECT"] = "test-project"
+os.environ["MAX_REQUESTS_PER_MINUTE_PER_USER"] = "1000"
 
 from server import app
 
@@ -30,13 +32,28 @@ class TestAgentExecution:
 
         response = client.post(
             "/agent/execute",
-            json={"action": "generateStory", "parameters": {"storyId": "s1"}},
+            json={
+                "action": "generateStory",
+                "parameters": {"storyId": "s1"},
+                "user_id": "u1",
+            },
         )
 
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
         assert data["data"]["storyId"] == "s1"
+
+    def test_agent_execute_missing_user_id_returns_422(self):
+        response = client.post(
+            "/agent/execute",
+            json={"action": "generateStory", "parameters": {"storyId": "s1"}},
+        )
+
+        assert response.status_code == 422
+        data = response.json()
+        assert data["success"] is False
+        assert data["error"]["code"] == "VALIDATION_ERROR"
 
     def test_agent_execute_unknown_action_validation_error(self):
         response = client.post(
@@ -75,6 +92,7 @@ class TestAgentExecution:
                         "chapters": [],
                     },
                 },
+                "user_id": "u1",
             },
         )
 
@@ -92,10 +110,13 @@ class TestAgentExecution:
                 },
             },
             background_tasks=ANY,
+            user_id="u1",
         )
 
     def test_enhance_wizard_input_success(self):
-        app.state.agent.execute_agent = AsyncMock(return_value={"enhanced": "In a world..."})
+        app.state.agent.execute_agent = AsyncMock(
+            return_value={"enhanced": "In a world..."}
+        )
 
         response = client.post(
             "/agent/execute",
@@ -103,9 +124,13 @@ class TestAgentExecution:
                 "action": "enhanceWizardInput",
                 "parameters": {
                     "type": "premise",
-                    "data": {"title": "The Last Lantern", "premise": "A girl finds a magic lamp"},
+                    "data": {
+                        "title": "The Last Lantern",
+                        "premise": "A girl finds a magic lamp",
+                    },
                     "userId": "user-1",
                 },
+                "user_id": "u-session",
             },
         )
 
@@ -117,10 +142,14 @@ class TestAgentExecution:
             "enhanceWizardInput",
             {
                 "type": "premise",
-                "data": {"title": "The Last Lantern", "premise": "A girl finds a magic lamp"},
+                "data": {
+                    "title": "The Last Lantern",
+                    "premise": "A girl finds a magic lamp",
+                },
                 "userId": "user-1",
             },
             background_tasks=ANY,
+            user_id="u-session",
         )
 
     def test_enhance_wizard_input_invalid_type_returns_422(self):
@@ -148,9 +177,18 @@ class TestGenerateStoryChoices:
             "storyId": "s1",
             "openingScene": "The rain had been falling for three days...",
             "choices": [
-                {"label": "Elena discovers the hidden letter", "sceneText": "She found it..."},
-                {"label": "A stranger arrives at the inn", "sceneText": "The door swung..."},
-                {"label": "The market erupts in chaos", "sceneText": "First came the sound..."},
+                {
+                    "label": "Elena discovers the hidden letter",
+                    "sceneText": "She found it...",
+                },
+                {
+                    "label": "A stranger arrives at the inn",
+                    "sceneText": "The door swung...",
+                },
+                {
+                    "label": "The market erupts in chaos",
+                    "sceneText": "First came the sound...",
+                },
             ],
         }
         app.state.agent.execute_agent = AsyncMock(return_value=mock_result)
@@ -160,26 +198,37 @@ class TestGenerateStoryChoices:
             json={
                 "action": "generateStoryChoices",
                 "parameters": {"storyId": "s1", "mode": "opening"},
+                "user_id": "u1",
             },
         )
 
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
-        assert data["data"]["openingScene"] == "The rain had been falling for three days..."
+        assert (
+            data["data"]["openingScene"]
+            == "The rain had been falling for three days..."
+        )
         assert len(data["data"]["choices"]) == 3
         app.state.agent.execute_agent.assert_awaited_once_with(
             "generateStoryChoices",
             {"storyId": "s1", "mode": "opening", "currentContent": "", "turnCount": 0},
             background_tasks=ANY,
+            user_id="u1",
         )
 
     def test_continuation_mode_success(self):
         mock_result = {
             "storyId": "s1",
             "choices": [
-                {"label": "Confront Marcus directly", "sceneText": "She stepped forward..."},
-                {"label": "Follow the shadow into alley", "sceneText": "The figure vanished..."},
+                {
+                    "label": "Confront Marcus directly",
+                    "sceneText": "She stepped forward...",
+                },
+                {
+                    "label": "Follow the shadow into alley",
+                    "sceneText": "The figure vanished...",
+                },
                 {"label": "Return to the archive", "sceneText": "The old building..."},
             ],
         }
@@ -195,6 +244,7 @@ class TestGenerateStoryChoices:
                     "currentContent": "<p>Some prose.</p>",
                     "chapterId": "ch1",
                 },
+                "user_id": "u1",
             },
         )
 
@@ -213,6 +263,7 @@ class TestGenerateStoryChoices:
                 "turnCount": 0,
             },
             background_tasks=ANY,
+            user_id="u1",
         )
 
     def test_missing_mode_returns_422(self):
@@ -258,13 +309,16 @@ class TestGenerateStoryChoices:
         assert data["error"]["code"] == "VALIDATION_ERROR"
 
     def test_current_content_defaults_to_empty_string(self):
-        app.state.agent.execute_agent = AsyncMock(return_value={"storyId": "s1", "choices": []})
+        app.state.agent.execute_agent = AsyncMock(
+            return_value={"storyId": "s1", "choices": []}
+        )
 
         client.post(
             "/agent/execute",
             json={
                 "action": "generateStoryChoices",
                 "parameters": {"storyId": "s1", "mode": "opening"},
+                "user_id": "u1",
             },
         )
 

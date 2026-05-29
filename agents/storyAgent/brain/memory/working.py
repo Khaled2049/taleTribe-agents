@@ -1,8 +1,10 @@
 """Working memory layer — current scene state, always injected."""
+
 import logging
 from typing import Any
-from google.cloud import firestore
+
 import anyio
+from google.cloud import firestore
 
 from ..types import WorkingMemoryState
 
@@ -15,7 +17,12 @@ class WorkingMemoryLayer:
         self._context_id = context_id
 
     def _doc_ref(self):
-        return self._db.collection("stories").document(self._context_id).collection("working_memory").document("state")
+        return (
+            self._db.collection("stories")
+            .document(self._context_id)
+            .collection("working_memory")
+            .document("state")
+        )
 
     async def read(self) -> WorkingMemoryState:
         def _get():
@@ -37,18 +44,23 @@ class WorkingMemoryLayer:
             "recent_events": state.recent_events,
             "mood": state.mood,
         }
+
         def _set():
             self._doc_ref().set(data)
+
         await anyio.to_thread.run_sync(_set)
 
     async def patch(self, fields: dict[str, Any]) -> None:
         if not fields:
             return
+
         def _update():
             self._doc_ref().set(fields, merge=True)
+
         await anyio.to_thread.run_sync(_update)
 
     async def clear(self) -> None:
         def _delete():
             self._doc_ref().delete()
+
         await anyio.to_thread.run_sync(_delete)

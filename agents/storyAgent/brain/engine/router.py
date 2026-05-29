@@ -1,7 +1,13 @@
 """Memory router — decides which layers to query per request."""
+
 from dataclasses import dataclass
 
-BRAINSTORM_HINTS = {"brainstorm", "brainstormcharacter", "brainstormplot", "brainstormideas"}
+BRAINSTORM_HINTS = {
+    "brainstorm",
+    "brainstormcharacter",
+    "brainstormplot",
+    "brainstormideas",
+}
 
 
 @dataclass

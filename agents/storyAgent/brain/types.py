@@ -1,4 +1,5 @@
 """Data types for the brain cognitive memory system."""
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any

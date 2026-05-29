@@ -1,0 +1,47 @@
+# Pre-commit hooks for novelsync-agents.
+# Uses repo-local hooks so the tool versions exactly match pyproject/CI (no drift).
+#
+# Setup (once):
+#   poetry install --with dev
+#   poetry run pre-commit install
+#
+# Run manually on all files:
+#   poetry run pre-commit run --all-files
+repos:
+  - repo: local
+    hooks:
+      - id: black
+        name: black
+        entry: poetry run black
+        language: system
+        types: [python]
+
+      - id: isort
+        name: isort
+        entry: poetry run isort
+        language: system
+        types: [python]
+
+      - id: ruff
+        name: ruff
+        entry: poetry run ruff check --fix
+        language: system
+        types: [python]
+
+      - id: terraform-fmt
+        name: terraform fmt
+        entry: terraform fmt
+        language: system
+        files: \.tf$
+        pass_filenames: false
+        args: [-recursive, terraform/]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: detect-private-key   # blocks committing PEM/SSH private keys

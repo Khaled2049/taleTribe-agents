@@ -17,6 +17,20 @@ Every AI feature in NovelSync flows through this service. It reads the writer's 
 ## Quick start
 
 ```bash
-pip install -r requirements.txt
-python server.py
+# Install Poetry (if not already installed)
+pip install poetry
+
+# Install dependencies (no image generation)
+poetry install --with dev
+
+# Install with local image generation (heavy — ~5 GB)
+poetry install --with dev,image-gen
+
+# Run the server
+poetry run python server.py
 ```
+
+## Operational notes
+
+- **Rate limiting** is per-process. The `MAX_REQUESTS_PER_MINUTE_PER_USER` env var caps requests per user *per instance*. On horizontally-scaled deployments (Cloud Run with N instances), the effective ceiling is `N * MAX_REQUESTS_PER_MINUTE_PER_USER`. For a true global cap, back the limiter with Redis/Memorystore.
+- **Production env vars**: `AGENT_SERVICE_URL` (OIDC audience) and `FIREBASE_FUNCTIONS_SERVICE_ACCOUNT` (or `ALLOWED_SERVICE_ACCOUNTS`) must be set when `ENVIRONMENT=production`. The app fails fast at startup otherwise.

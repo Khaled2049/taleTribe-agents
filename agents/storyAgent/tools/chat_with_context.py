@@ -1,21 +1,10 @@
 """Tool for chat with RAG (Retrieval-Augmented Generation) using story context."""
-import logging
-import sys
-from pathlib import Path
-from typing import Dict, Any, List, Optional
 
-# Handle imports for both direct execution and module import
-try:
-    from ..context_builder import StoryContextBuilder
-    from ..llm_provider import get_llm_provider, LLMProvider
-except ImportError:
-    # Add parent directory to path for direct execution
-    current_dir = Path(__file__).parent.parent
-    parent_dir = current_dir.parent.parent
-    if str(parent_dir) not in sys.path:
-        sys.path.insert(0, str(parent_dir))
-    from agents.storyAgent.context_builder import StoryContextBuilder
-    from agents.storyAgent.llm_provider import get_llm_provider, LLMProvider
+import logging
+from typing import Any, Dict, List, Optional
+
+from ..context_builder import StoryContextBuilder
+from ..llm_provider import LLMProvider, get_llm_provider
 
 logger = logging.getLogger(__name__)
 
@@ -23,11 +12,18 @@ logger = logging.getLogger(__name__)
 class ChatWithContextTool:
     """Tool for chatting with context-aware AI assistant."""
 
-    def __init__(self, project_id: str, location: str = "us-central1", llm_provider: Optional[LLMProvider] = None):
+    def __init__(
+        self,
+        project_id: str,
+        location: str = "us-central1",
+        llm_provider: Optional[LLMProvider] = None,
+    ):
         """Initialize the chat tool."""
         self.project_id = project_id
         self.location = location
-        self.llm_provider: LLMProvider = llm_provider or get_llm_provider(project_id, location)
+        self.llm_provider: LLMProvider = llm_provider or get_llm_provider(
+            project_id, location
+        )
         self.context_builder = StoryContextBuilder(project_id)
 
     async def execute(
@@ -58,7 +54,11 @@ class ChatWithContextTool:
         slim_firestore = self.context_builder.format_slim_context_for_chat(context)
 
         # Brain context (style/memory) prepended to slim Firestore summary
-        context_text = (brain_context + "\n\n" + slim_firestore) if brain_context else slim_firestore
+        context_text = (
+            (brain_context + "\n\n" + slim_firestore)
+            if brain_context
+            else slim_firestore
+        )
 
         system_prompt = f"""You are a writing assistant inside NovelSync. You know this story.
 
@@ -80,7 +80,9 @@ STORY CONTEXT:
 
         # Add chat history if provided (last 10 messages)
         if chat_history:
-            recent_history = chat_history[-10:] if len(chat_history) > 10 else chat_history
+            recent_history = (
+                chat_history[-10:] if len(chat_history) > 10 else chat_history
+            )
             for msg in recent_history:
                 role = msg.get("role", "user")
                 content = msg.get("content", "")
@@ -103,7 +105,6 @@ STORY CONTEXT:
             "plots": len(context.get("plots", [])),
             "places": len(context.get("places", [])),
         }
-        
 
         return {
             "response": response.strip(),
@@ -177,7 +178,9 @@ STORY CONTEXT:
             # Summarize older chapters
             if older_chapters:
                 chapter_titles = [c.get("title", "Untitled") for c in older_chapters]
-                parts.append(f"[Earlier chapters 1-{len(older_chapters)}: {' | '.join(chapter_titles)}]")
+                parts.append(
+                    f"[Earlier chapters 1-{len(older_chapters)}: {' | '.join(chapter_titles)}]"
+                )
                 parts.append("")
 
             # Full text for recent chapters
@@ -185,7 +188,9 @@ STORY CONTEXT:
                 title = chapter.get("title", "Untitled Chapter")
                 content = chapter.get("content", "")
                 # Truncate if too long (keep first 2000 chars)
-                truncated_content = content[:2000] + "..." if len(content) > 2000 else content
+                truncated_content = (
+                    content[:2000] + "..." if len(content) > 2000 else content
+                )
                 parts.append(f"Chapter: {title}")
                 parts.append(truncated_content)
                 parts.append("")

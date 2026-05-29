@@ -108,3 +108,13 @@ variable "credit_proxy_url" {
   type        = string
   default     = "https://credit-proxy-gateway-ukvrbnaddq-uc.a.run.app"
 }
+
+variable "max_requests_per_minute_per_user" {
+  description = "Per-user rate limit on POST /agent/execute. Note: in-memory per-instance bucket, so effective global ceiling is max_instances * this value. 0 disables the limiter."
+  type        = number
+  default     = 20
+  validation {
+    condition     = var.max_requests_per_minute_per_user >= 0
+    error_message = "Rate limit must be >= 0"
+  }
+}

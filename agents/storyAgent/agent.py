@@ -1,46 +1,47 @@
 """Main ADK agent implementation for story generation."""
+
+import logging
 import os
 import sys
-import logging
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
 # Handle imports for both direct execution and module import
 try:
+    from .brain import Brain, BrainConfig, ReflectionInput
+    from .llm_provider import get_llm_provider
     from .tools import (
-        StoryGenerationTool,
-        ChapterGenerationTool,
         BrainstormingTool,
+        ChapterGenerationTool,
         CharacterBrainstormingTool,
-        PlotBrainstormingTool,
-        NextLineGenerationTool,
         ChatWithContextTool,
         EnhanceTextTool,
         EnhanceWizardInputTool,
+        NextLineGenerationTool,
+        PlotBrainstormingTool,
         StoryChoicesTool,
+        StoryGenerationTool,
     )
-    from .llm_provider import get_llm_provider
-    from .brain import Brain, BrainConfig, ReflectionInput
 except ImportError:
     # Add parent directory to path for direct execution
     current_dir = Path(__file__).parent
     parent_dir = current_dir.parent.parent
     if str(parent_dir) not in sys.path:
         sys.path.insert(0, str(parent_dir))
+    from agents.storyAgent.brain import Brain, BrainConfig, ReflectionInput
+    from agents.storyAgent.llm_provider import get_llm_provider
     from agents.storyAgent.tools import (
-        StoryGenerationTool,
-        ChapterGenerationTool,
         BrainstormingTool,
+        ChapterGenerationTool,
         CharacterBrainstormingTool,
-        PlotBrainstormingTool,
-        NextLineGenerationTool,
         ChatWithContextTool,
         EnhanceTextTool,
         EnhanceWizardInputTool,
+        NextLineGenerationTool,
+        PlotBrainstormingTool,
         StoryChoicesTool,
+        StoryGenerationTool,
     )
-    from agents.storyAgent.llm_provider import get_llm_provider
-    from agents.storyAgent.brain import Brain, BrainConfig, ReflectionInput
 
 
 class StoryAgent:
@@ -70,16 +71,42 @@ class StoryAgent:
         self._db = _get_firestore_client(self.project_id)
 
         # Initialize tools
-        self.story_tool = StoryGenerationTool(self.project_id, self.location, llm_provider=self._llm_provider)
-        self.chapter_tool = ChapterGenerationTool(self.project_id, self.location, llm_provider=self._llm_provider)
-        self.brainstorm_tool = BrainstormingTool(self.project_id, self.location, llm_provider=self._llm_provider)
-        self.character_tool = CharacterBrainstormingTool(self.project_id, self.location, llm_provider=self._llm_provider)
-        self.plot_tool = PlotBrainstormingTool(self.project_id, self.location, llm_provider=self._llm_provider)
-        self.next_line_tool = NextLineGenerationTool(self.project_id, self.location, llm_provider=self._llm_provider)
-        self.chat_tool = ChatWithContextTool(self.project_id, self.location, llm_provider=self._llm_provider)
-        self.enhance_text_tool = EnhanceTextTool(self.project_id, self.location, llm_provider=self._llm_provider)
-        self.enhance_wizard_tool = EnhanceWizardInputTool(self.project_id, self.location, llm_provider=self._llm_provider)
-        self.story_choices_tool = StoryChoicesTool(self.project_id, self.location, llm_provider=self._llm_provider)
+        self.story_tool = StoryGenerationTool(
+            self.project_id, self.location, llm_provider=self._llm_provider
+        )
+        self.chapter_tool = ChapterGenerationTool(
+            self.project_id, self.location, llm_provider=self._llm_provider
+        )
+        self.brainstorm_tool = BrainstormingTool(
+            self.project_id, self.location, llm_provider=self._llm_provider
+        )
+        self.character_tool = CharacterBrainstormingTool(
+            self.project_id, self.location, llm_provider=self._llm_provider
+        )
+        self.plot_tool = PlotBrainstormingTool(
+            self.project_id, self.location, llm_provider=self._llm_provider
+        )
+        self.next_line_tool = NextLineGenerationTool(
+            self.project_id, self.location, llm_provider=self._llm_provider, db=self._db
+        )
+        self.chat_tool = ChatWithContextTool(
+            self.project_id, self.location, llm_provider=self._llm_provider
+        )
+        self.enhance_text_tool = EnhanceTextTool(
+            self.project_id, self.location, llm_provider=self._llm_provider, db=self._db
+        )
+        self.enhance_wizard_tool = EnhanceWizardInputTool(
+            self.project_id, self.location, llm_provider=self._llm_provider
+        )
+        self.story_choices_tool = StoryChoicesTool(
+            self.project_id, self.location, llm_provider=self._llm_provider
+        )
+
+    async def aclose(self) -> None:
+        """Release process-lifetime resources (e.g. the LLM HTTP client)."""
+        close = getattr(self._llm_provider, "aclose", None)
+        if close is not None:
+            await close()
 
     def _make_brain(self, user_id: str, context_id: str) -> Brain:
         return Brain(
@@ -112,15 +139,16 @@ class StoryAgent:
         Returns:
             Dictionary containing the suggestions array.
         """
-        return await self.next_line_tool.execute(story_id, content, cursorPosition, chapter_id)
+        return await self.next_line_tool.execute(
+            story_id, content, cursorPosition, chapter_id
+        )
 
-        
     async def generate_story(
         self,
         story_id: str,
         genre: Optional[str] = None,
         tone: Optional[str] = None,
-        length: Optional[str] = None,    
+        length: Optional[str] = None,
         generate_first_chapter_only: bool = True,
         plot_context: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -137,7 +165,9 @@ class StoryAgent:
         Returns:
             Generated story content
         """
-        return await self.story_tool.execute(story_id, genre, tone, length, generate_first_chapter_only, plot_context)
+        return await self.story_tool.execute(
+            story_id, genre, tone, length, generate_first_chapter_only, plot_context
+        )
 
     async def generate_chapter(
         self,
@@ -157,7 +187,9 @@ class StoryAgent:
         Returns:
             Generated chapter content
         """
-        return await self.chapter_tool.execute(story_id, chapter_number, previous_chapters, plot_context)
+        return await self.chapter_tool.execute(
+            story_id, chapter_number, previous_chapters, plot_context
+        )
 
     async def brainstorm_ideas(
         self,
@@ -245,9 +277,14 @@ class StoryAgent:
             try:
                 brain = self._make_brain(user_id, story_id)
                 assembled = await brain.assemble(message, action_hint="chatWithContext")
-                brain_context = assembled.text if _assembled_has_memory(assembled) else None
+                brain_context = (
+                    assembled.text if _assembled_has_memory(assembled) else None
+                )
                 if brain_context:
-                    brain_context = brain_context.split("\n=== CURRENT REQUEST ===")[0].strip() or None
+                    brain_context = (
+                        brain_context.split("\n=== CURRENT REQUEST ===")[0].strip()
+                        or None
+                    )
                 logging.getLogger(__name__).info(
                     "Full brain_context for chat story_id=%s:\n%s",
                     story_id,
@@ -255,9 +292,13 @@ class StoryAgent:
                 )
             except Exception:
                 logger = logging.getLogger(__name__)
-                logger.warning("Brain.assemble failed for story_id=%s, falling back", story_id)
+                logger.warning(
+                    "Brain.assemble failed for story_id=%s, falling back", story_id
+                )
 
-        result = await self.chat_tool.execute(story_id, message, chat_history, brain_context=brain_context)
+        result = await self.chat_tool.execute(
+            story_id, message, chat_history, brain_context=brain_context
+        )
 
         if brain is not None and assembled is not None and background_tasks is not None:
             response_text = result.get("response", "")
@@ -290,7 +331,9 @@ class StoryAgent:
         Returns:
             Dictionary containing enhanced text
         """
-        return await self.enhance_text_tool.execute(story_id, action, selected_text, chapter_id)
+        return await self.enhance_text_tool.execute(
+            story_id, action, selected_text, chapter_id
+        )
 
     async def generate_story_choices(
         self,
@@ -326,13 +369,26 @@ class StoryAgent:
 
         if self._embedder is not None:
             try:
-                logger.info("Generating story choices for story_id=%s mode=%s", story_id, mode)
+                logger.info(
+                    "Generating story choices for story_id=%s mode=%s", story_id, mode
+                )
                 brain = self._make_brain(user_id, story_id)
-                query = f"{mode} scene. {current_content[:200]}" if current_content else f"{mode} scene"
-                assembled = await brain.assemble(query, action_hint="generateStoryChoices")
-                brain_context = assembled.text if _assembled_has_memory(assembled) else None
+                query = (
+                    f"{mode} scene. {current_content[:200]}"
+                    if current_content
+                    else f"{mode} scene"
+                )
+                assembled = await brain.assemble(
+                    query, action_hint="generateStoryChoices"
+                )
+                brain_context = (
+                    assembled.text if _assembled_has_memory(assembled) else None
+                )
                 if brain_context:
-                    brain_context = brain_context.split("\n=== CURRENT REQUEST ===")[0].strip() or None
+                    brain_context = (
+                        brain_context.split("\n=== CURRENT REQUEST ===")[0].strip()
+                        or None
+                    )
             except Exception:
                 logger.warning(
                     "Brain assembly failed for generateStoryChoices story_id=%s, falling back to legacy context",
@@ -340,7 +396,12 @@ class StoryAgent:
                 )
 
         result = await self.story_choices_tool.execute(
-            story_id, mode, current_content, chapter_id, turn_count, brain_context=brain_context
+            story_id,
+            mode,
+            current_content,
+            chapter_id,
+            turn_count,
+            brain_context=brain_context,
         )
 
         if brain is not None and assembled is not None and background_tasks is not None:
@@ -354,7 +415,8 @@ class StoryAgent:
                 background_tasks.add_task(brain.reflect, ri)
                 logger.info(
                     "Brain reflection scheduled for generateStoryChoices story_id=%s mode=%s",
-                    story_id, mode,
+                    story_id,
+                    mode,
                 )
 
         return result
@@ -368,11 +430,15 @@ class StoryAgent:
         """Enhance wizard input across premise/character/place/conflict/blueprint."""
         return await self.enhance_wizard_tool.execute(user_id, wizard_type, data)
 
-    async def clear_memory(self, story_id: str, user_id: str = "anonymous") -> Dict[str, Any]:
+    async def clear_memory(
+        self, story_id: str, user_id: str = "anonymous"
+    ) -> Dict[str, Any]:
         """Clear all story-scoped brain memory. Global procedural is kept."""
         brain = self._make_brain(user_id, story_id)
         await brain.clear()
-        logging.getLogger(__name__).info("Brain memory cleared story_id=%s user_id=%s", story_id, user_id)
+        logging.getLogger(__name__).info(
+            "Brain memory cleared story_id=%s user_id=%s", story_id, user_id
+        )
         return {"cleared": True, "storyId": story_id}
 
     async def execute_agent(
@@ -394,7 +460,20 @@ class StoryAgent:
             Result from the agent execution
         """
         logger = logging.getLogger(__name__)
-        logger.info("Executing action=%s with parameter_keys=%s", action, sorted(parameters.keys()))
+        logger.info(
+            "Executing action=%s with parameter_keys=%s",
+            action,
+            sorted(parameters.keys()),
+        )
+
+        # effective_user_id is only plumbed to actions that personalize via the brain
+        # memory system or are billed per user (chat, story choices, wizard input,
+        # clear memory). The other actions (generateStory, generateChapter,
+        # brainstorm*, generateNextLines, enhanceText) are stateless from the brain's
+        # perspective and don't take a user_id parameter — adding one here would be
+        # dead plumbing until those actions opt in.
+        param_user_id = self._param(parameters, "userId", "user_id")
+        effective_user_id = param_user_id or user_id
 
         if action == "generateStory":
             return await self.generate_story(
@@ -402,7 +481,12 @@ class StoryAgent:
                 self._param(parameters, "genre"),
                 self._param(parameters, "tone"),
                 self._param(parameters, "length"),
-                self._param(parameters, "generateFirstChapterOnly", "generate_first_chapter_only", True),
+                self._param(
+                    parameters,
+                    "generateFirstChapterOnly",
+                    "generate_first_chapter_only",
+                    True,
+                ),
                 self._param(parameters, "plotContext", "plot_context"),
             )
         if action == "generateChapter":
@@ -442,7 +526,7 @@ class StoryAgent:
                 self._param(parameters, "storyId", "story_id"),
                 self._param(parameters, "message"),
                 self._param(parameters, "chatHistory", "chat_history"),
-                user_id=user_id,
+                user_id=effective_user_id,
                 background_tasks=background_tasks,
             )
         if action == "enhanceText":
@@ -454,7 +538,7 @@ class StoryAgent:
             )
         if action == "enhanceWizardInput":
             return await self.enhance_wizard_input(
-                user_id,
+                effective_user_id,
                 self._param(parameters, "type", "wizard_type"),
                 self._param(parameters, "data", default={}) or {},
             )
@@ -466,19 +550,25 @@ class StoryAgent:
                 self._param(parameters, "currentContent", "current_content", ""),
                 self._param(parameters, "chapterId", "chapter_id"),
                 int(self._param(parameters, "turnCount", "turn_count", 0) or 0),
-                user_id=user_id,
+                user_id=effective_user_id,
                 background_tasks=background_tasks,
             )
 
         if action == "clearMemory":
             return await self.clear_memory(
                 self._param(parameters, "storyId", "story_id"),
-                user_id=user_id,
+                user_id=effective_user_id,
             )
 
         raise ValueError(f"Unknown action: {action}")
+
     @staticmethod
-    def _param(parameters: Dict[str, Any], camel: str, snake: Optional[str] = None, default: Any = None) -> Any:
+    def _param(
+        parameters: Dict[str, Any],
+        camel: str,
+        snake: Optional[str] = None,
+        default: Any = None,
+    ) -> Any:
         """Read an action parameter from camelCase and snake_case names."""
         if camel in parameters:
             return parameters[camel]
@@ -510,7 +600,9 @@ def _extract_choices_prose(result: dict) -> str:
 
 def _load_embedder():
     """Load embedding provider once. Returns None if unavailable."""
-    from agents.storyAgent.brain.embedding_provider import get_embedding_provider  # noqa: PLC0415
+    from agents.storyAgent.brain.embedding_provider import (  # noqa: PLC0415
+        get_embedding_provider,
+    )
 
     return get_embedding_provider(os.getenv("GOOGLE_AI_STUDIO_API_KEY"))
 
@@ -518,5 +610,5 @@ def _load_embedder():
 def _get_firestore_client(project_id: str):
     """Get a shared Firestore client."""
     from google.cloud import firestore as _fs
-    return _fs.Client(project=project_id)
 
+    return _fs.Client(project=project_id)

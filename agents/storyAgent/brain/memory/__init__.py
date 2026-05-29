@@ -1,6 +1,13 @@
-from .working import WorkingMemoryLayer
+from .constants import MEMORY_FETCH_LIMIT
+from .episodic import EpisodicMemoryLayer
 from .procedural import ProceduralMemoryLayer
 from .semantic import SemanticMemoryLayer
-from .episodic import EpisodicMemoryLayer
+from .working import WorkingMemoryLayer
 
-__all__ = ["WorkingMemoryLayer", "ProceduralMemoryLayer", "SemanticMemoryLayer", "EpisodicMemoryLayer"]
+__all__ = [
+    "MEMORY_FETCH_LIMIT",
+    "WorkingMemoryLayer",
+    "ProceduralMemoryLayer",
+    "SemanticMemoryLayer",
+    "EpisodicMemoryLayer",
+]

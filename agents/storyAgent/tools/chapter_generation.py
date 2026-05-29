@@ -1,30 +1,26 @@
 """Tool for generating individual chapters with continuity."""
-import sys
-from pathlib import Path
-from typing import Dict, Any, List, Optional
 
-# Handle imports for both direct execution and module import
-try:
-    from ..context_builder import StoryContextBuilder
-    from ..llm_provider import get_llm_provider, LLMProvider
-except ImportError:
-    # Add parent directory to path for direct execution
-    current_dir = Path(__file__).parent.parent
-    parent_dir = current_dir.parent.parent
-    if str(parent_dir) not in sys.path:
-        sys.path.insert(0, str(parent_dir))
-    from agents.storyAgent.context_builder import StoryContextBuilder
-    from agents.storyAgent.llm_provider import get_llm_provider, LLMProvider
+from typing import Any, Dict, List, Optional
+
+from ..context_builder import StoryContextBuilder
+from ..llm_provider import LLMProvider, get_llm_provider
 
 
 class ChapterGenerationTool:
     """Tool for generating individual chapters with continuity."""
 
-    def __init__(self, project_id: str, location: str = "us-central1", llm_provider: Optional[LLMProvider] = None):
+    def __init__(
+        self,
+        project_id: str,
+        location: str = "us-central1",
+        llm_provider: Optional[LLMProvider] = None,
+    ):
         """Initialize the chapter generation tool."""
         self.project_id = project_id
         self.location = location
-        self.llm_provider: LLMProvider = llm_provider or get_llm_provider(project_id, location)
+        self.llm_provider: LLMProvider = llm_provider or get_llm_provider(
+            project_id, location
+        )
         self.context_builder = StoryContextBuilder(project_id)
 
     async def execute(
@@ -48,12 +44,12 @@ class ChapterGenerationTool:
         # Build context from Firestore
         context = self.context_builder.build_story_context(story_id)
         formatted_context = self.context_builder.format_context_for_prompt(context)
-        
+
         # Get existing chapters for continuity
         existing_chapters = context.get("chapters", [])
         if previous_chapters is None:
-            previous_chapters = existing_chapters[:chapter_number - 1]
-            
+            previous_chapters = existing_chapters[: chapter_number - 1]
+
         # Build continuity summary
         continuity_text = self._build_enhanced_continuity(previous_chapters)
 
@@ -62,12 +58,12 @@ class ChapterGenerationTool:
             plot_section = f"""
 *** CURRENT PLOT DIRECTION ***
 {plot_context}
-IMPORTANT: You are writing a specific segment of a larger arc. 
+IMPORTANT: You are writing a specific segment of a larger arc.
 - If the stage says "Frustration", the character must fail or face obstacles.
 - If the stage says "Nightmare", the situation must look hopeless.
 - Do not rush to the ending unless the stage instructions say "Resolution".
 """
-        
+
         prompt = f"""You are an expert novelist. Generate Chapter {chapter_number} for this story.
 
     {formatted_context}
@@ -88,9 +84,9 @@ IMPORTANT: You are writing a specific segment of a larger arc.
     - Title: [Compelling Chapter Title]
     - Content: [Full chapter text]
     """
-        
+
         generated_text = await self.llm_provider.generate_content_async(prompt)
-        
+
         return {
             "storyId": story_id,
             "chapterNumber": chapter_number,
@@ -101,9 +97,9 @@ IMPORTANT: You are writing a specific segment of a larger arc.
         """Build comprehensive continuity context."""
         if not previous_chapters:
             return ""
-        
+
         text = "\n=== STORY SO FAR ===\n"
-        
+
         # Overall summary of ALL chapters
         text += "\nStory Summary:\n"
         for ch in previous_chapters:
@@ -112,15 +108,17 @@ IMPORTANT: You are writing a specific segment of a larger arc.
             # Use more content for summary (1000 chars per chapter)
             content = ch.get("content", "")[:1000]
             text += f"• Chapter {num} ({title}): {content}...\n"
-        
+
         # Detailed view of last chapter
         if previous_chapters:
             last_ch = previous_chapters[-1]
-            text += f"\n=== PREVIOUS CHAPTER (Full) ===\n"
-            text += f"Chapter {last_ch.get('chapterNumber')}: {last_ch.get('title')}\n\n"
-            text += last_ch.get('content', '')[:2000]  # More context
+            text += "\n=== PREVIOUS CHAPTER (Full) ===\n"
+            text += (
+                f"Chapter {last_ch.get('chapterNumber')}: {last_ch.get('title')}\n\n"
+            )
+            text += last_ch.get("content", "")[:2000]  # More context
             text += "\n\n"
-        
+
         # Key plot threads to continue
         text += "\n=== KEY ELEMENTS TO CONTINUE ===\n"
         text += "Ensure you:\n"
@@ -128,17 +126,13 @@ IMPORTANT: You are writing a specific segment of a larger arc.
         text += "- Maintain character personality and development\n"
         text += "- Continue unresolved plot threads\n"
         text += "- Keep consistent world-building details\n\n"
-        
+
         return text
 
     def _get_chapter_length(self, context: Dict) -> str:
         """Determine appropriate chapter length."""
         story = context.get("story", {})
         length_pref = story.get("length", "medium")
-        
-        lengths = {
-            "short": "1500-2000",
-            "medium": "2500-3500", 
-            "long": "4000-5500"
-        }
+
+        lengths = {"short": "1500-2000", "medium": "2500-3500", "long": "4000-5500"}
         return lengths.get(length_pref, "2500-3500")

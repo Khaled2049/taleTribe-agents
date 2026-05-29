@@ -83,7 +83,7 @@ resource "google_cloud_run_v2_service" "app" {
           cpu    = var.cpu
           memory = var.memory
         }
-        cpu_idle          = true  # Only charge for CPU during request execution
+        cpu_idle          = true # Only charge for CPU during request execution
         startup_cpu_boost = true
       }
 
@@ -119,9 +119,20 @@ resource "google_cloud_run_v2_service" "app" {
         value = var.firebase_functions_service_account
       }
 
+      # Must match the audience Firebase Functions uses when minting identity tokens.
+      env {
+        name  = "AGENT_SERVICE_URL"
+        value = google_cloud_run_v2_service.app.uri
+      }
+
       env {
         name  = "CREDIT_PROXY_URL"
         value = var.credit_proxy_url
+      }
+
+      env {
+        name  = "MAX_REQUESTS_PER_MINUTE_PER_USER"
+        value = tostring(var.max_requests_per_minute_per_user)
       }
 
       # Secret from Secret Manager (accessed via service account)

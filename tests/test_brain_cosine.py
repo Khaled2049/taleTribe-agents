@@ -1,6 +1,6 @@
 """Unit tests for cosine similarity helper."""
+
 import numpy as np
-import pytest
 
 from agents.storyAgent.brain.memory.semantic import _cosine_similarity
 

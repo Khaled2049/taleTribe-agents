@@ -9,8 +9,8 @@
 # Terraform
 # ============================================================================
 terraform/.terraform/
-terraform/terraform.tfstate
-terraform/terraform.tfstate.backup
+terraform/*.tfstate
+terraform/*.tfstate.*
 terraform/terraform.tfvars
 !terraform/terraform.tfvars.example
 

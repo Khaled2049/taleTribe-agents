@@ -1,11 +1,12 @@
 """Unit tests for PromptAssembler — no I/O required."""
+
 from datetime import datetime, timezone
 
 from agents.storyAgent.brain.engine.assembler import PromptAssembler
 from agents.storyAgent.brain.types import (
-    WorkingMemoryState,
-    ProceduralMemoryState,
     MemoryDocument,
+    ProceduralMemoryState,
+    WorkingMemoryState,
 )
 
 
