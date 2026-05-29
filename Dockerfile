@@ -22,8 +22,8 @@ RUN pip install --no-cache-dir poetry poetry-plugin-export \
 # Copy the entire agents directory
 COPY agents/ /app/agents/
 
-# Copy the unified server
-COPY server.py /app/server.py
+# Copy the unified server and its root-level modules (imported by server.py)
+COPY server.py config.py rate_limit.py /app/
 
 # Disable local image generation in Docker (use external API instead)
 ENV ENABLE_LOCAL_IMAGE_GENERATION=false
