@@ -1,11 +1,11 @@
 """Unified HTTP server for NovelSync services (agents and optional image generation)."""
-import json
 import logging
 import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import structlog
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field, ValidationError
 
 from agents.storyAgent.action_schemas import ActionName, validate_action_parameters
 from agents.storyAgent.agent import StoryAgent
-from rate_limit import PerUserRateLimiter
 from agents.storyAgent.llm_provider import (
     _byok_config,
     _firebase_token,
@@ -29,64 +28,43 @@ from agents.storyAgent.llm_provider import (
     ProviderNotFoundError,
     RateLimitedError,
 )
+from config import Settings
+from rate_limit import PerUserRateLimiter
 
-LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-logger = logging.getLogger(__name__)
-
-DEFAULT_MAX_REQUESTS_PER_MINUTE_PER_USER = 20
-
-
-def _max_requests_per_minute_per_user() -> int:
-    raw = os.getenv("MAX_REQUESTS_PER_MINUTE_PER_USER", str(DEFAULT_MAX_REQUESTS_PER_MINUTE_PER_USER))
-    try:
-        return max(0, int(raw))
-    except ValueError:
-        return DEFAULT_MAX_REQUESTS_PER_MINUTE_PER_USER
+logger = structlog.get_logger(__name__)
 
 
-def _normalize_service_url(url: str) -> str:
-    """Normalize Cloud Run URL for OIDC audience checks (no trailing slash)."""
-    return url.strip().rstrip("/")
+def _configure_environment() -> Path:
+    """Load env variables and local emulator defaults."""
+    current_dir = Path(__file__).parent
+    env_path = current_dir / ".env"
+
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path)
+
+    if str(current_dir) not in sys.path:
+        sys.path.insert(0, str(current_dir))
+
+    return current_dir
 
 
-def _production_oidc_audience() -> Optional[str]:
-    """Return required OIDC audience in production; None in other environments."""
-    if os.getenv("ENVIRONMENT") != "production":
-        return None
-
-    raw = os.getenv("AGENT_SERVICE_URL", "").strip()
-    if not raw:
-        raise ValueError(
-            "AGENT_SERVICE_URL must be set when ENVIRONMENT=production "
-            "(OIDC token audience for Firebase Functions → agents calls)"
-        )
-    return _normalize_service_url(raw)
-
-
-def _parse_allowed_service_accounts() -> frozenset[str]:
-    """Parse trusted caller service account emails from environment."""
-    raw_list = os.getenv("ALLOWED_SERVICE_ACCOUNTS", "").strip()
-    if raw_list:
-        return frozenset(part.strip() for part in raw_list.split(",") if part.strip())
-
-    single = os.getenv("FIREBASE_FUNCTIONS_SERVICE_ACCOUNT", "").strip()
-    if single:
-        return frozenset({single})
-    return frozenset()
-
-
-def _production_allowed_callers() -> frozenset[str]:
-    """Return required OIDC caller allowlist in production; empty in other environments."""
-    if os.getenv("ENVIRONMENT") != "production":
-        return frozenset()
-
-    allowed = _parse_allowed_service_accounts()
-    if not allowed:
-        raise ValueError(
-            "FIREBASE_FUNCTIONS_SERVICE_ACCOUNT or ALLOWED_SERVICE_ACCOUNTS must be set "
-            "when ENVIRONMENT=production (trusted OIDC caller allowlist)"
-        )
-    return allowed
+def _configure_logging() -> None:
+    """Set up structlog with JSON output for Cloud Run / local dev."""
+    structlog.configure(
+        processors=[
+            structlog.stdlib.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.JSONRenderer(),
+        ],
+        wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+        logger_factory=structlog.PrintLoggerFactory(),
+    )
+    # Also configure stdlib logging for third-party libs (uvicorn, google-auth, etc.).
+    logging.basicConfig(
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        level=logging.INFO,
+    )
 
 
 async def _verify_internal_token(request: Request) -> None:
@@ -97,7 +75,7 @@ async def _verify_internal_token(request: Request) -> None:
     and requires the token email claim to be on the configured caller allowlist.
     """
     audience: Optional[str] = request.app.state.oidc_audience
-    allowed_callers: frozenset[str] = request.app.state.allowed_callers
+    allowed_callers: frozenset = request.app.state.allowed_callers
     if not audience:
         return
 
@@ -113,14 +91,14 @@ async def _verify_internal_token(request: Request) -> None:
     try:
         claims = google_id_token.verify_oauth2_token(
             token,
-            google_requests.Request(),
+            request.app.state.google_auth_request,  # cached — not created per call
             audience=audience,
         )
         caller_email = claims.get("email")
         if caller_email not in allowed_callers:
             raise ValueError(f"Unexpected caller email: {caller_email}")
     except Exception as exc:
-        logger.warning("Token validation failed: %s", exc)
+        logger.warning("token_validation_failed", error=str(exc))
         raise HTTPException(
             status_code=401,
             detail={"code": "UNAUTHORIZED", "message": "Invalid or unauthorized token", "details": None},
@@ -161,27 +139,10 @@ class AgentResponse(BaseModel):
     error: Optional[ErrorDetail] = None
 
 
-def _configure_environment() -> Path:
-    """Load env variables and local emulator defaults."""
-    current_dir = Path(__file__).parent
-    env_path = current_dir / ".env"
-
-    if env_path.exists():
-        load_dotenv(dotenv_path=env_path)
-
-    if os.getenv("ENVIRONMENT") != "production" and not os.getenv("FIRESTORE_EMULATOR_HOST"):
-        os.environ["FIRESTORE_EMULATOR_HOST"] = "localhost:8080"
-
-    if str(current_dir) not in sys.path:
-        sys.path.insert(0, str(current_dir))
-
-    return current_dir
-
-
 def _try_load_image_router(current_dir: Path):
     """Try to load image generation router when enabled."""
-    if os.getenv("ENABLE_LOCAL_IMAGE_GENERATION", "true").lower() != "true":
-        logger.info("Image generation disabled (ENABLE_LOCAL_IMAGE_GENERATION=false)")
+    if not os.getenv("ENABLE_LOCAL_IMAGE_GENERATION", "true").lower() == "true":
+        logger.info("image_generation_disabled")
         return None
 
     try:
@@ -190,63 +151,60 @@ def _try_load_image_router(current_dir: Path):
             sys.path.insert(0, str(image_gen_path))
         from app.api.routes import router as image_router  # type: ignore
 
-        logger.info("Image generation routes loaded successfully")
+        logger.info("image_generation_loaded")
         return image_router
     except ImportError as exc:
-        logger.warning("Image generation routes not available: %s", exc)
+        logger.warning("image_generation_unavailable", error=str(exc))
         return None
 
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
-    logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
+    _configure_logging()
     current_dir = _configure_environment()
+
+    # Instantiate settings here (not at module level) so tests can monkeypatch env vars first.
+    settings = Settings()
+
+    # Set FIRESTORE_EMULATOR_HOST for non-production if not already set.
+    if settings.environment != "production" and not settings.firestore_emulator_host:
+        os.environ["FIRESTORE_EMULATOR_HOST"] = "localhost:8080"
 
     app = FastAPI(
         title="NovelSync Unified Service",
         description="Unified API for story agents and optional image generation",
     )
 
-    cors_origins_raw = os.getenv("CORS_ORIGINS", "[]")
-    try:
-        cors_origins = json.loads(cors_origins_raw)
-        if not isinstance(cors_origins, list):
-            cors_origins = []
-    except (json.JSONDecodeError, ValueError):
-        cors_origins = []
-
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=cors_origins,
+        allow_origins=settings.parsed_cors_origins,
         allow_credentials=False,
         allow_methods=["POST", "GET"],
         allow_headers=["Content-Type", "Authorization"],
     )
 
-    project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
-    if not project_id:
-        raise ValueError("GOOGLE_CLOUD_PROJECT environment variable must be set")
+    # Cache auth helpers on app.state — one instance for the process lifetime.
+    app.state.oidc_audience = settings.oidc_audience
+    app.state.allowed_callers = settings.allowed_callers
+    app.state.google_auth_request = google_requests.Request()
 
-    app.state.oidc_audience = _production_oidc_audience()
-    app.state.allowed_callers = _production_allowed_callers()
     if app.state.oidc_audience:
-        logger.info("OIDC audience for service auth: %s", app.state.oidc_audience)
+        logger.info("oidc_audience_set", audience=app.state.oidc_audience)
     if app.state.allowed_callers:
         logger.info(
-            "OIDC allowed callers (%d): %s",
-            len(app.state.allowed_callers),
-            ", ".join(sorted(app.state.allowed_callers)),
+            "oidc_allowed_callers",
+            count=len(app.state.allowed_callers),
+            callers=sorted(app.state.allowed_callers),
         )
 
-    app.state.project_id = project_id
-    max_rpm = _max_requests_per_minute_per_user()
-    app.state.rate_limiter = PerUserRateLimiter(max_rpm)
-    if max_rpm > 0:
-        logger.info("Per-user rate limit: %s requests/minute on /agent/execute", max_rpm)
+    app.state.project_id = settings.google_cloud_project
+    app.state.rate_limiter = PerUserRateLimiter(settings.max_requests_per_minute_per_user)
+    if settings.max_requests_per_minute_per_user > 0:
+        logger.info("rate_limit_enabled", rpm=settings.max_requests_per_minute_per_user)
 
     app.state.agent = StoryAgent(
-        project_id=project_id,
-        location=os.getenv("VERTEX_AI_LOCATION", "us-central1"),
+        project_id=settings.google_cloud_project,
+        location=settings.vertex_ai_location,
     )
 
     image_router = _try_load_image_router(current_dir)
@@ -285,7 +243,7 @@ def create_app() -> FastAPI:
     ) -> AgentResponse:
         user_id = request.user_id or "anonymous"
         if not await raw_request.app.state.rate_limiter.allow(user_id):
-            logger.warning("Rate limit exceeded for user_id=%s", user_id)
+            logger.warning("rate_limit_exceeded", user_id=user_id)
             raise HTTPException(
                 status_code=429,
                 detail={
@@ -299,7 +257,6 @@ def create_app() -> FastAPI:
             validated_params = validate_action_parameters(request.action, request.parameters)
 
             # Set per-request config in ContextVar so CreditProxyProvider picks it up.
-            # Always set user_id so platform users are billed individually, not to shared "platform" pool.
             # ContextVar is async-safe: this context copy is isolated to this request's task.
             pc = request.provider_config
             byok_token = _byok_config.set({
@@ -308,7 +265,9 @@ def create_app() -> FastAPI:
                 "api_key": pc.api_key if pc else "",
                 "model": pc.model or "" if pc else "",
             })
-            incoming_firebase_token = (request.firebase_token or raw_request.headers.get("X-Firebase-Token", "")).strip() or None
+            incoming_firebase_token = (
+                request.firebase_token or raw_request.headers.get("X-Firebase-Token", "")
+            ).strip() or None
             firebase_token = _firebase_token.set(incoming_firebase_token)
 
             try:
@@ -368,7 +327,7 @@ def create_app() -> FastAPI:
                 detail={"code": "TIMEOUT", "message": "AI request timed out. Please try again.", "details": None},
             ) from exc
         except (LLMProviderError, Exception) as exc:
-            logger.exception("Unhandled error for action=%s", request.action)
+            logger.exception("unhandled_error", action=request.action)
             raise HTTPException(
                 status_code=500,
                 detail={"code": "INTERNAL_ERROR", "message": "AI service is temporarily unavailable. Please try again.", "details": None},
