@@ -70,7 +70,7 @@ def test_enhance_text_accepts_selected_text_at_prompt_limit():
 def test_story_id_max_length():
     with pytest.raises(ValidationError):
         validate_action_parameters(
-            "generateStory",
+            "brainstormPlot",
             {"storyId": "s" * (MAX_ID_CHARS + 1)},
         )
 
@@ -103,10 +103,27 @@ def test_brainstorm_prompt_max_length():
 def test_plot_context_max_length():
     with pytest.raises(ValidationError):
         validate_action_parameters(
-            "generateStory",
+            "generateChapter",
             {
                 "storyId": "s1",
+                "chapterNumber": 1,
                 "plotContext": "p" * (MAX_PROMPT_CHARS + 1),
+            },
+        )
+
+
+def test_generate_chapter_neighbor_content_max_length():
+    from agents.storyAgent.action_schemas import MAX_NEIGHBOR_CONTENT_CHARS
+
+    with pytest.raises(ValidationError):
+        validate_action_parameters(
+            "generateChapter",
+            {
+                "storyId": "s1",
+                "chapterNumber": 2,
+                "prevChapter": {
+                    "content": "x" * (MAX_NEIGHBOR_CONTENT_CHARS + 1),
+                },
             },
         )
 

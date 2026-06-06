@@ -20,7 +20,6 @@ try:
         NextLineGenerationTool,
         PlotBrainstormingTool,
         StoryChoicesTool,
-        StoryGenerationTool,
     )
 except ImportError:
     # Add parent directory to path for direct execution
@@ -40,7 +39,6 @@ except ImportError:
         NextLineGenerationTool,
         PlotBrainstormingTool,
         StoryChoicesTool,
-        StoryGenerationTool,
     )
 
 
@@ -71,9 +69,6 @@ class StoryAgent:
         self._db = _get_firestore_client(self.project_id)
 
         # Initialize tools
-        self.story_tool = StoryGenerationTool(
-            self.project_id, self.location, llm_provider=self._llm_provider
-        )
         self.chapter_tool = ChapterGenerationTool(
             self.project_id, self.location, llm_provider=self._llm_provider
         )
@@ -143,38 +138,15 @@ class StoryAgent:
             story_id, content, cursorPosition, chapter_id
         )
 
-    async def generate_story(
-        self,
-        story_id: str,
-        genre: Optional[str] = None,
-        tone: Optional[str] = None,
-        length: Optional[str] = None,
-        generate_first_chapter_only: bool = True,
-        plot_context: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        Generate a complete story.
-
-        Args:
-            story_id: Firestore story document ID
-            genre: Story genre
-            tone: Story tone
-            length: Story length
-            generate_first_chapter_only: Whether to generate only the first chapter
-            plot_context: Optional plot context
-        Returns:
-            Generated story content
-        """
-        return await self.story_tool.execute(
-            story_id, genre, tone, length, generate_first_chapter_only, plot_context
-        )
-
     async def generate_chapter(
         self,
         story_id: str,
         chapter_number: int,
         previous_chapters: Optional[list] = None,
         plot_context: Optional[str] = None,
+        order: Optional[float] = None,
+        prev_chapter: Optional[Dict[str, Any]] = None,
+        next_chapter: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Generate a chapter.
@@ -182,13 +154,22 @@ class StoryAgent:
         Args:
             story_id: Firestore story document ID
             chapter_number: Chapter number to generate
-            previous_chapters: Optional list of previous chapters
+            previous_chapters: Legacy full list of previous chapters
+            order: Float ordering key of the chapter being generated
+            prev_chapter: Full immediate previous neighbor
+            next_chapter: Full immediate next neighbor (for mid-story inserts)
 
         Returns:
             Generated chapter content
         """
         return await self.chapter_tool.execute(
-            story_id, chapter_number, previous_chapters, plot_context
+            story_id,
+            chapter_number,
+            previous_chapters=previous_chapters,
+            plot_context=plot_context,
+            order=order,
+            prev_chapter=prev_chapter,
+            next_chapter=next_chapter,
         )
 
     async def brainstorm_ideas(
@@ -335,6 +316,33 @@ class StoryAgent:
             story_id, action, selected_text, chapter_id
         )
 
+    async def summarize_chapter(
+        self,
+        story_id: str,
+        content: str,
+        chapter_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Summarize a chapter's content for story continuity.
+
+        Returns a short summary used to keep long-range continuity cheap on
+        future chapter generations. No extra context build — operates directly
+        on the supplied chapter text.
+        """
+        text = (content or "").strip()
+        if not text:
+            return {"summary": ""}
+
+        prompt = (
+            "Summarize the following chapter in 2-3 sentences for story "
+            "continuity. Capture key plot events, character developments, and "
+            "unresolved threads. Return ONLY the summary text, with no preamble "
+            "or labels.\n\n"
+            f"CHAPTER:\n{text}"
+        )
+        summary = await self.chapter_tool.llm_provider.generate_content_async(prompt)
+        return {"summary": (summary or "").strip()}
+
     async def generate_story_choices(
         self,
         story_id: str,
@@ -452,7 +460,7 @@ class StoryAgent:
         Execute agent action dynamically.
 
         Args:
-            action: Action to perform (generateStory/generateChapter/brainstorm/etc.)
+            action: Action to perform (generateChapter/brainstorm/etc.)
             parameters: Parameters for the action
             background_tasks: Optional FastAPI BackgroundTasks for async brain reflection
 
@@ -468,33 +476,28 @@ class StoryAgent:
 
         # effective_user_id is only plumbed to actions that personalize via the brain
         # memory system or are billed per user (chat, story choices, wizard input,
-        # clear memory). The other actions (generateStory, generateChapter,
+        # clear memory). The other actions (generateChapter,
         # brainstorm*, generateNextLines, enhanceText) are stateless from the brain's
         # perspective and don't take a user_id parameter — adding one here would be
         # dead plumbing until those actions opt in.
         param_user_id = self._param(parameters, "userId", "user_id")
         effective_user_id = param_user_id or user_id
 
-        if action == "generateStory":
-            return await self.generate_story(
-                self._param(parameters, "storyId", "story_id"),
-                self._param(parameters, "genre"),
-                self._param(parameters, "tone"),
-                self._param(parameters, "length"),
-                self._param(
-                    parameters,
-                    "generateFirstChapterOnly",
-                    "generate_first_chapter_only",
-                    True,
-                ),
-                self._param(parameters, "plotContext", "plot_context"),
-            )
         if action == "generateChapter":
             return await self.generate_chapter(
                 self._param(parameters, "storyId", "story_id"),
                 self._param(parameters, "chapterNumber", "chapter_number"),
                 self._param(parameters, "previousChapters", "previous_chapters"),
                 self._param(parameters, "plotContext", "plot_context"),
+                order=self._param(parameters, "order"),
+                prev_chapter=self._param(parameters, "prevChapter", "prev_chapter"),
+                next_chapter=self._param(parameters, "nextChapter", "next_chapter"),
+            )
+        if action == "summarizeChapter":
+            return await self.summarize_chapter(
+                self._param(parameters, "storyId", "story_id"),
+                self._param(parameters, "content"),
+                self._param(parameters, "chapterId", "chapter_id"),
             )
         if action == "brainstormIdeas":
             return await self.brainstorm_ideas(

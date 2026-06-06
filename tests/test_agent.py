@@ -19,22 +19,27 @@ class TestStoryAgentInitialization:
 
 @pytest.mark.asyncio
 class TestActionDispatch:
-    async def test_execute_agent_generate_story_dispatch(self):
+    async def test_execute_agent_generate_chapter_dispatch(self):
         agent = StoryAgent(project_id="test-project")
-        agent.generate_story = AsyncMock(return_value={"ok": True})
+        agent.generate_chapter = AsyncMock(return_value={"ok": True})
 
         result = await agent.execute_agent(
-            "generateStory",
+            "generateChapter",
             {
                 "storyId": "s1",
-                "genre": "fantasy",
-                "generateFirstChapterOnly": False,
+                "chapterNumber": 2,
             },
         )
 
         assert result == {"ok": True}
-        agent.generate_story.assert_awaited_once_with(
-            "s1", "fantasy", None, None, False, None
+        agent.generate_chapter.assert_awaited_once_with(
+            "s1",
+            2,
+            None,
+            None,
+            order=None,
+            prev_chapter=None,
+            next_chapter=None,
         )
 
     async def test_execute_agent_accepts_snake_case(self):

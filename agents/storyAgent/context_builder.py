@@ -137,11 +137,15 @@ class StoryContextBuilder:
             direction=firestore.Query.ASCENDING,
         )
 
-        # Sort chapters by number if available (frontend uses `order`; agent may use chapterNumber).
-        # Explicit None check so chapterNumber=0 (legitimate prologue) does not fall through to order.
-        def _chapter_sort_key(ch: Dict[str, Any]) -> int:
+        # Sort chapters by float `order` (source of truth — supports fractional
+        # mid-story inserts). Fall back to chapterNumber, then 0. Explicit None
+        # checks so order/chapterNumber == 0 (legitimate prologue) is honored.
+        def _chapter_sort_key(ch: Dict[str, Any]) -> float:
+            o = ch.get("order")
+            if o is not None:
+                return float(o)
             n = ch.get("chapterNumber")
-            return n if n is not None else ch.get("order", 0)
+            return float(n) if n is not None else 0.0
 
         chapters.sort(key=_chapter_sort_key)
 

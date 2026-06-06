@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 ActionName = Literal[
-    "generateStory",
     "generateChapter",
     "brainstormIdeas",
     "brainstormCharacter",
@@ -15,12 +14,17 @@ ActionName = Literal[
     "enhanceText",
     "enhanceWizardInput",
     "generateStoryChoices",
+    "summarizeChapter",
     "clearMemory",
 ]
 
 MAX_CONTENT_CHARS = 100_000
 MAX_ID_CHARS = 128
 MAX_PROMPT_CHARS = 10_000
+# Bounds for the chapter-continuity payload. Neighbor bodies are truncated by
+# the caller (Cloud Functions) before they get here; these are defensive
+# ceilings so a misbehaving caller can't balloon the prompt (and the bill).
+MAX_NEIGHBOR_CONTENT_CHARS = 8_000
 
 
 def _story_id_field() -> Any:
@@ -55,24 +59,23 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class GenerateStoryParams(StrictModel):
-    story_id: str = _story_id_field()
-    genre: Optional[str] = Field(default=None, max_length=MAX_PROMPT_CHARS)
-    tone: Optional[str] = Field(default=None, max_length=MAX_PROMPT_CHARS)
-    length: Optional[str] = Field(default=None, max_length=MAX_PROMPT_CHARS)
-    generate_first_chapter_only: bool = Field(
-        default=True,
-        validation_alias=AliasChoices(
-            "generateFirstChapterOnly", "generate_first_chapter_only"
-        ),
-        serialization_alias="generateFirstChapterOnly",
-    )
-    plot_context: Optional[str] = Field(
+class LenientModel(BaseModel):
+    """Base for nested continuity payloads — ignores unknown fields (so adding a
+    field on the caller side won't break validation) while still enforcing the
+    size ceilings below."""
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class NeighborChapterParam(LenientModel):
+    chapter_number: Optional[int] = Field(
         default=None,
-        max_length=MAX_PROMPT_CHARS,
-        validation_alias=AliasChoices("plotContext", "plot_context"),
-        serialization_alias="plotContext",
+        validation_alias=AliasChoices("chapterNumber", "chapter_number"),
+        serialization_alias="chapterNumber",
     )
+    order: Optional[float] = None
+    title: Optional[str] = Field(default=None, max_length=MAX_PROMPT_CHARS)
+    content: Optional[str] = Field(default=None, max_length=MAX_NEIGHBOR_CONTENT_CHARS)
 
 
 class GenerateChapterParams(StrictModel):
@@ -81,10 +84,26 @@ class GenerateChapterParams(StrictModel):
         validation_alias=AliasChoices("chapterNumber", "chapter_number"),
         serialization_alias="chapterNumber",
     )
+    order: Optional[float] = Field(
+        default=None,
+        description="Float ordering key of the chapter being generated.",
+    )
     previous_chapters: Optional[List[Dict[str, Any]]] = Field(
         default=None,
         validation_alias=AliasChoices("previousChapters", "previous_chapters"),
         serialization_alias="previousChapters",
+    )
+    # Bounded continuity context (preferred over previous_chapters): truncated
+    # text of the immediate neighbors only.
+    prev_chapter: Optional[NeighborChapterParam] = Field(
+        default=None,
+        validation_alias=AliasChoices("prevChapter", "prev_chapter"),
+        serialization_alias="prevChapter",
+    )
+    next_chapter: Optional[NeighborChapterParam] = Field(
+        default=None,
+        validation_alias=AliasChoices("nextChapter", "next_chapter"),
+        serialization_alias="nextChapter",
     )
     plot_context: Optional[str] = Field(
         default=None,
@@ -173,6 +192,12 @@ class GenerateStoryChoicesParams(StrictModel):
     user_id: Optional[str] = _user_id_field()
 
 
+class SummarizeChapterParams(StrictModel):
+    story_id: str = _story_id_field()
+    content: str = Field(max_length=MAX_CONTENT_CHARS)
+    chapter_id: Optional[str] = _chapter_id_field()
+
+
 class ClearMemoryParams(StrictModel):
     story_id: str = _story_id_field()
     user_id: str = _user_id_field(default="anonymous")
@@ -190,7 +215,6 @@ class EnhanceWizardInputParams(StrictModel):
 
 
 _ACTION_SCHEMAS = {
-    "generateStory": GenerateStoryParams,
     "generateChapter": GenerateChapterParams,
     "brainstormIdeas": BrainstormIdeasParams,
     "brainstormCharacter": BrainstormCharacterParams,
@@ -200,6 +224,7 @@ _ACTION_SCHEMAS = {
     "enhanceText": EnhanceTextParams,
     "enhanceWizardInput": EnhanceWizardInputParams,
     "generateStoryChoices": GenerateStoryChoicesParams,
+    "summarizeChapter": SummarizeChapterParams,
     "clearMemory": ClearMemoryParams,
 }
 

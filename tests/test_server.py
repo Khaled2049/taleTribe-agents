@@ -33,7 +33,7 @@ class TestAgentExecution:
         response = client.post(
             "/agent/execute",
             json={
-                "action": "generateStory",
+                "action": "brainstormPlot",
                 "parameters": {"storyId": "s1"},
                 "user_id": "u1",
             },
@@ -47,7 +47,7 @@ class TestAgentExecution:
     def test_agent_execute_missing_user_id_returns_422(self):
         response = client.post(
             "/agent/execute",
-            json={"action": "generateStory", "parameters": {"storyId": "s1"}},
+            json={"action": "brainstormPlot", "parameters": {"storyId": "s1"}},
         )
 
         assert response.status_code == 422
