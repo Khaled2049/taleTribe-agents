@@ -16,6 +16,10 @@ ActionName = Literal[
     "generateStoryChoices",
     "summarizeChapter",
     "clearMemory",
+    "indexChapter",
+    "deleteChapterChunks",
+    "indexEntity",
+    "deleteEntityChunks",
 ]
 
 MAX_CONTENT_CHARS = 100_000
@@ -203,6 +207,51 @@ class ClearMemoryParams(StrictModel):
     user_id: str = _user_id_field(default="anonymous")
 
 
+class IndexChapterParams(StrictModel):
+    story_id: str = _story_id_field()
+    chapter_id: str = Field(
+        max_length=MAX_ID_CHARS,
+        validation_alias=AliasChoices("chapterId", "chapter_id"),
+        serialization_alias="chapterId",
+    )
+    title: Optional[str] = Field(default="", max_length=MAX_PROMPT_CHARS)
+    content: str = Field(default="", max_length=MAX_CONTENT_CHARS)
+    chapter_number: Optional[int] = Field(
+        default=None,
+        validation_alias=AliasChoices("chapterNumber", "chapter_number"),
+        serialization_alias="chapterNumber",
+    )
+
+
+class DeleteChapterChunksParams(StrictModel):
+    story_id: str = _story_id_field()
+    chapter_id: str = Field(
+        max_length=MAX_ID_CHARS,
+        validation_alias=AliasChoices("chapterId", "chapter_id"),
+        serialization_alias="chapterId",
+    )
+
+
+class IndexEntityParams(StrictModel):
+    story_id: str = _story_id_field()
+    kind: Literal["character", "place", "plot"]
+    entity_id: str = Field(
+        max_length=MAX_ID_CHARS,
+        validation_alias=AliasChoices("entityId", "entity_id"),
+        serialization_alias="entityId",
+    )
+    data: Dict[str, Any] = Field(default_factory=dict)
+
+
+class DeleteEntityChunksParams(StrictModel):
+    story_id: str = _story_id_field()
+    entity_id: str = Field(
+        max_length=MAX_ID_CHARS,
+        validation_alias=AliasChoices("entityId", "entity_id"),
+        serialization_alias="entityId",
+    )
+
+
 class EnhanceWizardInputParams(StrictModel):
     wizard_type: Literal["premise", "character", "place", "conflict", "blueprint"] = (
         Field(
@@ -226,6 +275,10 @@ _ACTION_SCHEMAS = {
     "generateStoryChoices": GenerateStoryChoicesParams,
     "summarizeChapter": SummarizeChapterParams,
     "clearMemory": ClearMemoryParams,
+    "indexChapter": IndexChapterParams,
+    "deleteChapterChunks": DeleteChapterChunksParams,
+    "indexEntity": IndexEntityParams,
+    "deleteEntityChunks": DeleteEntityChunksParams,
 }
 
 

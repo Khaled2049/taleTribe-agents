@@ -55,17 +55,29 @@ class Brain:
         )
 
     async def assemble(
-        self, user_message: str, action_hint: str = ""
+        self, user_message: str, action_hint: str = "", query_embedding=None
     ) -> AssembledPrompt:
-        """Fetch all relevant memory layers concurrently and build layered prompt."""
+        """Fetch all relevant memory layers concurrently and build layered prompt.
+
+        ``query_embedding`` (optional) is a precomputed vector for ``user_message`` the
+        caller already embedded (e.g. for chapter retrieval). It's reused for the
+        semantic query — but only when the router's semantic query IS the full message,
+        so a future router that rewrites the query won't silently use the wrong vector.
+        Episodic uses a truncated query and embeds its own.
+        """
         decision = self._router.route(user_message, action_hint)
 
         async def _noop_docs():
             return []
 
+        semantic_embedding = (
+            query_embedding if decision.semantic_query == user_message else None
+        )
         semantic_coro = (
             self._semantic.retrieve(
-                decision.semantic_query, self._config.semantic_top_k
+                decision.semantic_query,
+                self._config.semantic_top_k,
+                query_embedding=semantic_embedding,
             )
             if decision.fetch_semantic
             else _noop_docs()

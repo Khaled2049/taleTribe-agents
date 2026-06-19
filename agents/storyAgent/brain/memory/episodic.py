@@ -1,25 +1,26 @@
-"""Episodic memory layer — past events and session summaries, retrieved via embedding search."""
+"""Episodic memory layer — past events and session summaries, retrieved via embedding search.
+
+Shares the common ``VectorStore`` mechanism with SemanticMemoryLayer and ChapterRAG
+(one retrieval implementation, one dimension contract). Native KNN only (no
+brute-force fallback). See wiki/chat-scaling-design.md (#2).
+"""
 
 import logging
 import uuid
 from datetime import datetime, timezone
 
-import anyio
-import numpy as np
-from google.cloud import firestore
-
 from ..types import MemoryDocument
-from .constants import MEMORY_FETCH_LIMIT
-from .semantic import _cosine_similarity
+from ..vector_store import VectorStore, _to_list
 
 logger = logging.getLogger(__name__)
 
 
 class EpisodicMemoryLayer:
-    def __init__(self, db: firestore.Client, context_id: str, embedder):
+    def __init__(self, db, context_id: str, embedder):
         self._db = db
         self._context_id = context_id
         self._embedder = embedder
+        self._store = VectorStore(embedder)
 
     def _collection(self):
         return (
@@ -31,65 +32,27 @@ class EpisodicMemoryLayer:
     async def retrieve(self, query: str, top_k: int = 3) -> list[MemoryDocument]:
         if not query:
             return []
-
-        embedding_list = await self._embedder.embed(query)
-        query_vec = np.array(embedding_list, dtype=np.float32)
-
-        def _fetch_recent():
-            return [
-                doc
-                for doc in self._collection()
-                .order_by("created_at", direction=firestore.Query.DESCENDING)
-                .limit(MEMORY_FETCH_LIMIT)
-                .stream()
-            ]
-
-        docs = await anyio.to_thread.run_sync(_fetch_recent)
-        if not docs:
-            return []
-
-        scored = []
-        for doc in docs:
-            data = doc.to_dict()
-            emb = data.get("embedding")
-            if not emb:
-                continue
-            score = _cosine_similarity(query_vec, np.array(emb, dtype=np.float32))
-            scored.append((score, doc.id, data))
-
-        scored.sort(key=lambda x: x[0], reverse=True)
-        results = []
-        for score, doc_id, data in scored[:top_k]:
-            results.append(
-                MemoryDocument(
-                    id=doc_id,
-                    text=data.get("text", ""),
-                    embedding=data.get("embedding", []),
-                    created_at=data.get("created_at", datetime.now(timezone.utc)),
-                    summary=data.get("summary", ""),
-                )
+        rows = await self._store.query(self._collection(), query, top_k)
+        return [
+            MemoryDocument(
+                id=row.get("id", ""),
+                text=row.get("text", ""),
+                embedding=_to_list(row.get("embedding")),
+                created_at=row.get("created_at", datetime.now(timezone.utc)),
+                summary=row.get("summary", ""),
             )
-        return results
-
-    async def clear(self) -> None:
-        def _delete_all():
-            for doc in self._collection().stream():
-                doc.reference.delete()
-
-        await anyio.to_thread.run_sync(_delete_all)
+            for row in rows
+        ]
 
     async def store(self, text: str, summary: str) -> str:
-        embedding = await self._embedder.embed(text)
         doc_id = str(uuid.uuid4())
-        doc = {
-            "text": text,
-            "summary": summary,
-            "embedding": embedding,
-            "created_at": datetime.now(timezone.utc),
-        }
-
-        def _set():
-            self._collection().document(doc_id).set(doc)
-
-        await anyio.to_thread.run_sync(_set)
+        await self._store.upsert(
+            self._collection(),
+            doc_id,
+            text,
+            {"summary": summary, "created_at": datetime.now(timezone.utc)},
+        )
         return doc_id
+
+    async def clear(self) -> None:
+        await self._store.delete_all(self._collection())

@@ -32,6 +32,7 @@ class ChatWithContextTool:
         message: str,
         chat_history: Optional[List[Dict[str, str]]] = None,
         brain_context: Optional[str] = None,
+        chapter_excerpts: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Generate chat response using story context (RAG).
@@ -43,21 +44,26 @@ class ChatWithContextTool:
                          Each message should have "role" ("user" or "assistant") and "content"
             brain_context: Optional pre-assembled brain memory context; replaces
                            the default Firestore context string when provided
+            chapter_excerpts: Optional pre-rendered top-k chapter chunks retrieved
+                           via vector search for this message (see ChapterRAG). This
+                           is what lets chat answer content questions without
+                           re-sending whole chapters.
 
         Returns:
             Dictionary containing:
             - response: AI-generated response
             - contextUsed: Counts of story elements used
         """
-        # Build context from Firestore — slim format keeps prompt focused
-        context = self.context_builder.build_story_context(story_id)
+        # Slim context: metadata + names + plot/chapter titles. Reads the
+        # denormalized chapter index, NOT every chapter body — so cost no longer
+        # grows with book length. Depth comes from chapter_excerpts + brain memory.
+        context = self.context_builder.build_slim_chat_context(story_id)
         slim_firestore = self.context_builder.format_slim_context_for_chat(context)
 
-        # Brain context (style/memory) prepended to slim Firestore summary
-        context_text = (
-            (brain_context + "\n\n" + slim_firestore)
-            if brain_context
-            else slim_firestore
+        # Layer the prompt: brain memory (style/recall) + slim story map + the
+        # specific excerpts retrieved for this question.
+        context_text = "\n\n".join(
+            part for part in (brain_context, slim_firestore, chapter_excerpts) if part
         )
 
         system_prompt = f"""You are a writing assistant inside NovelSync. You know this story.
@@ -110,89 +116,3 @@ STORY CONTEXT:
             "response": response.strip(),
             "contextUsed": context_used,
         }
-
-    def _build_context_string(self, context: Dict[str, Any]) -> str:
-        """Build formatted context string from story data."""
-        parts = []
-
-        # Story metadata
-        story = context.get("story", {})
-        if story:
-            parts.append(f"STORY: {story.get('title', 'Untitled')}")
-            if story.get("description"):
-                parts.append(f"Description: {story.get('description')}")
-            if story.get("genre"):
-                parts.append(f"Genre: {story.get('genre')}")
-            if story.get("tone"):
-                parts.append(f"Tone: {story.get('tone')}")
-            parts.append("")
-
-        # Characters
-        characters = context.get("characters", [])
-        if characters:
-            parts.append("CHARACTERS:")
-            for char in characters:
-                name = char.get("name", "Unknown")
-                backstory = char.get("backstory", "No backstory")
-                parts.append(f"- {name}: {backstory}")
-            parts.append("")
-
-        # Plots
-        plots = context.get("plots", [])
-        if plots:
-            parts.append("PLOT LINES:")
-            for plot in plots:
-                plot_name = plot.get("name", "Unnamed plot")
-                description = plot.get("description", "")
-                parts.append(f"- {plot_name}: {description}")
-
-                # Include first few events
-                events = plot.get("events", [])
-                for event in events[:5]:  # First 5 events
-                    event_name = event.get("name", "")
-                    event_content = event.get("content", "")
-                    if event_name or event_content:
-                        parts.append(f"  * {event_name}: {event_content}")
-            parts.append("")
-
-        # Places
-        places = context.get("places", [])
-        if places:
-            parts.append("LOCATIONS:")
-            for place in places:
-                place_name = place.get("name", "Unknown location")
-                description = place.get("description", "")
-                parts.append(f"- {place_name}: {description}")
-            parts.append("")
-
-        # Chapters (summarize older, full-text recent)
-        chapters = context.get("chapters", [])
-        if chapters:
-            parts.append("CHAPTERS:")
-            total_chapters = len(chapters)
-
-            # Last 3 chapters: full content
-            recent_chapters = chapters[-3:] if total_chapters > 3 else chapters
-            older_chapters = chapters[:-3] if total_chapters > 3 else []
-
-            # Summarize older chapters
-            if older_chapters:
-                chapter_titles = [c.get("title", "Untitled") for c in older_chapters]
-                parts.append(
-                    f"[Earlier chapters 1-{len(older_chapters)}: {' | '.join(chapter_titles)}]"
-                )
-                parts.append("")
-
-            # Full text for recent chapters
-            for chapter in recent_chapters:
-                title = chapter.get("title", "Untitled Chapter")
-                content = chapter.get("content", "")
-                # Truncate if too long (keep first 2000 chars)
-                truncated_content = (
-                    content[:2000] + "..." if len(content) > 2000 else content
-                )
-                parts.append(f"Chapter: {title}")
-                parts.append(truncated_content)
-                parts.append("")
-
-        return "\n".join(parts)

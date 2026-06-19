@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from google.cloud import firestore
 
+from .entity_schema import ENTITY_FIELD_SCHEMA
 from .utils import sanitize_for_prompt
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ def _read_cache_ttl() -> float:
 
 # Module-level cache shared across all StoryContextBuilder instances (each tool
 # builds its own instance per request). Keyed by (project, story_id).
-_CONTEXT_CACHE: Dict[Tuple[str, str], Tuple[float, Dict[str, Any]]] = {}
+_CONTEXT_CACHE: Dict[Tuple[str, ...], Tuple[float, Dict[str, Any]]] = {}
 _CONTEXT_CACHE_LOCK = threading.Lock()
 
 
@@ -83,23 +84,31 @@ class StoryContextBuilder:
         Returns:
             Dictionary containing story data, characters, places, plots, and chapters
         """
+        cache_key = (str(self.db.project), story_id, "full")
+        return self._cached_context(
+            cache_key, lambda: self._fetch_story_context(story_id)
+        )
+
+    def _cached_context(self, cache_key, fetch_fn):
+        """Return a TTL-cached, deep-copied context. Shared by the full and slim
+        builders so both avoid re-reading Firestore on every AI call. The deep copy
+        lets callers mutate the result (e.g. sort chapters) without corrupting the
+        cached entry. Returns a fresh fetch (no caching) when the TTL is disabled."""
         ttl = _read_cache_ttl()
         if ttl <= 0:
-            return self._fetch_story_context(story_id)
+            return fetch_fn()
 
-        cache_key = (str(self.db.project), story_id)
         now = time.monotonic()
-
         with _CONTEXT_CACHE_LOCK:
             cached = _CONTEXT_CACHE.get(cache_key)
             if cached is not None and (now - cached[0]) < ttl:
-                logger.debug("story_context_cache_hit story_id=%s", story_id)
+                logger.debug("story_context_cache_hit key=%s", cache_key)
                 return copy.deepcopy(cached[1])
 
         # Fetch outside the lock so concurrent requests for different stories
         # don't serialize on Firestore I/O. A brief duplicate fetch on a cold
         # cache is cheaper than holding the lock across a network round-trip.
-        context = self._fetch_story_context(story_id)
+        context = fetch_fn()
 
         stored_at = time.monotonic()
         with _CONTEXT_CACHE_LOCK:
@@ -178,6 +187,36 @@ class StoryContextBuilder:
         """Delegate to shared sanitize_for_prompt utility."""
         return sanitize_for_prompt(value, max_chars)
 
+    @classmethod
+    def _append_prompt_fields(cls, info: str, data: Dict[str, Any], kind: str, skip):
+        """Append the shared-schema scalar fields for ``kind`` as ``\\n  Label: value``
+        lines (sanitized, per-field capped). ``skip`` names fields rendered specially by
+        the caller (e.g. the head field shown inline). Single source of field
+        names/labels/caps shared with chapter_rag.compose_entity_text via
+        ENTITY_FIELD_SCHEMA."""
+        for field, label, cap in ENTITY_FIELD_SCHEMA.get(kind, []):
+            if field in skip:
+                continue
+            value = data.get(field)
+            if value:
+                info += f"\n  {label}: {cls._sanitize_for_prompt(value, cap)}"
+        return info
+
+    @classmethod
+    def _roster_entry(cls, char: Dict[str, Any]) -> str:
+        """One-line character entry for the slim roster: ``Name (short descriptor)``.
+
+        The descriptor uses a real, persisted field (personality, else soul) trimmed to
+        its first line/clause — NOT the dropped ``role`` field, which was never written
+        (every entry used to render as ``Name (character)``). Renders just the name when
+        no descriptor field is present."""
+        name = cls._sanitize_for_prompt(char.get("name", "?"), 80)
+        descriptor = char.get("personality") or char.get("soul") or ""
+        descriptor = cls._sanitize_for_prompt(descriptor, 80)
+        # Keep it terse: first sentence/line only, capped short for a roster line.
+        descriptor = descriptor.replace("\n", " ").split(". ")[0].strip()[:60].strip()
+        return f"{name} ({descriptor})" if descriptor else name
+
     def format_context_for_prompt(self, context: Dict[str, Any]) -> str:
         """
         Format context into a readable prompt string for the AI model.
@@ -212,26 +251,38 @@ class StoryContextBuilder:
                 f"Description: {self._sanitize_for_prompt(story.get('description'), 1200)}"
             )
 
-        # Characters
+        # Characters. Field names match the real Firestore schema written by the
+        # frontend (src/types/ICharacter.ts) — soul/personality/voice/backstory/
+        # affiliations/notes/relationships — NOT role/traits/motivations, which are
+        # never persisted. Mirrors chapter_rag.compose_entity_text.
         if characters:
             prompt_parts.append("\n=== CHARACTERS ===")
             for char in characters:
                 char_info = (
                     f"- {self._sanitize_for_prompt(char.get('name', 'Unnamed'), 200)}"
                 )
-                if char.get("role"):
+                # Age is shown inline after the name; the rest come from the schema.
+                if char.get("age"):
                     char_info += (
-                        f" (Role: {self._sanitize_for_prompt(char.get('role'), 120)})"
+                        f" (Age: {self._sanitize_for_prompt(char.get('age'), 40)})"
                     )
-                if char.get("backstory"):
-                    char_info += f"\n  Backstory: {self._sanitize_for_prompt(char.get('backstory'), 1500)}"
-                if char.get("traits"):
-                    char_info += f"\n  Traits: {self._sanitize_for_prompt(char.get('traits'), 600)}"
-                if char.get("motivations"):
-                    char_info += f"\n  Motivations: {self._sanitize_for_prompt(char.get('motivations'), 600)}"
+                char_info = self._append_prompt_fields(
+                    char_info, char, "character", skip={"age"}
+                )
+                for rel in char.get("relationships") or []:
+                    if isinstance(rel, dict):
+                        rn = rel.get("name", "")
+                        rt = rel.get("type", "")
+                        rd = rel.get("description", "")
+                        if rn or rt or rd:
+                            line = self._sanitize_for_prompt(
+                                f"{rn} ({rt}): {rd}".strip(), 300
+                            )
+                            char_info += f"\n  Relationship - {line}"
                 prompt_parts.append(char_info)
 
-        # Places
+        # Places. Fields/labels/caps come from ENTITY_FIELD_SCHEMA; description is
+        # shown inline after the name, the rest as labeled lines.
         if places:
             prompt_parts.append("\n=== PLACES ===")
             for place in places:
@@ -242,23 +293,30 @@ class StoryContextBuilder:
                     place_info += (
                         f": {self._sanitize_for_prompt(place.get('description'), 900)}"
                     )
-                if place.get("atmosphere"):
-                    place_info += f"\n  Atmosphere: {self._sanitize_for_prompt(place.get('atmosphere'), 500)}"
+                place_info = self._append_prompt_fields(
+                    place_info, place, "place", skip={"description"}
+                )
                 prompt_parts.append(place_info)
 
-        # Plots
+        # Plots. Fields from ENTITY_FIELD_SCHEMA; description inline, events bespoke.
         if plots:
             prompt_parts.append("\n=== PLOTS ===")
             for plot in plots:
-                plot_info = f"- {self._sanitize_for_prompt(plot.get('title', 'Untitled Plot'), 200)}"
+                plot_info = f"- {self._sanitize_for_prompt(plot.get('name', 'Untitled Plot'), 200)}"
                 if plot.get("description"):
                     plot_info += (
                         f": {self._sanitize_for_prompt(plot.get('description'), 1200)}"
                     )
-                if plot.get("type"):
-                    plot_info += (
-                        f"\n  Type: {self._sanitize_for_prompt(plot.get('type'), 100)}"
-                    )
+                plot_info = self._append_prompt_fields(
+                    plot_info, plot, "plot", skip={"description"}
+                )
+                for ev in plot.get("events") or []:
+                    if isinstance(ev, dict):
+                        en = ev.get("name", "")
+                        ec = ev.get("content", "")
+                        if en or ec:
+                            line = self._sanitize_for_prompt(f"{en}: {ec}".strip(), 600)
+                            plot_info += f"\n  Event - {line}"
                 prompt_parts.append(plot_info)
 
         # Existing chapters summary
@@ -280,14 +338,85 @@ class StoryContextBuilder:
             "</untrusted_story_data>"
         )
 
+    def build_slim_chat_context(self, story_id: str) -> Dict[str, Any]:
+        """Build the minimal context chat needs WITHOUT reading chapter bodies.
+
+        Chat only renders chapter *titles* (see format_slim_context_for_chat), so
+        instead of streaming every chapter doc (the unbounded cost that grew with
+        book length) we read the denormalized ``chapterIndex`` maintained on the
+        story doc by the chapter-write trigger. Characters/places/plots are small,
+        bounded collections, so we still read those directly.
+
+        Result is TTL-cached (shared mechanism with build_story_context) so a burst of
+        chat messages doesn't re-read the story doc + 3 subcollections every time.
+
+        Falls back to a field-projected read of the chapters collection when
+        ``chapterIndex`` is absent (e.g. a story written before the trigger
+        existed), so behavior is correct even without backfill — just not as cheap.
+        """
+        cache_key = (str(self.db.project), story_id, "slim")
+        return self._cached_context(
+            cache_key, lambda: self._fetch_slim_chat_context(story_id)
+        )
+
+    def _fetch_slim_chat_context(self, story_id: str) -> Dict[str, Any]:
+        """Uncached read backing build_slim_chat_context (see its docstring)."""
+        story_ref = self.db.collection("stories").document(story_id)
+        story_doc = story_ref.get()
+        if not story_doc.exists:
+            raise ValueError(f"Story {story_id} not found")
+
+        story_data = story_doc.to_dict() or {}
+        story_data["id"] = story_doc.id
+
+        characters = self._fetch_collection(story_ref.collection("characters"))
+        places = self._fetch_collection(story_ref.collection("places"))
+        plots = self._fetch_collection(story_ref.collection("plots"))
+
+        chapters = story_data.get("chapterIndex")
+        if not isinstance(chapters, list):
+            # Backfill fallback: read titles only (no bodies) so the cost is field-
+            # projected rather than full-document. Bounded by COLLECTION_FETCH_LIMIT
+            # (200); the frontend enforces a far lower per-story chapter count.
+            chapters = [
+                {
+                    "title": doc.to_dict().get("title", "Untitled"),
+                    "chapterNumber": doc.to_dict().get("chapterNumber"),
+                    "order": doc.to_dict().get("order"),
+                }
+                for doc in story_ref.collection("chapters")
+                .select(["title", "chapterNumber", "order"])
+                .limit(COLLECTION_FETCH_LIMIT)
+                .stream()
+            ]
+            chapters.sort(
+                key=lambda c: (
+                    c.get("order")
+                    if c.get("order") is not None
+                    else (c.get("chapterNumber") or 0)
+                )
+            )
+
+        return {
+            "story": story_data,
+            "characters": characters,
+            "places": places,
+            "plots": plots,
+            "chapters": chapters,
+        }
+
     def format_slim_context_for_chat(self, context: Dict[str, Any]) -> str:
         """
-        Minimal context for chat — metadata + names/roles + plot titles + chapter list.
-        No chapter text, no backstories, no plot events. ~90% smaller than full context.
-        Brain memory fills in depth over time via semantic/episodic recall.
+        Minimal "roster" context for chat — metadata + character names (each with a
+        short descriptor from personality/soul) + place names + plot titles + chapter
+        list. No chapter text, no backstories,
+        no plot events here. Depth on whatever the question needs is supplied
+        separately by vector retrieval (ChapterRAG over chapters AND entities) and
+        by brain memory, so this stays small and bounded regardless of story size.
         """
         story = context.get("story", {})
         characters = context.get("characters", [])
+        places = context.get("places", [])
         plots = context.get("plots", [])
         chapters = context.get("chapters", [])
 
@@ -311,11 +440,14 @@ class StoryContextBuilder:
             parts.append(desc[:150] + ("…" if len(desc) > 150 else ""))
 
         if characters:
-            char_list = ", ".join(
-                f"{self._sanitize_for_prompt(c.get('name', '?'), 80)} ({self._sanitize_for_prompt(c.get('role', 'character'), 80)})"
-                for c in characters
-            )
+            char_list = ", ".join(self._roster_entry(c) for c in characters)
             parts.append(f"\nCharacters: {char_list}")
+
+        if places:
+            place_list = ", ".join(
+                self._sanitize_for_prompt(pl.get("name", "?"), 80) for pl in places
+            )
+            parts.append(f"\nPlaces: {place_list}")
 
         if plots:
             parts.append("\nPlots:")

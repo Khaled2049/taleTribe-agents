@@ -1,14 +1,16 @@
 """Main ADK agent implementation for story generation."""
 
+import asyncio
 import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 # Handle imports for both direct execution and module import
 try:
     from .brain import Brain, BrainConfig, ReflectionInput
+    from .chapter_rag import ChapterRAG, format_excerpts
     from .llm_provider import get_llm_provider
     from .tools import (
         BrainstormingTool,
@@ -28,6 +30,7 @@ except ImportError:
     if str(parent_dir) not in sys.path:
         sys.path.insert(0, str(parent_dir))
     from agents.storyAgent.brain import Brain, BrainConfig, ReflectionInput
+    from agents.storyAgent.chapter_rag import ChapterRAG, format_excerpts
     from agents.storyAgent.llm_provider import get_llm_provider
     from agents.storyAgent.tools import (
         BrainstormingTool,
@@ -96,12 +99,15 @@ class StoryAgent:
         self.story_choices_tool = StoryChoicesTool(
             self.project_id, self.location, llm_provider=self._llm_provider
         )
+        # Chapter RAG shares the process-wide embedder + Firestore client.
+        self.chapter_rag = ChapterRAG(self._db, self._embedder)
 
     async def aclose(self) -> None:
-        """Release process-lifetime resources (e.g. the LLM HTTP client)."""
-        close = getattr(self._llm_provider, "aclose", None)
-        if close is not None:
-            await close()
+        """Release process-lifetime resources (e.g. the LLM + embedding HTTP clients)."""
+        for provider in (self._llm_provider, self._embedder):
+            close = getattr(provider, "aclose", None)
+            if close is not None:
+                await close()
 
     def _make_brain(self, user_id: str, context_id: str) -> Brain:
         return Brain(
@@ -253,11 +259,64 @@ class StoryAgent:
         brain_context = None
         brain = None
         assembled = None
+        chapter_excerpts = None
 
         if self._embedder is not None:
+            log = logging.getLogger(__name__)
+
+            # Embed the message ONCE. Chapter retrieval and semantic memory both query
+            # on the full message, so they share this vector (episodic uses a truncated
+            # query and embeds its own). Saves one embedding API call per chat turn.
+            query_vec: Optional[List[float]] = None
+            try:
+                query_vec = await self._embedder.embed(message)
+            except Exception:
+                log.warning(
+                    "query embedding failed for story_id=%s; retrieval degraded",
+                    story_id,
+                )
+
             try:
                 brain = self._make_brain(user_id, story_id)
-                assembled = await brain.assemble(message, action_hint="chatWithContext")
+            except Exception:
+                brain = None
+                log.warning("make_brain failed for story_id=%s", story_id)
+
+            # Chapter retrieval and brain assembly are independent → run concurrently.
+            async def _retrieve_excerpts():
+                excerpts = await self.chapter_rag.retrieve(
+                    story_id, message, top_k=4, query_embedding=query_vec
+                )
+                return format_excerpts(excerpts) or None
+
+            async def _assemble_brain():
+                if brain is None:
+                    return None
+                return await brain.assemble(
+                    message,
+                    action_hint="chatWithContext",
+                    query_embedding=query_vec,
+                )
+
+            excerpts_res, assemble_res = await asyncio.gather(
+                _retrieve_excerpts(), _assemble_brain(), return_exceptions=True
+            )
+
+            if isinstance(excerpts_res, Exception):
+                log.warning(
+                    "chapter_rag.retrieve failed for story_id=%s, continuing without excerpts",
+                    story_id,
+                )
+            else:
+                chapter_excerpts = excerpts_res
+
+            if isinstance(assemble_res, Exception):
+                log.warning(
+                    "Brain.assemble failed for story_id=%s, falling back", story_id
+                )
+                brain = None
+            elif assemble_res is not None:
+                assembled = assemble_res
                 brain_context = (
                     assembled.text if _assembled_has_memory(assembled) else None
                 )
@@ -266,19 +325,18 @@ class StoryAgent:
                         brain_context.split("\n=== CURRENT REQUEST ===")[0].strip()
                         or None
                     )
-                logging.getLogger(__name__).info(
+                log.info(
                     "Full brain_context for chat story_id=%s:\n%s",
                     story_id,
                     brain_context,
                 )
-            except Exception:
-                logger = logging.getLogger(__name__)
-                logger.warning(
-                    "Brain.assemble failed for story_id=%s, falling back", story_id
-                )
 
         result = await self.chat_tool.execute(
-            story_id, message, chat_history, brain_context=brain_context
+            story_id,
+            message,
+            chat_history,
+            brain_context=brain_context,
+            chapter_excerpts=chapter_excerpts,
         )
 
         if brain is not None and assembled is not None and background_tasks is not None:
@@ -438,6 +496,58 @@ class StoryAgent:
         """Enhance wizard input across premise/character/place/conflict/blueprint."""
         return await self.enhance_wizard_tool.execute(user_id, wizard_type, data)
 
+    async def index_chapter(
+        self,
+        story_id: str,
+        chapter_id: str,
+        title: str = "",
+        content: str = "",
+        chapter_number: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Embed a chapter's body into the vector index. Called by the chapter-write
+        trigger so retrieval cost is paid once per edit, not per chat message."""
+        if self._embedder is None:
+            logging.getLogger(__name__).info(
+                "index_chapter skipped (no embedder) story_id=%s chapter_id=%s",
+                story_id,
+                chapter_id,
+            )
+            return {"indexed": False, "chunks": 0, "reason": "no_embedder"}
+        chunks = await self.chapter_rag.index_chapter(
+            story_id, chapter_id, title, content, chapter_number
+        )
+        return {"indexed": True, "chunks": chunks, "chapterId": chapter_id}
+
+    async def delete_chapter_chunks(
+        self, story_id: str, chapter_id: str
+    ) -> Dict[str, Any]:
+        """Remove a chapter's chunks from the vector index (chapter deleted)."""
+        removed = await self.chapter_rag.delete_chapter(story_id, chapter_id)
+        return {"deleted": True, "chunks": removed, "chapterId": chapter_id}
+
+    async def index_entity(
+        self,
+        story_id: str,
+        kind: str,
+        entity_id: str,
+        data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Embed a metadata entity (character/place/plot) so chat can retrieve its
+        details on demand. Called by the entity-write trigger, once per edit."""
+        if self._embedder is None:
+            return {"indexed": False, "chunks": 0, "reason": "no_embedder"}
+        chunks = await self.chapter_rag.index_entity(
+            story_id, kind, entity_id, data or {}
+        )
+        return {"indexed": True, "chunks": chunks, "entityId": entity_id, "kind": kind}
+
+    async def delete_entity_chunks(
+        self, story_id: str, entity_id: str
+    ) -> Dict[str, Any]:
+        """Remove a metadata entity's chunks from the vector index (entity deleted)."""
+        removed = await self.chapter_rag.delete_entity(story_id, entity_id)
+        return {"deleted": True, "chunks": removed, "entityId": entity_id}
+
     async def clear_memory(
         self, story_id: str, user_id: str = "anonymous"
     ) -> Dict[str, Any]:
@@ -563,6 +673,35 @@ class StoryAgent:
                 user_id=effective_user_id,
             )
 
+        if action == "indexChapter":
+            return await self.index_chapter(
+                self._param(parameters, "storyId", "story_id"),
+                self._param(parameters, "chapterId", "chapter_id"),
+                self._param(parameters, "title", default="") or "",
+                self._param(parameters, "content", default="") or "",
+                self._param(parameters, "chapterNumber", "chapter_number"),
+            )
+
+        if action == "deleteChapterChunks":
+            return await self.delete_chapter_chunks(
+                self._param(parameters, "storyId", "story_id"),
+                self._param(parameters, "chapterId", "chapter_id"),
+            )
+
+        if action == "indexEntity":
+            return await self.index_entity(
+                self._param(parameters, "storyId", "story_id"),
+                self._param(parameters, "kind"),
+                self._param(parameters, "entityId", "entity_id"),
+                self._param(parameters, "data", default={}) or {},
+            )
+
+        if action == "deleteEntityChunks":
+            return await self.delete_entity_chunks(
+                self._param(parameters, "storyId", "story_id"),
+                self._param(parameters, "entityId", "entity_id"),
+            )
+
         raise ValueError(f"Unknown action: {action}")
 
     @staticmethod
@@ -605,9 +744,14 @@ def _load_embedder():
     """Load embedding provider once. Returns None if unavailable."""
     from agents.storyAgent.brain.embedding_provider import (  # noqa: PLC0415
         get_embedding_provider,
+        verify_embedding_dimension,
     )
 
-    return get_embedding_provider(os.getenv("GOOGLE_AI_STUDIO_API_KEY"))
+    embedder = get_embedding_provider(os.getenv("GOOGLE_AI_STUDIO_API_KEY"))
+    # One dimension contract for both chapter RAG and brain memory: fail loud here
+    # rather than silently lose recall later (mixed-dim vectors score 0.0).
+    verify_embedding_dimension(embedder)
+    return embedder
 
 
 def _get_firestore_client(project_id: str):
