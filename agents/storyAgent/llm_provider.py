@@ -9,10 +9,12 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from tenacity import (
+    before_sleep_log,
     retry,
     retry_if_exception_type,
     stop_after_attempt,
-    wait_exponential,
+    stop_after_delay,
+    wait_exponential_jitter,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,14 +61,33 @@ class LLMTimeoutError(LLMProviderError):
     """AI request timed out."""
 
 
+class InvalidRequestError(LLMProviderError):
+    """creditProxy rejected the request itself (bad params) — not a provider
+    or credits issue. Retrying with the same payload will never succeed."""
+
+
+class BillingCommitError(LLMProviderError):
+    """The LLM call succeeded but committing the reservation afterward
+    failed — content was generated (and paid for at the provider) but never
+    billed to the user. Must NOT be retried: a retry would generate new
+    content and reserve credits a second time for a billing-side failure."""
+
+
 def _classify_http_error(
     status: int, body: str, config: Optional[Dict[str, str]]
 ) -> LLMProviderError:
-    """Map a creditProxy HTTP error to a typed exception."""
+    """Map a creditProxy HTTP error to a typed exception.
+
+    Status codes are trusted over body text: the gateway deliberately never
+    echoes upstream error bodies to callers (see creditProxy/cmd/gateway),
+    so body-text matching alone would miss real failures. Body matching is
+    kept only as a fallback for providers/paths that do return descriptive
+    text.
+    """
     body_lower = body.lower()
-    if "insufficient credits" in body_lower:
+    if status == 402 or "insufficient credits" in body_lower:
         return InsufficientCreditsError(body)
-    if status == 401 or "unauthorized" in body_lower:
+    if status in (401, 403) or "unauthorized" in body_lower:
         return ProviderAuthError(body)
     if status == 429 or "rate limit" in body_lower or "too many requests" in body_lower:
         return RateLimitedError(body)
@@ -76,6 +97,12 @@ def _classify_http_error(
         if model or provider:
             return ProviderNotFoundError(provider, model)
         return BackendUnavailableError(f"creditProxy error 404: {body}")
+    if status == 400:
+        return InvalidRequestError(body)
+    if status == 409:
+        return BillingCommitError(body)
+    if status in (500, 502, 503, 504):
+        return BackendUnavailableError(f"creditProxy error {status}: {body}")
     return LLMProviderError(f"creditProxy error {status}: {body}")
 
 
@@ -159,10 +186,19 @@ class CreditProxyProvider(LLMProvider):
             "max_output_tokens": 8192,
         }
 
+    # Only BackendUnavailableError (network failure, or a creditProxy 5xx) is
+    # retried — every other typed error is either not the caller's fault to
+    # fix by retrying (insufficient credits, bad request) or would cause a
+    # double-charge/double-generation if retried (BillingCommitError). Bounded
+    # two ways so a slow-but-not-quite-failing backend can't retry forever:
+    # at most 3 attempts, AND at most 30s of total retry-loop time, whichever
+    # comes first. Jittered backoff avoids a thundering herd against
+    # creditProxy when many requests fail at once.
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
+        stop=stop_after_attempt(3) | stop_after_delay(30),
+        wait=wait_exponential_jitter(initial=2, max=10),
         retry=retry_if_exception_type(BackendUnavailableError),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
         reraise=True,
     )
     async def generate_content_async(self, prompt: str) -> str:

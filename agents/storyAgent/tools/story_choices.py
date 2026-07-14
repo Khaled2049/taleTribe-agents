@@ -217,12 +217,6 @@ class StoryChoicesTool:
                 formatted_context, plain_text, turn_count
             )
 
-        logger.info(
-            "Full story choices prompt story_id=%s mode=%s:\n%s",
-            story_id,
-            mode,
-            prompt,
-        )
         raw_response = await self.llm_provider.generate_content_async(prompt)
 
         parsed = _safe_json_parse(raw_response or "")

@@ -21,7 +21,9 @@ from agents.storyAgent.action_schemas import ActionName, validate_action_paramet
 from agents.storyAgent.agent import StoryAgent
 from agents.storyAgent.llm_provider import (
     BackendUnavailableError,
+    BillingCommitError,
     InsufficientCreditsError,
+    InvalidRequestError,
     LLMProviderError,
     LLMTimeoutError,
     ProviderAuthError,
@@ -57,6 +59,7 @@ def _configure_logging() -> None:
             structlog.stdlib.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.StackInfoRenderer(),
+            structlog.processors.format_exc_info,
             structlog.processors.JSONRenderer(),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
@@ -393,8 +396,48 @@ def create_app() -> FastAPI:
                     "details": None,
                 },
             ) from exc
+        except InvalidRequestError as exc:
+            # creditProxy rejected the request itself (e.g. prompt/params too
+            # large) — not a provider or credits issue, and NOT fixed by
+            # retrying with the same input.
+            logger.warning(
+                "invalid_request_to_credit_proxy",
+                action=request.action,
+                error_type=type(exc).__name__,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "INVALID_REQUEST",
+                    "message": "Your request couldn't be processed — try shortening the input.",
+                    "details": None,
+                },
+            ) from exc
+        except BillingCommitError as exc:
+            # The LLM call succeeded (content was generated, provider cost
+            # already incurred) but billing the reservation afterward failed,
+            # so no response was ever returned to the caller. This is a real
+            # cost leak worth being loud about — log at error level, not warn.
+            logger.error(
+                "billing_commit_failed",
+                action=request.action,
+                error_type=type(exc).__name__,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "BILLING_ERROR",
+                    "message": "AI service hit a billing error. Please try again.",
+                    "details": None,
+                },
+            ) from exc
         except LLMProviderError as exc:
-            logger.exception("llm_provider_error", action=request.action)
+            logger.exception(
+                "llm_provider_error",
+                action=request.action,
+                error_type=type(exc).__name__,
+            )
             raise HTTPException(
                 status_code=500,
                 detail={
@@ -404,7 +447,9 @@ def create_app() -> FastAPI:
                 },
             ) from exc
         except Exception as exc:
-            logger.exception("unhandled_error", action=request.action)
+            logger.exception(
+                "unhandled_error", action=request.action, error_type=type(exc).__name__
+            )
             raise HTTPException(
                 status_code=500,
                 detail={
