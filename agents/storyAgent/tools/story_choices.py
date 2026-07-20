@@ -12,6 +12,15 @@ logger = logging.getLogger(__name__)
 
 NUMBER_OF_CHOICES = 3
 
+# Output caps per mode. Opening (an opening scene + 3 prose branches) and ending
+# (a multi-paragraph closing) generate the most prose, and 4096 tokens can
+# truncate their JSON mid-string — the model returns invalid JSON and the parse
+# fails ("unexpected structure"). Give them more headroom. Continuation (3 short
+# branches) fits comfortably in less. All stay <= the gateway's MAX_OUTPUT_TOKENS.
+MAX_OUTPUT_TOKENS_OPENING = 6144
+MAX_OUTPUT_TOKENS_ENDING = 6144
+MAX_OUTPUT_TOKENS_CONTINUATION = 4096
+
 
 def _strip_html(html: str) -> str:
     """Remove HTML tags and decode basic entities."""
@@ -210,14 +219,19 @@ class StoryChoicesTool:
 
         if mode == "opening":
             prompt = self._build_opening_prompt(formatted_context)
+            max_output_tokens = MAX_OUTPUT_TOKENS_OPENING
         elif mode == "ending":
             prompt = self._build_ending_prompt(formatted_context, plain_text)
+            max_output_tokens = MAX_OUTPUT_TOKENS_ENDING
         else:
             prompt = self._build_continuation_prompt(
                 formatted_context, plain_text, turn_count
             )
+            max_output_tokens = MAX_OUTPUT_TOKENS_CONTINUATION
 
-        raw_response = await self.llm_provider.generate_content_async(prompt)
+        raw_response = await self.llm_provider.generate_content_async(
+            prompt, max_output_tokens=max_output_tokens
+        )
 
         parsed = _safe_json_parse(raw_response or "")
         if not isinstance(parsed, dict) or "choices" not in parsed:

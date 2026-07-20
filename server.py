@@ -158,6 +158,24 @@ class AgentResponse(BaseModel):
     error: Optional[ErrorDetail] = None
 
 
+# Allowed top-up amounts for the MVP "Top up credits" flow. Validated here
+# (and again in Firebase Functions) so callers can't mint arbitrary amounts.
+ALLOWED_CREDIT_TIERS = frozenset({10000, 50000, 100000})
+
+
+class CreditBalanceRequest(BaseModel):
+    """Request to read a user's platform credit balance."""
+
+    user_id: str = Field(min_length=1, max_length=128)
+
+
+class PurchaseCreditsRequest(BaseModel):
+    """Request to top up a user's platform credit balance."""
+
+    user_id: str = Field(min_length=1, max_length=128)
+    credits: int
+
+
 def _try_load_image_router(current_dir: Path, enabled: bool):
     """Try to load image generation router when enabled."""
     if not enabled:
@@ -455,6 +473,104 @@ def create_app() -> FastAPI:
                 detail={
                     "code": "INTERNAL_ERROR",
                     "message": "AI service is temporarily unavailable. Please try again.",
+                    "details": None,
+                },
+            ) from exc
+
+    @app.post("/credits/balance", response_model=AgentResponse)
+    async def credits_balance(
+        request: CreditBalanceRequest,
+        raw_request: Request,
+        _: None = Depends(_verify_internal_token),
+    ) -> AgentResponse:
+        """Return a user's platform credit balance (non-BYOK). Routes through
+        creditProxy; BYOK config is deliberately not involved."""
+        firebase_token = raw_request.headers.get("X-Firebase-Token", "").strip() or None
+        try:
+            data = await app.state.agent.llm_provider.get_balance(
+                request.user_id, firebase_token
+            )
+            return AgentResponse(success=True, data=data)
+        except BackendUnavailableError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "BACKEND_UNAVAILABLE",
+                    "message": "Credit service is unreachable. Please try again later.",
+                    "details": None,
+                },
+            ) from exc
+        except LLMProviderError as exc:
+            logger.exception("credit_balance_error", error_type=type(exc).__name__)
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "INTERNAL_ERROR",
+                    "message": "Credit service is temporarily unavailable. Please try again.",
+                    "details": None,
+                },
+            ) from exc
+
+    @app.post("/credits/purchase", response_model=AgentResponse)
+    async def credits_purchase(
+        request: PurchaseCreditsRequest,
+        raw_request: Request,
+        _: None = Depends(_verify_internal_token),
+    ) -> AgentResponse:
+        """Top up a user's platform credit balance by one of the allowed tiers."""
+        if request.credits not in ALLOWED_CREDIT_TIERS:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "VALIDATION_ERROR",
+                    "message": "Invalid credit amount.",
+                    "details": {"allowed": sorted(ALLOWED_CREDIT_TIERS)},
+                },
+            )
+        firebase_token = raw_request.headers.get("X-Firebase-Token", "").strip() or None
+        try:
+            data = await app.state.agent.llm_provider.purchase_credits(
+                request.user_id, request.credits, firebase_token
+            )
+            return AgentResponse(success=True, data=data)
+        except InvalidRequestError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "INVALID_REQUEST",
+                    "message": "The credit purchase was rejected.",
+                    "details": None,
+                },
+            ) from exc
+        except RateLimitedError as exc:
+            # creditProxy rejects with 429 once the per-user daily purchase cap
+            # is hit (MAX_PURCHASES_PER_DAY_PER_USER).
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "code": "RATE_LIMITED",
+                    "message": "You've reached your daily purchase limit. Please try again tomorrow.",
+                    "details": None,
+                },
+            ) from exc
+        except BackendUnavailableError as exc:
+            # Includes the case where the creditProxy purchase endpoint is
+            # disabled (gateway maps that to 503 → BackendUnavailableError).
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "BACKEND_UNAVAILABLE",
+                    "message": "Credit top-up is temporarily unavailable. Please try again later.",
+                    "details": None,
+                },
+            ) from exc
+        except LLMProviderError as exc:
+            logger.exception("credit_purchase_error", error_type=type(exc).__name__)
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "INTERNAL_ERROR",
+                    "message": "Credit service is temporarily unavailable. Please try again.",
                     "details": None,
                 },
             ) from exc

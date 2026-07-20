@@ -95,7 +95,9 @@ IMPORTANT: You are writing a specific segment of a larger arc.
     {{"title": "<compelling chapter title>", "content": "<full chapter text>", "summary": "<2-3 sentence summary of this chapter for future continuity>"}}
     """
 
-        generated_text = await self.llm_provider.generate_content_async(prompt)
+        generated_text = await self.llm_provider.generate_content_async(
+            prompt, max_output_tokens=8192
+        )
         title, content, summary = self._parse_generated(generated_text, chapter_number)
 
         return {

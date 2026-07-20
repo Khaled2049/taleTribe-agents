@@ -326,6 +326,105 @@ class TestGenerateStoryChoices:
         assert called_params["currentContent"] == ""
 
 
+class TestCredits:
+    def test_balance_success(self):
+        app.state.agent.llm_provider.get_balance = AsyncMock(
+            return_value={"user_id": "u1", "available_credits": 1749}
+        )
+
+        response = client.post("/credits/balance", json={"user_id": "u1"})
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["data"]["available_credits"] == 1749
+        app.state.agent.llm_provider.get_balance.assert_awaited_once_with("u1", None)
+
+    def test_balance_forwards_firebase_token(self):
+        app.state.agent.llm_provider.get_balance = AsyncMock(
+            return_value={"user_id": "u1", "available_credits": 0}
+        )
+
+        client.post(
+            "/credits/balance",
+            json={"user_id": "u1"},
+            headers={"X-Firebase-Token": "fb-token"},
+        )
+
+        app.state.agent.llm_provider.get_balance.assert_awaited_once_with(
+            "u1", "fb-token"
+        )
+
+    def test_balance_missing_user_id_returns_422(self):
+        response = client.post("/credits/balance", json={})
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    def test_purchase_success(self):
+        app.state.agent.llm_provider.purchase_credits = AsyncMock(
+            return_value={
+                "user_id": "u1",
+                "purchased_credits": 10000,
+                "available_credits": 11749,
+            }
+        )
+
+        response = client.post(
+            "/credits/purchase", json={"user_id": "u1", "credits": 10000}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["data"]["available_credits"] == 11749
+        app.state.agent.llm_provider.purchase_credits.assert_awaited_once_with(
+            "u1", 10000, None
+        )
+
+    def test_purchase_rejects_non_tier_amount(self):
+        app.state.agent.llm_provider.purchase_credits = AsyncMock()
+
+        response = client.post(
+            "/credits/purchase", json={"user_id": "u1", "credits": 12345}
+        )
+
+        assert response.status_code == 400
+        data = response.json()
+        assert data["success"] is False
+        assert data["error"]["code"] == "VALIDATION_ERROR"
+        # never reached the provider for an invalid amount
+        app.state.agent.llm_provider.purchase_credits.assert_not_awaited()
+
+    def test_purchase_backend_unavailable_returns_503(self):
+        from agents.storyAgent.llm_provider import BackendUnavailableError
+
+        app.state.agent.llm_provider.purchase_credits = AsyncMock(
+            side_effect=BackendUnavailableError("purchase disabled")
+        )
+
+        response = client.post(
+            "/credits/purchase", json={"user_id": "u1", "credits": 10000}
+        )
+
+        assert response.status_code == 503
+        assert response.json()["error"]["code"] == "BACKEND_UNAVAILABLE"
+
+    def test_purchase_rate_limited_returns_429(self):
+        from agents.storyAgent.llm_provider import RateLimitedError
+
+        # creditProxy returns 429 once the per-user daily purchase cap is hit.
+        app.state.agent.llm_provider.purchase_credits = AsyncMock(
+            side_effect=RateLimitedError("daily purchase limit reached")
+        )
+
+        response = client.post(
+            "/credits/purchase", json={"user_id": "u1", "credits": 10000}
+        )
+
+        assert response.status_code == 429
+        assert response.json()["error"]["code"] == "RATE_LIMITED"
+
+
 class TestDocsEndpoints:
     def test_openapi_schema_available(self):
         response = client.get("/openapi.json")

@@ -102,6 +102,11 @@ class StoryAgent:
         # Chapter RAG shares the process-wide embedder + Firestore client.
         self.chapter_rag = ChapterRAG(self._db, self._embedder)
 
+    @property
+    def llm_provider(self):
+        """The shared CreditProxyProvider — also used for credit balance/top-up."""
+        return self._llm_provider
+
     async def aclose(self) -> None:
         """Release process-lifetime resources (e.g. the LLM + embedding HTTP clients)."""
         for provider in (self._llm_provider, self._embedder):
@@ -398,7 +403,9 @@ class StoryAgent:
             "or labels.\n\n"
             f"CHAPTER:\n{text}"
         )
-        summary = await self.chapter_tool.llm_provider.generate_content_async(prompt)
+        summary = await self.chapter_tool.llm_provider.generate_content_async(
+            prompt, max_output_tokens=256
+        )
         return {"summary": (summary or "").strip()}
 
     async def generate_story_choices(

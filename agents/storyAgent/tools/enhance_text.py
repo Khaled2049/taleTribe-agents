@@ -134,7 +134,7 @@ class EnhanceTextTool:
         )
 
         enhanced_text = await self.llm_provider.generate_content_async(
-            f"{system_prompt}\n\n{user_prompt}"
+            f"{system_prompt}\n\n{user_prompt}", max_output_tokens=1024
         )
 
         return {
