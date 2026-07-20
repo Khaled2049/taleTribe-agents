@@ -71,7 +71,7 @@ class MemoryReflector:
             '- episodic_summary: key narrative event in past tense, or "" if none.\n\n'
             f"Passage:\n{passage}"
         )
-        raw = await self._llm.generate_content_async(prompt)
+        raw = await self._llm.generate_content_async(prompt, max_output_tokens=512)
         return _parse_reflection_payload(raw)
 
     async def _apply_reflection(self, inp: ReflectionInput, payload: dict) -> None:

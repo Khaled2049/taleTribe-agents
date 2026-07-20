@@ -99,7 +99,9 @@ For each theme, provide:
             base_prompt += f"\n\nAdditional requirements: {prompt}"
 
         # Generate using LLM provider
-        generated_text = await self.llm_provider.generate_content_async(base_prompt)
+        generated_text = await self.llm_provider.generate_content_async(
+            base_prompt, max_output_tokens=2048
+        )
 
         # Parse ideas (simple extraction - could be improved)
         ideas = self._parse_ideas(generated_text, count)

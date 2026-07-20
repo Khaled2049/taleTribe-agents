@@ -26,6 +26,11 @@ _byok_config: ContextVar[Optional[Dict[str, str]]] = ContextVar(
 )
 _firebase_token: ContextVar[Optional[str]] = ContextVar("firebase_token", default=None)
 
+# Conservative default output cap. Each tool passes its own max_output_tokens
+# (see tools/*); this default only applies to callers that don't specify one, so
+# an un-updated call site stays cheap rather than reserving the old 8192 ceiling.
+DEFAULT_MAX_OUTPUT_TOKENS = 2048
+
 
 class LLMProviderError(Exception):
     """Base class for all typed LLM provider errors."""
@@ -129,7 +134,9 @@ class LLMProvider(ABC):
     """Abstract base class for LLM providers."""
 
     @abstractmethod
-    async def generate_content_async(self, prompt: str) -> str:
+    async def generate_content_async(
+        self, prompt: str, max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
+    ) -> str:
         """Generate text content from a prompt."""
 
     @abstractmethod
@@ -138,6 +145,7 @@ class LLMProvider(ABC):
         system_prompt: str,
         user_prompt: str,
         response_schema: Dict[str, Any],
+        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
     ) -> List[str]:
         """Generate structured (JSON array) content from system+user prompts."""
 
@@ -161,7 +169,20 @@ class CreditProxyProvider(LLMProvider):
         """Close the underlying HTTP client. Idempotent."""
         await self._client.aclose()
 
-    def _build_payload(self, prompt: str) -> Dict[str, Any]:
+    async def _auth_headers(self, firebase_token: Optional[str]) -> Dict[str, str]:
+        """Build the two-header auth used for every creditProxy call:
+        a GCP OIDC token (service-to-service, omitted off-GCP) plus the
+        end-user's forwarded Firebase token for identity resolution."""
+        headers: Dict[str, str] = {}
+        if token := await _gcp_id_token_async(self.base_url):
+            headers["Authorization"] = f"Bearer {token}"
+        if firebase_token:
+            headers["X-Firebase-Token"] = firebase_token
+        return headers
+
+    def _build_payload(
+        self, prompt: str, max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
+    ) -> Dict[str, Any]:
         config = _byok_config.get()
         user_id = (
             config.get("user_id", self.platform_user_id)
@@ -183,7 +204,7 @@ class CreditProxyProvider(LLMProvider):
             "byok_provider": provider,
             "byok_api_key": api_key,
             "byok_model": model,
-            "max_output_tokens": 8192,
+            "max_output_tokens": max_output_tokens,
         }
 
     # Only BackendUnavailableError (network failure, or a creditProxy 5xx) is
@@ -201,13 +222,11 @@ class CreditProxyProvider(LLMProvider):
         before_sleep=before_sleep_log(logger, logging.WARNING),
         reraise=True,
     )
-    async def generate_content_async(self, prompt: str) -> str:
-        payload = self._build_payload(prompt)
-        headers: Dict[str, str] = {}
-        if token := await _gcp_id_token_async(self.base_url):
-            headers["Authorization"] = f"Bearer {token}"
-        if firebase_token := _firebase_token.get():
-            headers["X-Firebase-Token"] = firebase_token
+    async def generate_content_async(
+        self, prompt: str, max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
+    ) -> str:
+        payload = self._build_payload(prompt, max_output_tokens)
+        headers = await self._auth_headers(_firebase_token.get())
         try:
             resp = await self._client.post(
                 f"{self.base_url}/v1/generate",
@@ -231,6 +250,7 @@ class CreditProxyProvider(LLMProvider):
         system_prompt: str,
         user_prompt: str,
         response_schema: Dict[str, Any],
+        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
     ) -> List[str]:
         schema_hint = json.dumps(response_schema, indent=2)
         combined = (
@@ -240,7 +260,7 @@ class CreditProxyProvider(LLMProvider):
             "Do not include any text before or after the JSON array."
         )
         try:
-            text = await self.generate_content_async(combined)
+            text = await self.generate_content_async(combined, max_output_tokens)
             text = text.strip()
             if text.startswith("```"):
                 text = text.replace("```json", "").replace("```", "")
@@ -255,6 +275,57 @@ class CreditProxyProvider(LLMProvider):
         except (json.JSONDecodeError, KeyError):
             logger.warning("CreditProxyProvider: failed to parse structured response")
             return []
+
+    async def get_balance(
+        self, user_id: str, firebase_token: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Fetch a user's platform credit balance from creditProxy.
+
+        Platform-only: BYOK is deliberately ignored (BYOK users don't spend
+        platform credits), so this never touches the _byok_config ContextVar.
+        """
+        headers = await self._auth_headers(firebase_token)
+        try:
+            resp = await self._client.get(
+                f"{self.base_url}/v1/users/{user_id}/balance",
+                headers=headers,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.TimeoutException as e:
+            raise LLMTimeoutError(str(e)) from e
+        except httpx.RequestError as e:
+            raise BackendUnavailableError(f"creditProxy unreachable: {e}") from e
+        except httpx.HTTPStatusError as e:
+            raise _classify_http_error(
+                e.response.status_code, e.response.text, None
+            ) from e
+
+    async def purchase_credits(
+        self, user_id: str, credits: int, firebase_token: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Top up a user's platform credit balance via creditProxy.
+
+        Platform-only, same as get_balance. Amount validation (allowed tiers)
+        happens at the caller (server route) before this is invoked.
+        """
+        headers = await self._auth_headers(firebase_token)
+        try:
+            resp = await self._client.post(
+                f"{self.base_url}/v1/credits/purchase",
+                json={"user_id": user_id, "credits": credits},
+                headers=headers,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.TimeoutException as e:
+            raise LLMTimeoutError(str(e)) from e
+        except httpx.RequestError as e:
+            raise BackendUnavailableError(f"creditProxy unreachable: {e}") from e
+        except httpx.HTTPStatusError as e:
+            raise _classify_http_error(
+                e.response.status_code, e.response.text, None
+            ) from e
 
 
 def get_llm_provider(

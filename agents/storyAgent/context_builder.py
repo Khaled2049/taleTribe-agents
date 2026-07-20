@@ -17,6 +17,12 @@ logger = logging.getLogger(__name__)
 # Cap Firestore reads per subcollection (characters/places/plots rarely exceed this).
 COLLECTION_FETCH_LIMIT = 200
 
+# Max entities of each kind (characters/places/plots) rendered into a full
+# generation prompt. Large stories can accumulate hundreds of entities; sending
+# them all bloats every generate call. We keep the most-recently-updated N (a
+# cheap proxy for "what the author is actively working on") and note the rest.
+ENTITY_CONTEXT_LIMIT = 12
+
 
 def _read_cache_ttl() -> float:
     """TTL (seconds) for the story-context cache. 0 (or negative) disables caching.
@@ -187,6 +193,37 @@ class StoryContextBuilder:
         """Delegate to shared sanitize_for_prompt utility."""
         return sanitize_for_prompt(value, max_chars)
 
+    @staticmethod
+    def _entity_sort_ts(entity: Dict[str, Any]) -> float:
+        """Epoch seconds for an entity's recency, from updatedAt (fallback
+        createdAt). Entities missing both sort oldest (-inf) so explicitly
+        timestamped ones win. Firestore timestamps are datetimes (``.timestamp()``);
+        numeric values are accepted as-is."""
+        for field in ("updatedAt", "createdAt"):
+            value = entity.get(field)
+            if value is None:
+                continue
+            if hasattr(value, "timestamp"):
+                try:
+                    return value.timestamp()
+                except (ValueError, OSError):
+                    continue
+            if isinstance(value, (int, float)):
+                return float(value)
+        return float("-inf")
+
+    @classmethod
+    def _cap_entities(
+        cls, entities: List[Dict[str, Any]]
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """Return the most-recently-updated ``ENTITY_CONTEXT_LIMIT`` entities and
+        the count omitted. No-op (original order preserved) when already within
+        the limit, so small stories are unaffected."""
+        if len(entities) <= ENTITY_CONTEXT_LIMIT:
+            return entities, 0
+        ordered = sorted(entities, key=cls._entity_sort_ts, reverse=True)
+        return ordered[:ENTITY_CONTEXT_LIMIT], len(entities) - ENTITY_CONTEXT_LIMIT
+
     @classmethod
     def _append_prompt_fields(cls, info: str, data: Dict[str, Any], kind: str, skip):
         """Append the shared-schema scalar fields for ``kind`` as ``\\n  Label: value``
@@ -256,8 +293,9 @@ class StoryContextBuilder:
         # affiliations/notes/relationships — NOT role/traits/motivations, which are
         # never persisted. Mirrors chapter_rag.compose_entity_text.
         if characters:
+            capped_characters, more_characters = self._cap_entities(characters)
             prompt_parts.append("\n=== CHARACTERS ===")
-            for char in characters:
+            for char in capped_characters:
                 char_info = (
                     f"- {self._sanitize_for_prompt(char.get('name', 'Unnamed'), 200)}"
                 )
@@ -280,12 +318,17 @@ class StoryContextBuilder:
                             )
                             char_info += f"\n  Relationship - {line}"
                 prompt_parts.append(char_info)
+            if more_characters:
+                prompt_parts.append(
+                    f"... and {more_characters} more characters not shown"
+                )
 
         # Places. Fields/labels/caps come from ENTITY_FIELD_SCHEMA; description is
         # shown inline after the name, the rest as labeled lines.
         if places:
+            capped_places, more_places = self._cap_entities(places)
             prompt_parts.append("\n=== PLACES ===")
-            for place in places:
+            for place in capped_places:
                 place_info = (
                     f"- {self._sanitize_for_prompt(place.get('name', 'Unnamed'), 200)}"
                 )
@@ -297,11 +340,14 @@ class StoryContextBuilder:
                     place_info, place, "place", skip={"description"}
                 )
                 prompt_parts.append(place_info)
+            if more_places:
+                prompt_parts.append(f"... and {more_places} more places not shown")
 
         # Plots. Fields from ENTITY_FIELD_SCHEMA; description inline, events bespoke.
         if plots:
+            capped_plots, more_plots = self._cap_entities(plots)
             prompt_parts.append("\n=== PLOTS ===")
-            for plot in plots:
+            for plot in capped_plots:
                 plot_info = f"- {self._sanitize_for_prompt(plot.get('name', 'Untitled Plot'), 200)}"
                 if plot.get("description"):
                     plot_info += (
@@ -318,6 +364,8 @@ class StoryContextBuilder:
                             line = self._sanitize_for_prompt(f"{en}: {ec}".strip(), 600)
                             plot_info += f"\n  Event - {line}"
                 prompt_parts.append(plot_info)
+            if more_plots:
+                prompt_parts.append(f"... and {more_plots} more plots not shown")
 
         # Existing chapters summary
         if chapters:

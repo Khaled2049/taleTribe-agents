@@ -102,7 +102,9 @@ STORY CONTEXT:
 
         # Generate response using LLM provider
         logger.info("Full chat prompt story_id=%s:\n%s", story_id, full_prompt)
-        response = await self.llm_provider.generate_content_async(full_prompt)
+        response = await self.llm_provider.generate_content_async(
+            full_prompt, max_output_tokens=1024
+        )
 
         # Calculate context usage
         context_used = {

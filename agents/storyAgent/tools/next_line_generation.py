@@ -229,6 +229,7 @@ Respond ONLY with the JSON array containing the {NUMBER_OF_SUGGESTIONS} generate
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             response_schema=response_schema,
+            max_output_tokens=512,
         )
         suggestions_count = (
             len(generated_suggestions)

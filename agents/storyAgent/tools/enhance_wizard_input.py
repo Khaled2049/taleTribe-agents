@@ -43,7 +43,9 @@ class EnhanceWizardInputTool:
         prompt = self._build_prompt(user_id=user_id, wizard_type=wizard_type, data=data)
 
         try:
-            response = await self.llm_provider.generate_content_async(prompt)
+            response = await self.llm_provider.generate_content_async(
+                prompt, max_output_tokens=512
+            )
         except Exception:
             logger.exception(
                 "EnhanceWizardInputTool LLM call failed user_id=%s type=%s",

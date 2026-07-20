@@ -17,6 +17,7 @@ os.environ.setdefault("CREDIT_PROXY_URL", "http://localhost:8080")
 os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "test-project")
 
 from agents.storyAgent.llm_provider import (  # noqa: E402
+    DEFAULT_MAX_OUTPUT_TOKENS,
     BackendUnavailableError,
     BillingCommitError,
     CreditProxyProvider,
@@ -270,3 +271,124 @@ async def test_rate_limited_is_not_retried():
     with pytest.raises(RateLimitedError):
         await provider.generate_content_async("hello")
     assert calls == 1
+
+
+# --- credit balance / purchase ------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_balance_returns_usage_payload():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/v1/users/user123/balance"
+        return httpx.Response(
+            200, json={"user_id": "user123", "available_credits": 1749}
+        )
+
+    provider = _provider_with_transport(handler)
+    data = await provider.get_balance("user123")
+    assert data["available_credits"] == 1749
+
+
+@pytest.mark.asyncio
+async def test_get_balance_forwards_firebase_token():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers.get("X-Firebase-Token") == "fb-token"
+        return httpx.Response(200, json={"user_id": "user123", "available_credits": 0})
+
+    provider = _provider_with_transport(handler)
+    await provider.get_balance("user123", firebase_token="fb-token")
+
+
+@pytest.mark.asyncio
+async def test_get_balance_maps_5xx_to_backend_unavailable():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="usage down")
+
+    provider = _provider_with_transport(handler)
+    with pytest.raises(BackendUnavailableError):
+        await provider.get_balance("user123")
+
+
+@pytest.mark.asyncio
+async def test_purchase_credits_posts_amount_and_returns_new_balance():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/v1/credits/purchase"
+        import json as _json
+
+        body = _json.loads(request.content)
+        assert body == {"user_id": "user123", "credits": 10000}
+        return httpx.Response(
+            200,
+            json={
+                "user_id": "user123",
+                "purchased_credits": 10000,
+                "available_credits": 11749,
+            },
+        )
+
+    provider = _provider_with_transport(handler)
+    data = await provider.purchase_credits("user123", 10000)
+    assert data["available_credits"] == 11749
+
+
+@pytest.mark.asyncio
+async def test_purchase_credits_disabled_maps_to_backend_unavailable():
+    # gateway returns 503 when the usage purchase API is disabled
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="unable to purchase credits (ref req_1)")
+
+    provider = _provider_with_transport(handler)
+    with pytest.raises(BackendUnavailableError):
+        await provider.purchase_credits("user123", 10000)
+
+
+# --- per-tool max_output_tokens ----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_forwards_max_output_tokens():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        captured.update(_json.loads(request.content))
+        return httpx.Response(200, json={"response": {"output": "ok"}})
+
+    provider = _provider_with_transport(handler)
+    await provider.generate_content_async("hello", max_output_tokens=1024)
+    assert captured["max_output_tokens"] == 1024
+
+
+@pytest.mark.asyncio
+async def test_generate_defaults_max_output_tokens():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        captured.update(_json.loads(request.content))
+        return httpx.Response(200, json={"response": {"output": "ok"}})
+
+    provider = _provider_with_transport(handler)
+    await provider.generate_content_async("hello")
+    assert captured["max_output_tokens"] == DEFAULT_MAX_OUTPUT_TOKENS
+
+
+@pytest.mark.asyncio
+async def test_structured_content_forwards_max_output_tokens():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        captured.update(_json.loads(request.content))
+        return httpx.Response(200, json={"response": {"output": "[]"}})
+
+    provider = _provider_with_transport(handler)
+    await provider.generate_structured_content(
+        "sys", "user", {"type": "array"}, max_output_tokens=512
+    )
+    assert captured["max_output_tokens"] == 512

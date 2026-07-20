@@ -71,7 +71,9 @@ Provide a complete character profile with:
 
 Make the character compelling and well-developed."""
 
-        generated_text = await self.llm_provider.generate_content_async(prompt)
+        generated_text = await self.llm_provider.generate_content_async(
+            prompt, max_output_tokens=1536
+        )
 
         return {
             "storyId": story_id,

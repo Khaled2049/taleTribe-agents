@@ -69,7 +69,9 @@ Provide:
 
 Make it compelling and well-integrated with the existing story."""
 
-        generated_text = await self.llm_provider.generate_content_async(prompt)
+        generated_text = await self.llm_provider.generate_content_async(
+            prompt, max_output_tokens=1024
+        )
 
         return {
             "storyId": story_id,
