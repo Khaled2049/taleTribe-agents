@@ -38,6 +38,19 @@ class Settings(BaseSettings):
     # Feature flags
     enable_local_image_generation: bool = True
 
+    # MCP server (OAuth 2.1 authorization server + read-only story tools)
+    enable_mcp: bool = True
+    mcp_issuer_url: str = ""  # defaults to agent_service_url / localhost (see property)
+    mcp_consent_url: str = ""  # frontend consent page (required in production)
+    mcp_max_requests_per_minute_per_user: int = 60
+    # Per-IP caps on the unauthenticated OAuth endpoints. /register writes a
+    # Firestore document per call with no credential required, so it gets a
+    # tighter bucket than the rest of the flow.
+    mcp_register_requests_per_minute_per_ip: int = 5
+    mcp_oauth_requests_per_minute_per_ip: int = 30
+    mcp_access_token_ttl_seconds: int = 3600
+    mcp_refresh_token_ttl_seconds: int = 2592000  # 30 days
+
     # Credit proxy
     credit_proxy_url: str = ""
 
@@ -104,6 +117,12 @@ class Settings(BaseSettings):
                     "FIREBASE_FUNCTIONS_SERVICE_ACCOUNT or ALLOWED_SERVICE_ACCOUNTS must be set "
                     "when ENVIRONMENT=production (trusted OIDC caller allowlist)"
                 )
+            if self.enable_mcp and not self.mcp_consent_url.strip():
+                raise ValueError(
+                    "MCP_CONSENT_URL must be set when ENVIRONMENT=production and "
+                    "ENABLE_MCP=true (the frontend consent page the OAuth "
+                    "authorization flow redirects to)"
+                )
         return self
 
     # ------------------------------------------------------------------
@@ -131,6 +150,18 @@ class Settings(BaseSettings):
         if single:
             return frozenset({single})
         return frozenset()
+
+    @property
+    def resolved_mcp_issuer_url(self) -> str:
+        """OAuth issuer / MCP resource base URL (no trailing slash)."""
+        raw = self.mcp_issuer_url.strip() or self.agent_service_url.strip()
+        return (raw or f"http://localhost:{self.port}").rstrip("/")
+
+    @property
+    def resolved_mcp_consent_url(self) -> str:
+        """Consent page URL; defaults to the local Vite dev server outside production."""
+        raw = self.mcp_consent_url.strip()
+        return (raw or "http://localhost:5173/mcp-connect").rstrip("/")
 
     @property
     def parsed_cors_origins(self) -> list:

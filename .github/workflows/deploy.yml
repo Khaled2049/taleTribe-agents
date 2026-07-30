@@ -22,8 +22,49 @@ env:
   KEEP_IMAGE_COUNT: 3
 
 jobs:
+  # pr-check.yml gates the pull-request path, but this workflow is what actually
+  # ships, and it fires on every push to main — including a direct push, or a
+  # merge made before branch protection is configured. Running the suite here
+  # too costs ~1 min and removes the "green PR, untested deploy" gap.
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: latest
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Cache Poetry virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py3.11-${{ hashFiles('poetry.lock') }}
+
+      - name: Install dependencies
+        run: poetry install --with dev
+
+      - name: Run tests
+        run: poetry run pytest tests/
+        env:
+          USE_MOCK: "true"
+          GOOGLE_CLOUD_PROJECT: "test-project"
+
   deploy:
     name: Build and Deploy
+    needs: test
     runs-on: ubuntu-latest
 
     permissions:
@@ -215,6 +256,27 @@ jobs:
           done
           echo "Health check failed after 5 attempts"
           exit 1
+
+      - name: Test MCP discovery endpoints (unauthenticated)
+        run: |
+          BASE="${{ steps.get_url.outputs.service_url }}"
+          # The MCP server must be reachable without IAM auth: OAuth discovery
+          # documents are public, and /mcp must answer 401 (not 403) so MCP
+          # clients start the OAuth flow. Failing here usually means the
+          # mcp_server/ COPY is missing from the Dockerfile or public access
+          # is disabled in Terraform.
+          curl -sf --max-time 10 "$BASE/.well-known/oauth-authorization-server" > /dev/null
+          curl -sf --max-time 10 "$BASE/.well-known/oauth-protected-resource/mcp" > /dev/null
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+            -X POST "$BASE/mcp" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json, text/event-stream" \
+            -d '{"jsonrpc":"2.0","id":1,"method":"ping"}')
+          if [ "$STATUS" != "401" ]; then
+            echo "Expected 401 from unauthenticated /mcp, got $STATUS"
+            exit 1
+          fi
+          echo "MCP discovery checks passed"
 
       - name: Deployment Summary
         run: |

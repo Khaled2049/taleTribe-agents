@@ -21,6 +21,7 @@ dependencies = [
     "anyio>=4.0.0",
     "tenacity>=8.0.0",
     "structlog>=24.0.0",
+    "mcp>=1.29.0,<2.0.0",
 ]
 
 [tool.poetry.group.dev.dependencies]

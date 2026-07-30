@@ -3,7 +3,7 @@
 import logging
 import os
 import sys
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -195,6 +195,21 @@ def _try_load_image_router(current_dir: Path, enabled: bool):
         return None
 
 
+def _try_build_mcp(settings: Settings):
+    """Build the MCP server bundle when enabled; None keeps the app MCP-less."""
+    if not settings.enable_mcp:
+        logger.info("mcp_disabled")
+        return None
+
+    try:
+        from mcp_server.app import build_mcp_bundle
+
+        return build_mcp_bundle(settings)
+    except ImportError as exc:
+        logger.warning("mcp_unavailable", error=str(exc))
+        return None
+
+
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     _configure_logging()
@@ -207,11 +222,21 @@ def create_app() -> FastAPI:
     if settings.environment != "production" and not settings.firestore_emulator_host:
         os.environ["FIRESTORE_EMULATOR_HOST"] = "localhost:8080"
 
+    # Build the MCP server (and its Starlette sub-app) BEFORE the FastAPI app:
+    # streamable_http_app() lazily creates the session manager the lifespan
+    # below must run.
+    mcp_bundle = _try_build_mcp(settings)
+    mcp_asgi_app = mcp_bundle.mcp.streamable_http_app() if mcp_bundle else None
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        # Startup: nothing to do — state is populated below before the app accepts
+        # Startup: run the MCP session manager (no-op when MCP is disabled) —
+        # the rest of app.state is populated below before the app accepts
         # traffic. Shutdown: release the LLM HTTP client.
-        yield
+        async with AsyncExitStack() as stack:
+            if mcp_bundle is not None:
+                await stack.enter_async_context(mcp_bundle.mcp.session_manager.run())
+            yield
         await app.state.agent.aclose()
 
     app = FastAPI(
@@ -224,8 +249,17 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.parsed_cors_origins,
         allow_credentials=False,
-        allow_methods=["POST", "GET"],
-        allow_headers=["Content-Type", "Authorization"],
+        # DELETE: streamable-HTTP session teardown (spec-conformant; harmless
+        # in stateless mode). Mcp-* headers: MCP streamable-HTTP transport.
+        allow_methods=["POST", "GET", "DELETE"],
+        allow_headers=[
+            "Content-Type",
+            "Authorization",
+            "Mcp-Session-Id",
+            "MCP-Protocol-Version",
+            "Last-Event-ID",
+        ],
+        expose_headers=["Mcp-Session-Id"],
     )
 
     # Cache auth helpers on app.state — one instance for the process lifetime.
@@ -587,8 +621,43 @@ def create_app() -> FastAPI:
                     if app.state.image_generation_available
                     else "unavailable"
                 ),
+                "mcp": ("available" if app.state.mcp_available else "unavailable"),
             },
         }
+
+    # MCP goes in LAST: the oauth consent-handoff router first (FastAPI routes
+    # win over mounts), then the MCP Starlette app mounted at root so that
+    # /mcp, /authorize, /token, /register, /revoke and both /.well-known/*
+    # documents live at the domain root, where MCP clients discover them.
+    app.state.mcp_available = mcp_bundle is not None
+    if mcp_bundle is not None and mcp_asgi_app is not None:
+        from mcp_server.oauth_routes import build_oauth_router
+        from mcp_server.throttle import OAuthThrottleMiddleware
+
+        app.include_router(
+            build_oauth_router(
+                mcp_bundle.provider,
+                project_id=settings.google_cloud_project,
+                environment=settings.environment,
+                auth_request=app.state.google_auth_request,
+                ip_rate_limiter=PerUserRateLimiter(
+                    settings.mcp_oauth_requests_per_minute_per_ip
+                ),
+                as_metadata=mcp_bundle.as_metadata,
+            )
+        )
+        # The SDK's OAuth routes are inside the mounted app, out of reach of
+        # FastAPI dependencies, so they get their per-IP guard as ASGI
+        # middleware around the mount.
+        app.mount(
+            "/",
+            OAuthThrottleMiddleware(
+                mcp_asgi_app,
+                register_per_minute=settings.mcp_register_requests_per_minute_per_ip,
+                oauth_per_minute=settings.mcp_oauth_requests_per_minute_per_ip,
+            ),
+        )
+        logger.info("mcp_mounted", issuer=settings.resolved_mcp_issuer_url)
 
     return app
 
