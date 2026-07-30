@@ -55,12 +55,41 @@ resource "google_project_iam_member" "firestore_user" {
   member  = "serviceAccount:${data.google_service_account.cloud_run_sa.email}"
 }
 
+locals {
+  # ENVIRONMENT is what arms /agent/execute's OIDC caller check (see
+  # config.py). Public invoker access is only safe while this is "production",
+  # so it is a named local rather than an inline string: the precondition on the
+  # service below asserts the coupling, and both read the same value.
+  agent_environment = "production"
+}
+
 # Cloud Run Service
 # Free tier: 2M requests/month, 360K GB-seconds, 180K vCPU-seconds
 # Configured to scale to zero when idle (min_instances=0)
 resource "google_cloud_run_v2_service" "app" {
   name     = var.service_name
   location = var.region
+
+  lifecycle {
+    # The MCP server needs public invoker access, which puts /agent/execute,
+    # /credits/balance and /credits/purchase on the open internet behind nothing
+    # but their own OIDC + service-account check — and config.py only arms that
+    # check when ENVIRONMENT=production. Loosening the environment while public
+    # access is on would silently unguard all three, with no failure anywhere.
+    # Fail the plan instead of relying on the warning in variables.tf.
+    precondition {
+      condition     = !var.enable_public_access || local.agent_environment == "production"
+      error_message = <<-EOT
+        enable_public_access=true requires local.agent_environment="production".
+        Public invoker access exposes /agent/execute, /credits/balance and
+        /credits/purchase to the internet; their only guard is the OIDC caller
+        allowlist, which config.py enforces solely when ENVIRONMENT=production.
+        Either keep the environment at "production" or set
+        enable_public_access=false (which disables the MCP server's OAuth flow,
+        since MCP clients must reach it unauthenticated).
+      EOT
+    }
+  }
 
   template {
     service_account = data.google_service_account.cloud_run_sa.email
@@ -100,7 +129,7 @@ resource "google_cloud_run_v2_service" "app" {
 
       env {
         name  = "ENVIRONMENT"
-        value = "production"
+        value = local.agent_environment
       }
 
       env {
@@ -108,10 +137,32 @@ resource "google_cloud_run_v2_service" "app" {
         value = "false"
       }
 
-      # Agent is internal-only — no browser origins allowed
+      # Browser origins: the MCP consent page (frontend) calls /oauth/txn and
+      # /oauth/complete cross-origin. /agent/execute remains server-to-server.
       env {
         name  = "CORS_ORIGINS"
-        value = "[]"
+        value = jsonencode(var.cors_origins)
+      }
+
+      env {
+        name  = "ENABLE_MCP"
+        value = tostring(var.enable_mcp)
+      }
+
+      env {
+        name  = "MCP_CONSENT_URL"
+        value = var.mcp_consent_url
+      }
+
+      # OAuth issuer == this service's public URL (also the MCP resource base).
+      env {
+        name  = "MCP_ISSUER_URL"
+        value = var.agent_service_url
+      }
+
+      env {
+        name  = "MCP_MAX_REQUESTS_PER_MINUTE_PER_USER"
+        value = tostring(var.mcp_max_requests_per_minute_per_user)
       }
 
       env {
@@ -191,7 +242,27 @@ resource "google_cloud_run_v2_service" "app" {
   ]
 }
 
-# IAM: Allow public access (unauthenticated invocations) — disabled by default
+# Firestore TTL garbage collection for expired MCP OAuth artifacts.
+# TTL deletion can lag 24-72h; the application re-checks expiresAt on every
+# read, so TTL here is cleanup, not enforcement.
+# mcpOauthClients is included because /register is unauthenticated: a client
+# record starts with a short expiry that only slides forward once the client is
+# actually used, so abandoned registrations get collected.
+resource "google_firestore_field" "mcp_oauth_ttl" {
+  for_each = var.enable_mcp ? toset(["mcpOauthTxns", "mcpOauthCodes", "mcpOauthTokens", "mcpOauthClients"]) : toset([])
+
+  project    = var.project_id
+  database   = "(default)"
+  collection = each.key
+  field      = "expiresAt"
+
+  ttl_config {}
+
+  depends_on = [google_project_service.firestore]
+}
+
+# IAM: Allow public access (unauthenticated invocations). Required for MCP:
+# end-user MCP clients authenticate with OAuth bearer tokens at the app layer.
 resource "google_cloud_run_v2_service_iam_member" "public_access" {
   count    = var.enable_public_access ? 1 : 0
   name     = google_cloud_run_v2_service.app.name

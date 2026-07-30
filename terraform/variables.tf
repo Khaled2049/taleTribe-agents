@@ -98,9 +98,9 @@ variable "google_ai_studio_model" {
 }
 
 variable "enable_public_access" {
-  description = "Enable public (unauthenticated) access to the service. Keep false in production — Firebase Functions authenticates via OIDC identity tokens."
+  description = "Enable public (unauthenticated) access to the service. Required for the MCP server: end-user MCP clients (Claude, etc.) reach /mcp and the OAuth endpoints directly, authenticated at the application layer by OAuth bearer tokens. /agent/execute stays protected by its own OIDC + service-account allowlist check, which is armed because this module pins ENVIRONMENT=production — never deploy with public access AND a non-production ENVIRONMENT, or /agent/execute would be unguarded."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "firebase_functions_service_account" {
@@ -113,6 +113,30 @@ variable "credit_proxy_url" {
   description = "Internal URL of the creditProxy gateway Cloud Run service (INGRESS_INTERNAL_ONLY). All LLM calls route through here."
   type        = string
   default     = "https://credit-proxy-gateway-ukvrbnaddq-uc.a.run.app"
+}
+
+variable "enable_mcp" {
+  description = "Serve the MCP server (OAuth 2.1 AS + read-only story tools) from this service."
+  type        = bool
+  default     = true
+}
+
+variable "mcp_consent_url" {
+  description = "Frontend consent page the MCP OAuth /authorize flow redirects users to. Required when enable_mcp is true (config.py fails fast in production without it)."
+  type        = string
+  default     = "https://thetaletribe.web.app/mcp-connect"
+}
+
+variable "cors_origins" {
+  description = "Browser origins allowed by the agents service. Needed by the MCP consent page (GET /oauth/txn, POST /oauth/complete). JSON-encoded into CORS_ORIGINS."
+  type        = list(string)
+  default     = ["https://thetaletribe.web.app", "https://thetaletribe.com", "https://www.thetaletribe.com"]
+}
+
+variable "mcp_max_requests_per_minute_per_user" {
+  description = "Per-user rate limit on MCP tool calls. Same per-instance caveat as max_requests_per_minute_per_user."
+  type        = number
+  default     = 60
 }
 
 variable "max_requests_per_minute_per_user" {

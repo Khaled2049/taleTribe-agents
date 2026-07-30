@@ -34,17 +34,17 @@ jobs:
       - name: Install dependencies
         run: poetry install --with dev
 
+      # These three were continue-on-error, which made them decorative: they
+      # printed failures and passed the build anyway. All three are clean today,
+      # so enforcing them costs nothing and stops the drift they exist to catch.
       - name: Run Black (code formatting check)
         run: poetry run black --check .
-        continue-on-error: true
 
       - name: Run isort (import sorting check)
         run: poetry run isort --check-only .
-        continue-on-error: true
 
       - name: Run Ruff (linting)
         run: poetry run ruff check .
-        continue-on-error: true
 
       - name: Run tests
         run: poetry run pytest tests/ -v

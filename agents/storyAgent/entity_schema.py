@@ -11,10 +11,22 @@ differently in each renderer and are handled by bespoke code there; only their n
 live here (``ENTITY_ARRAY_FIELDS``) so the full embedded-field set is documented in
 one place.
 
-Keep the field NAMES in lockstep with the frontend's ``SIGNATURE_FIELDS`` in
-``novelsync-frontend/functions/src/entityIndexTrigger.ts`` — that list decides when a
-re-embed fires, so a mismatch means edits to a field either never re-embed or re-embed
-needlessly. The order here also defines field order in prompts/embeddings.
+The field NAMES must stay in lockstep with the frontend's ``SIGNATURE_FIELDS`` in
+``novelsync-frontend/functions/src/entityFields.ts`` — that list decides when a
+re-embed fires, so a mismatch means edits to a field either never re-embed (the AI
+answers from a stale vector) or re-embed needlessly (burning indexing budget).
+
+**Nothing enforces this.** A cross-repo test in the frontend used to parse this
+module and diff the two lists, but it needed a credential to clone this private
+repo in CI and was removed as not worth the upkeep. Treat it as a manual
+convention: change one side, change the other in the same breath. Both failure
+modes are silent.
+
+The order here also defines field order in prompts/embeddings.
+
+The MCP server consumes this module too: ``mcp_server/data.py`` picks a one-line
+entity descriptor from these fields, guarded by
+``test_descriptor_fields_exist_in_entity_schema``.
 """
 
 from typing import Dict, List, Tuple
