@@ -33,7 +33,7 @@ poetry run python server.py
 
 ## MCP server
 
-The service also hosts a remote MCP server (streamable HTTP) at `/mcp`, plus the OAuth 2.1 endpoints MCP clients discover at the domain root (`/.well-known/*`, `/authorize`, `/token`, `/register`, `/revoke`). Tools are owner-scoped: list stories, read chapters (paginated), and inspect characters/places/plots — all needing only the `stories:read` scope. Two write tools (`create_story`, `create_chapter`) additionally require the `stories:write` scope *and* `ENABLE_MCP_WRITES=true`; they are off by default and are never registered when the flag is off. Login is delegated to the frontend consent page (`MCP_CONSENT_URL`); tokens are opaque, hashed, and stored in Firestore.
+The service also hosts a remote MCP server (streamable HTTP) at `/mcp`, plus the OAuth 2.1 endpoints MCP clients discover at the domain root (`/.well-known/*`, `/authorize`, `/token`, `/register`, `/revoke`). Tools are owner-scoped: list stories, read chapters (paginated), list a chapter's blocks, and inspect characters/places/plots — all needing only the `stories:read` scope. Four write tools (`create_story`, `create_chapter`, `append_to_chapter`, `edit_chapter_blocks`) additionally require the `stories:write` scope *and* `ENABLE_MCP_WRITES=true`; they are off by default and are never registered when the flag is off. The two editing tools require a `revision` token from a read and address individual blocks, so a concurrent edit is refused rather than overwritten and untouched paragraphs keep their exact markup. Login is delegated to the frontend consent page (`MCP_CONSENT_URL`); tokens are opaque, hashed, and stored in Firestore.
 
 Local run against the emulators:
 

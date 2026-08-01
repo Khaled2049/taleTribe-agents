@@ -25,11 +25,14 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 from google.cloud.firestore_v1.query import Query
 
 from agents.storyAgent.entity_schema import embedded_field_names
+from mcp_server import blocks
 
 # Mirrors StoryContextBuilder.COLLECTION_FETCH_LIMIT: bounded subcollection reads.
 COLLECTION_FETCH_LIMIT = 200
 MAX_STORY_LIST_LIMIT = 100
 SHORT_TEXT_LIMIT = 300
+MAX_BLOCKS_PER_PAGE = 1000
+DEFAULT_BLOCKS_PER_PAGE = 500
 
 # MCP tools address entities by Firestore collection name (plural); the shared
 # field vocabulary in entity_schema.py is keyed by entity kind (singular). One
@@ -303,6 +306,94 @@ def get_chapter(
         "offset": offset,
         "content": window,
         "next_offset": next_offset,
+        "revision": revision_token(snap.update_time),
+    }
+
+
+def revision_token(update_time: Any) -> str:
+    """Canonical version string for a document, from either Firestore spelling.
+
+    Opaque to callers: they pass it back unmodified, and the write path
+    compares it against a freshly derived one.
+
+    The normalisation is not cosmetic. A read hands back a
+    DatetimeWithNanoseconds (DocumentSnapshot.update_time) while a write hands
+    back a protobuf Timestamp (WriteResult.update_time), and str() spells the
+    same instant completely differently for the two:
+
+        "2026-08-01 13:54:57.745934+00:00"
+        "seconds: 1785000000\\nnanos: 745934000\\n"
+
+    Taking the token straight from str() would therefore mean the revision an
+    edit returns never equals the one the next read reports, so every chained
+    edit would be refused as stale with no concurrent writer anywhere. Both
+    paths come through here so the format belongs to this module rather than to
+    whichever object happened to arrive.
+    """
+    seconds = getattr(update_time, "seconds", None)
+    nanos = getattr(update_time, "nanos", None)
+    if isinstance(seconds, int) and isinstance(nanos, int):
+        return f"{seconds}.{nanos:09d}"  # protobuf Timestamp
+    as_pb = getattr(update_time, "timestamp_pb", None)
+    if callable(as_pb):
+        stamp = as_pb()  # DatetimeWithNanoseconds
+        return f"{stamp.seconds}.{stamp.nanos:09d}"
+    # The test fake's monotonic counter, and any other opaque version object.
+    return str(update_time)
+
+
+def get_chapter_blocks(
+    db: Any,
+    story_id: str,
+    chapter_id: str,
+    uid: str,
+    start_index: int,
+    max_blocks: int,
+) -> dict:
+    """The chapter's top-level blocks, as addresses for the edit tools.
+
+    A separate read from get_chapter because that one windows by *character*
+    offset, and a window can begin in the middle of a block — block indices
+    attached to a partial character window would be meaningless. This returns
+    structure and short previews instead of prose, which is both what the
+    editing workflow needs and far cheaper than re-shipping a 100k-char
+    chapter to locate one paragraph.
+    """
+    get_owned_story(db, story_id, uid)
+    snap = (
+        db.collection("stories")
+        .document(story_id)
+        .collection("chapters")
+        .document(chapter_id)
+        .get()
+    )
+    if not snap.exists:
+        raise EntityNotFoundError(chapter_id)
+    data = snap.to_dict() or {}
+    all_blocks = blocks.split_blocks(data.get("content") or "")
+
+    start_index = max(0, int(start_index))
+    max_blocks = max(1, min(int(max_blocks), MAX_BLOCKS_PER_PAGE))
+    window = all_blocks[start_index : start_index + max_blocks]
+    end = start_index + max_blocks
+    next_index = end if end < len(all_blocks) else None
+
+    return {
+        "chapter_id": snap.id,
+        "title": data.get("title", "Untitled"),
+        "revision": revision_token(snap.update_time),
+        "block_count": len(all_blocks),
+        "start_index": start_index,
+        "blocks": [
+            {
+                "index": start_index + position,
+                "tag": block.tag,
+                "preview": blocks.block_preview(block.html),
+                "chars": len(block.html),
+            }
+            for position, block in enumerate(window)
+        ],
+        "next_index": next_index,
     }
 
 

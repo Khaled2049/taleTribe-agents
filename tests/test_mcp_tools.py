@@ -17,11 +17,16 @@ os.environ.setdefault("USE_MOCK", "true")
 from mcp.server.auth.provider import AccessToken  # noqa: E402
 from mcp.server.fastmcp import FastMCP  # noqa: E402
 from mcp.server.fastmcp.exceptions import ToolError  # noqa: E402
+from structlog.testing import capture_logs  # noqa: E402
 
 from mcp_server import app as mcp_app  # noqa: E402
-from mcp_server import data, writes  # noqa: E402
+from mcp_server import blocks as blocks_module  # noqa: E402
+from mcp_server import data  # noqa: E402
+from mcp_server import writes  # noqa: E402
+from mcp_server import tools as tools_module  # noqa: E402
 from mcp_server.tools import UNTRUSTED_NOTICE, register_tools  # noqa: E402
 from rate_limit import PerUserRateLimiter  # noqa: E402
+from tests import mcp_fakes  # noqa: E402
 from tests.mcp_fakes import FakeFirestoreClient  # noqa: E402
 
 UID_A = "user-a"
@@ -987,6 +992,56 @@ async def test_idempotency_window_expires():
     assert second["story_id"] != first["story_id"]
 
 
+async def test_expired_reservation_is_claimed_by_exactly_one_racer():
+    """Taking over an expired reservation has to keep the exactly-one-winner
+    property that `create` gives the common path for free.
+
+    The loser of the takeover is told the call is already in flight rather than
+    being allowed to write a second story.
+    """
+    db = FakeFirestoreClient()
+    writes.create_story(db, UID_A, "Later", "again")
+    stories_before = len([p for p in db.docs if p.startswith("stories/")])
+
+    later = datetime.now(timezone.utc) + timedelta(
+        seconds=writes.IDEMPOTENCY_TTL_SECONDS + 1
+    )
+    key = writes.idempotency_key(
+        UID_A,
+        "create_story",
+        {"title": "Later", "description": "again", "category": "", "tags": []},
+    )
+    path = f"{writes.WRITES_COLLECTION}/{key}"
+
+    def steal(doc_path: str) -> None:
+        # Act as the other racer: land a write on the reservation in the window
+        # between this caller's read of it and its takeover.
+        if doc_path != path:
+            return
+        db.before_update = None
+        data, _version = db.docs[path]
+        db.docs[path] = (data, next(mcp_fakes._versions))
+
+    db.before_update = steal
+    with patch("mcp_server.writes._now", return_value=later):
+        with pytest.raises(writes.DuplicateInFlightError):
+            writes.create_story(db, UID_A, "Later", "again")
+    db.before_update = None
+    assert len([p for p in db.docs if p.startswith("stories/")]) == stories_before
+
+
+async def test_a_vanished_reservation_is_reclaimed():
+    """TTL collection or a concurrent _release can remove the document between
+    the create that lost and the read that follows it. The key is free then."""
+    db = FakeFirestoreClient()
+    first = writes.create_story(db, UID_A, "Gone", "poof")
+    for path in [p for p in db.docs if p.startswith(f"{writes.WRITES_COLLECTION}/")]:
+        del db.docs[path]
+    second = writes.create_story(db, UID_A, "Gone", "poof")
+    assert second["story_id"] != first["story_id"]
+    assert second["idempotent_replay"] is False
+
+
 async def test_failed_write_releases_the_reservation():
     db = FakeFirestoreClient()
     db.seed(f"users/{UID_A}", {"storyCount": writes.MAX_STORIES_PER_USER})
@@ -1061,16 +1116,24 @@ async def test_write_scoped_token_can_still_call_read_tools():
 async def test_write_tools_absent_when_disabled():
     mcp = _tool_server(_seeded_db(), enable_writes=False)
     names = {t.name for t in await mcp.list_tools()}
-    assert "create_story" not in names
-    assert "create_chapter" not in names
-    assert len(names) == 6
+    assert names.isdisjoint(
+        {"create_story", "create_chapter", "append_to_chapter", "edit_chapter_blocks"}
+    )
+    # get_chapter_blocks is a READ tool: it stays available with writes off.
+    assert "get_chapter_blocks" in names
+    assert len(names) == 7
 
 
 async def test_write_tools_present_when_enabled():
     mcp = _tool_server(_seeded_db(), enable_writes=True)
     names = {t.name for t in await mcp.list_tools()}
-    assert {"create_story", "create_chapter"} <= names
-    assert len(names) == 8
+    assert {
+        "create_story",
+        "create_chapter",
+        "append_to_chapter",
+        "edit_chapter_blocks",
+    } <= names
+    assert len(names) == 11
 
 
 async def test_write_tool_idor_returns_story_not_found():
@@ -1124,8 +1187,956 @@ async def test_write_roundtrip_through_read_tools():
 
 
 # ---------------------------------------------------------------------------
+# Chapter editing — reads that make blocks addressable
+# ---------------------------------------------------------------------------
+
+# A chapter shaped like real editor output: heading, paragraph, a list whose
+# items contain nested <p>, a blockquote, and an image. Byte-identity of the
+# blocks nobody touched is asserted against this.
+RICH = (
+    "<h2>The Descent</h2>"
+    "<p>She counted the steps.</p>"
+    '<ul class="list-disc"><li><p>rope</p></li><li><p>lamp</p></li></ul>'
+    "<blockquote><p>Nothing waits below.</p></blockquote>"
+    '<img src="cave.png" data-display-mode="wrap">'
+)
+RICH_BLOCKS = ["h2", "p", "ul", "blockquote", "img"]
+
+
+def _rich_db() -> FakeFirestoreClient:
+    db = _seeded_db()
+    db.seed(
+        "stories/story-a/chapters/rich",
+        {"title": "Rich", "order": 3, "wordCount": 9, "content": RICH},
+    )
+    return db
+
+
+def _revision_of(db, path: str = "stories/story-a/chapters/rich") -> str:
+    return str(db.docs[path][1])
+
+
+def _content_of(db, path: str = "stories/story-a/chapters/rich") -> str:
+    return db.docs[path][0]["content"]
+
+
+def test_get_chapter_exposes_a_revision():
+    db = _rich_db()
+    chapter = data.get_chapter(db, "story-a", "rich", UID_A, 0, 100)
+    assert chapter["revision"] == _revision_of(db)
+
+
+def test_get_chapter_blocks_lists_indices_tags_and_previews():
+    db = _rich_db()
+    listing = data.get_chapter_blocks(db, "story-a", "rich", UID_A, 0, 500)
+    assert listing["block_count"] == 5
+    assert [b["tag"] for b in listing["blocks"]] == RICH_BLOCKS
+    assert [b["index"] for b in listing["blocks"]] == [0, 1, 2, 3, 4]
+    assert listing["blocks"][1]["preview"] == "She counted the steps."
+    # An image has no text of its own; the tag is what identifies it.
+    assert listing["blocks"][4]["preview"] == ""
+    assert listing["next_index"] is None
+    assert listing["revision"] == _revision_of(db)
+
+
+def test_get_chapter_blocks_paginates():
+    db = _rich_db()
+    first = data.get_chapter_blocks(db, "story-a", "rich", UID_A, 0, 2)
+    assert [b["index"] for b in first["blocks"]] == [0, 1]
+    assert first["next_index"] == 2
+    second = data.get_chapter_blocks(
+        db, "story-a", "rich", UID_A, first["next_index"], 2
+    )
+    assert [b["index"] for b in second["blocks"]] == [2, 3]
+    last = data.get_chapter_blocks(db, "story-a", "rich", UID_A, 4, 2)
+    assert [b["index"] for b in last["blocks"]] == [4]
+    assert last["next_index"] is None
+
+
+def test_get_chapter_blocks_clamps_inputs():
+    db = _rich_db()
+    listing = data.get_chapter_blocks(db, "story-a", "rich", UID_A, -5, 999_999)
+    assert listing["start_index"] == 0
+    assert len(listing["blocks"]) == 5
+
+
+def test_get_chapter_blocks_is_owner_scoped():
+    db = _rich_db()
+    with pytest.raises(data.StoryNotFoundError):
+        data.get_chapter_blocks(db, "story-b", "chb", UID_A, 0, 10)
+    with pytest.raises(data.EntityNotFoundError):
+        data.get_chapter_blocks(db, "story-a", "no-such-chapter", UID_A, 0, 10)
+
+
+def test_get_chapter_blocks_on_an_empty_chapter():
+    db = _seeded_db()
+    db.seed("stories/story-a/chapters/blank", {"title": "Blank", "content": ""})
+    listing = data.get_chapter_blocks(db, "story-a", "blank", UID_A, 0, 10)
+    assert listing["block_count"] == 0
+    assert listing["blocks"] == []
+
+
+# ---------------------------------------------------------------------------
+# Chapter editing — the revision guard
+#
+# This is the safety property of the whole feature: an edit must never land on
+# a version the caller did not read.
+# ---------------------------------------------------------------------------
+
+
+async def test_stale_revision_is_refused_and_writes_nothing():
+    db = _rich_db()
+    before = _content_of(db)
+    with pytest.raises(writes.StaleRevisionError):
+        writes.append_to_chapter(
+            db, UID_A, "story-a", "rich", "more", "not-the-version"
+        )
+    assert _content_of(db) == before
+
+
+async def test_missing_revision_is_refused():
+    db = _rich_db()
+    with pytest.raises(ValueError, match="revision is required"):
+        writes.append_to_chapter(db, UID_A, "story-a", "rich", "more", "")
+
+
+async def test_fresh_revision_succeeds_and_returns_the_new_one():
+    db = _rich_db()
+    old = _revision_of(db)
+    result = writes.append_to_chapter(db, UID_A, "story-a", "rich", "more", old)
+    assert result["revision"] == _revision_of(db)
+    assert result["revision"] != old
+
+
+async def test_concurrent_writer_between_check_and_update_is_caught():
+    """The window the precondition exists to close.
+
+    The pre-check passes, then a concurrent editor save lands, then our update
+    runs. Without the last_update_time option this would silently clobber it.
+    """
+    db = _rich_db()
+    revision = _revision_of(db)
+    path = "stories/story-a/chapters/rich"
+
+    def concurrent_editor(updated_path: str) -> None:
+        if updated_path != path:
+            return
+        db.before_update = None  # fire once
+        record, _ = db.docs[path]
+        db.docs[path] = ({**record, "content": "<p>the human typed this</p>"}, _bump())
+
+    db.before_update = concurrent_editor
+    with pytest.raises(writes.StaleRevisionError):
+        writes.append_to_chapter(db, UID_A, "story-a", "rich", "appended", revision)
+    assert _content_of(db) == "<p>the human typed this</p>"
+
+
+async def test_revision_from_get_chapter_blocks_is_accepted_by_an_edit():
+    """The two sides of the contract must agree on how a revision is spelled."""
+    db = _rich_db()
+    listing = data.get_chapter_blocks(db, "story-a", "rich", UID_A, 0, 10)
+    writes.append_to_chapter(db, UID_A, "story-a", "rich", "ok", listing["revision"])
+
+
+# ---------------------------------------------------------------------------
+# append_to_chapter
+# ---------------------------------------------------------------------------
+
+
+async def test_append_preserves_existing_content_byte_for_byte():
+    db = _rich_db()
+    writes.append_to_chapter(
+        db, UID_A, "story-a", "rich", "New line.", _revision_of(db)
+    )
+    stored = _content_of(db)
+    assert stored.startswith(RICH)
+    assert stored == RICH + "\n<p>New line.</p>"
+
+
+async def test_append_to_an_empty_chapter_adds_no_leading_separator():
+    db = _seeded_db()
+    db.seed("stories/story-a/chapters/blank", {"title": "Blank", "content": ""})
+    path = "stories/story-a/chapters/blank"
+    writes.append_to_chapter(
+        db, UID_A, "story-a", "blank", "First.", _revision_of(db, path)
+    )
+    assert _content_of(db, path) == "<p>First.</p>"
+
+
+async def test_append_escapes_markup_and_splits_paragraphs():
+    db = _rich_db()
+    writes.append_to_chapter(
+        db, UID_A, "story-a", "rich", "<b>bold</b>\n\nsecond", _revision_of(db)
+    )
+    stored = _content_of(db)
+    assert "<p>&lt;b&gt;bold&lt;/b&gt;</p>" in stored
+    assert stored.endswith("<p>second</p>")
+
+
+async def test_append_block_count_survives_malformed_existing_content():
+    """block_count must be what split_blocks will say next time, not the sum of
+    the two halves — an unclosed tag makes those differ, and the number is the
+    index range the caller's next edit addresses."""
+    db = _rich_db()
+    db.seed(
+        "stories/story-a/chapters/broken",
+        {"title": "Broken", "order": 9, "wordCount": 1, "content": "<p>unclosed"},
+    )
+    result = writes.append_to_chapter(
+        db,
+        UID_A,
+        "story-a",
+        "broken",
+        "New paragraph.",
+        _revision_of(db, "stories/story-a/chapters/broken"),
+    )
+    content = _content_of(db, "stories/story-a/chapters/broken")
+    assert result["block_count"] == len(blocks_module.split_blocks(content)) == 1
+    assert result["appended_blocks"] == 1  # the sum would have said 2
+
+
+async def test_append_recomputes_word_count_and_touches_the_story():
+    db = _rich_db()
+    story_before = db.docs["stories/story-a"][0]["updatedAt"]
+    result = writes.append_to_chapter(
+        db, UID_A, "story-a", "rich", "one two three", _revision_of(db)
+    )
+    record = db.docs["stories/story-a/chapters/rich"][0]
+    assert record["wordCount"] == result["word_count"]
+    assert record["wordCount"] == len(_content_of(db).split())
+    assert db.docs["stories/story-a"][0]["updatedAt"] > story_before
+
+
+async def test_append_does_not_touch_chapter_count():
+    """No chapter is created by an edit, so the counter must not move."""
+    db = _rich_db()
+    before = db.docs["stories/story-a"][0]["chapterCount"]
+    writes.append_to_chapter(db, UID_A, "story-a", "rich", "x", _revision_of(db))
+    assert db.docs["stories/story-a"][0]["chapterCount"] == before
+
+
+async def test_append_rejects_empty_content():
+    db = _rich_db()
+    with pytest.raises(ValueError, match="must not be empty"):
+        writes.append_to_chapter(db, UID_A, "story-a", "rich", "   ", _revision_of(db))
+
+
+async def test_append_enforces_the_word_cap_on_the_rebuilt_string():
+    db = _seeded_db()
+    body = "<p>" + " ".join(["w"] * (writes.MAX_CHAPTER_WORDS - 1)) + "</p>"
+    db.seed("stories/story-a/chapters/big", {"title": "Big", "content": body})
+    path = "stories/story-a/chapters/big"
+    with pytest.raises(writes.LimitExceededError) as exc:
+        writes.append_to_chapter(
+            db, UID_A, "story-a", "big", "two more words", _revision_of(db, path)
+        )
+    assert exc.value.limit_name == "chapter_words"
+    assert _content_of(db, path) == body  # denied, and nothing written
+
+
+async def test_append_enforces_the_char_cap_on_the_rebuilt_string():
+    db = _seeded_db()
+    body = "<p>" + "x" * (writes.MAX_CHAPTER_CONTENT_CHARS - 10) + "</p>"
+    db.seed("stories/story-a/chapters/big", {"title": "Big", "content": body})
+    path = "stories/story-a/chapters/big"
+    with pytest.raises(writes.LimitExceededError) as exc:
+        writes.append_to_chapter(
+            db, UID_A, "story-a", "big", "y" * 100, _revision_of(db, path)
+        )
+    assert exc.value.limit_name == "chapter_content_chars"
+    assert _content_of(db, path) == body
+
+
+async def test_append_is_owner_scoped():
+    db = _rich_db()
+    path = "stories/story-b/chapters/chb"
+    with pytest.raises(data.StoryNotFoundError):
+        writes.append_to_chapter(
+            db, UID_A, "story-b", "chb", "x", _revision_of(db, path)
+        )
+
+
+# ---------------------------------------------------------------------------
+# edit_chapter_blocks
+# ---------------------------------------------------------------------------
+
+
+def _edit(db, ops, chapter="rich", uid=UID_A):
+    path = f"stories/story-a/chapters/{chapter}"
+    return writes.edit_chapter_blocks(
+        db, uid, "story-a", chapter, ops, _revision_of(db, path)
+    )
+
+
+async def test_replace_leaves_every_other_block_byte_identical():
+    """The central promise of block editing."""
+    db = _rich_db()
+    original = blocks_module.split_blocks(RICH)
+    _edit(db, [{"action": "replace", "index": 1, "text": "She counted twice."}])
+    after = blocks_module.split_blocks(_content_of(db))
+    assert after[1].html == "<p>She counted twice.</p>"
+    for position in (0, 2, 3, 4):
+        assert after[position].html == original[position].html
+
+
+async def test_replace_with_empty_text_removes_the_block():
+    db = _rich_db()
+    result = _edit(db, [{"action": "replace", "index": 4, "text": ""}])
+    assert result["block_count"] == 4
+    assert "cave.png" not in _content_of(db)
+
+
+async def test_removing_every_block_leaves_an_empty_chapter():
+    db = _rich_db()
+    ops = [{"action": "replace", "index": i, "text": ""} for i in range(5)]
+    result = _edit(db, ops)
+    assert _content_of(db) == ""
+    assert result["block_count"] == 0
+    assert result["word_count"] == 0
+
+
+async def test_insert_after_places_the_block_in_the_right_seam():
+    db = _rich_db()
+    _edit(db, [{"action": "insert_after", "index": 1, "text": "Then she stopped."}])
+    tags = [b.tag for b in blocks_module.split_blocks(_content_of(db))]
+    assert tags == ["h2", "p", "p", "ul", "blockquote", "img"]
+    assert blocks_module.split_blocks(_content_of(db))[2].html == (
+        "<p>Then she stopped.</p>"
+    )
+
+
+async def test_insert_after_minus_one_prepends():
+    db = _rich_db()
+    _edit(db, [{"action": "insert_after", "index": -1, "text": "Prologue."}])
+    assert _content_of(db).startswith("<p>Prologue.</p>\n<h2>")
+
+
+async def test_insert_after_last_index_appends():
+    db = _rich_db()
+    _edit(db, [{"action": "insert_after", "index": 4, "text": "The end."}])
+    assert _content_of(db).endswith("<p>The end.</p>")
+
+
+async def test_one_op_may_introduce_several_blocks():
+    db = _rich_db()
+    result = _edit(
+        db, [{"action": "replace", "index": 1, "text": "First para.\n\nSecond para."}]
+    )
+    assert result["block_count"] == 6
+    after = blocks_module.split_blocks(_content_of(db))
+    assert [b.html for b in after[1:3]] == ["<p>First para.</p>", "<p>Second para.</p>"]
+
+
+async def test_replacing_a_heading_keeps_its_level():
+    """A heading is rebuilt as itself, not flattened into a paragraph.
+
+    RICH[0] is an <h2>. Routing it through _to_paragraph_html like a paragraph
+    would silently demote it, and nothing in the product could restore it.
+    """
+    db = _rich_db()
+    _edit(db, [{"action": "replace", "index": 0, "text": "The Ascent"}])
+    after = blocks_module.split_blocks(_content_of(db))
+    assert after[0] == blocks_module.Block(tag="h2", html="<h2>The Ascent</h2>")
+
+
+async def test_heading_replacement_escapes_markup():
+    db = _rich_db()
+    _edit(db, [{"action": "replace", "index": 0, "text": "A <b>bold</b> title"}])
+    assert "<h2>A &lt;b&gt;bold&lt;/b&gt; title</h2>" in _content_of(db)
+
+
+async def test_multi_paragraph_text_is_refused_for_a_heading():
+    db = _rich_db()
+    with pytest.raises(ValueError, match="single line"):
+        _edit(db, [{"action": "replace", "index": 0, "text": "One.\n\nTwo."}])
+    assert _content_of(db) == RICH
+
+
+@pytest.mark.parametrize("index", [2, 4])  # <ul>, <img>
+async def test_replacing_a_structural_block_is_refused(index):
+    """Refused rather than flattened: _to_paragraph_html would turn the list
+    into one soft-wrapped <p> and drop every item boundary."""
+    db = _rich_db()
+    with pytest.raises(ValueError, match="cannot rewrite"):
+        _edit(db, [{"action": "replace", "index": index, "text": "rope and lamp"}])
+    assert _content_of(db) == RICH
+
+
+async def test_a_structural_block_can_still_be_deleted():
+    """Deletion stays open for every tag — it is what the caller asked for,
+    where a rewrite would be a downgrade they did not ask for."""
+    db = _rich_db()
+    _edit(db, [{"action": "replace", "index": 2, "text": ""}])
+    tags = [b.tag for b in blocks_module.split_blocks(_content_of(db))]
+    assert tags == ["h2", "p", "blockquote", "img"]
+
+
+async def test_a_refused_op_abandons_the_whole_call():
+    """One bad op must not leave the other ops half-applied."""
+    db = _rich_db()
+    ops = [
+        {"action": "replace", "index": 1, "text": "Rewritten."},
+        {"action": "replace", "index": 2, "text": "flattened list"},
+    ]
+    with pytest.raises(ValueError, match="cannot rewrite"):
+        _edit(db, ops)
+    assert _content_of(db) == RICH
+
+
+@pytest.mark.parametrize("bad_text", [0, False, [], None, 12])
+async def test_a_non_string_text_is_refused_not_treated_as_a_deletion(bad_text):
+    """`op.get("text") or ""` used to coerce every falsy non-string to "",
+    which is the deletion sentinel — a malformed op silently destroyed a
+    paragraph. Pydantic catches these at the tool layer; this is the boundary
+    behind it holding on its own."""
+    db = _rich_db()
+    with pytest.raises(ValueError, match="text must be a string"):
+        _edit(db, [{"action": "replace", "index": 1, "text": bad_text}])
+    assert _content_of(db) == RICH
+
+
+async def test_an_absent_text_key_still_means_deletion():
+    """ "" is the documented schema default, so an omitted key keeps deleting."""
+    db = _rich_db()
+    _edit(db, [{"action": "replace", "index": 1}])
+    tags = [b.tag for b in blocks_module.split_blocks(_content_of(db))]
+    assert tags == ["h2", "ul", "blockquote", "img"]
+
+
+async def test_indices_refer_to_the_original_listing_regardless_of_op_order():
+    """Ops are applied back-to-front, so a caller never compensates for shift.
+
+    Submitting the same edits in either argument order must also produce
+    byte-identical content — the normalisation sorts before applying.
+    """
+    ops = [
+        {"action": "replace", "index": 0, "text": "New heading."},
+        {"action": "insert_after", "index": 2, "text": "After the list."},
+    ]
+    first = _rich_db()
+    _edit(first, ops)
+    second = _rich_db()
+    _edit(second, list(reversed(ops)))
+    assert _content_of(first) == _content_of(second)
+
+    after = blocks_module.split_blocks(_content_of(first))
+    # Block 0 is the <h2>, so the replacement is rebuilt at that level.
+    assert after[0].html == "<h2>New heading.</h2>"
+    # Original block 2 was the list; the insert landed straight after it.
+    assert after[2].tag == "ul"
+    assert after[3].html == "<p>After the list.</p>"
+
+
+async def test_removal_and_insert_in_one_call_use_original_indices():
+    db = _rich_db()
+    _edit(
+        db,
+        [
+            {"action": "replace", "index": 3, "text": ""},  # drop the blockquote
+            {"action": "insert_after", "index": 0, "text": "Subtitle."},
+        ],
+    )
+    tags = [b.tag for b in blocks_module.split_blocks(_content_of(db))]
+    assert tags == ["h2", "p", "p", "ul", "img"]
+
+
+async def test_duplicate_index_is_rejected():
+    db = _rich_db()
+    with pytest.raises(ValueError, match="two operations target block 1"):
+        _edit(
+            db,
+            [
+                {"action": "replace", "index": 1, "text": "a"},
+                {"action": "insert_after", "index": 1, "text": "b"},
+            ],
+        )
+    assert _content_of(db) == RICH
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        {"action": "replace", "index": 5, "text": "x"},
+        {"action": "replace", "index": -1, "text": "x"},
+        {"action": "insert_after", "index": 5, "text": "x"},
+        {"action": "insert_after", "index": -2, "text": "x"},
+    ],
+)
+async def test_out_of_range_indices_are_rejected(op):
+    db = _rich_db()
+    with pytest.raises(ValueError, match="out of range"):
+        _edit(db, [op])
+    assert _content_of(db) == RICH
+
+
+async def test_empty_chapter_guides_the_caller_to_insert_after_minus_one():
+    db = _seeded_db()
+    db.seed("stories/story-a/chapters/blank", {"title": "Blank", "content": ""})
+    with pytest.raises(ValueError, match="no blocks yet"):
+        _edit(db, [{"action": "replace", "index": 0, "text": "x"}], chapter="blank")
+    _edit(
+        db, [{"action": "insert_after", "index": -1, "text": "First."}], chapter="blank"
+    )
+    assert _content_of(db, "stories/story-a/chapters/blank") == "<p>First.</p>"
+
+
+async def test_op_list_validation():
+    db = _rich_db()
+    for bad, match in [
+        ([], "at least one"),
+        ([{"action": "delete", "index": 0}], "action must be one of"),
+        (
+            [{"action": "replace", "index": "1", "text": "x"}],
+            "index must be an integer",
+        ),
+        (
+            [{"action": "replace", "index": True, "text": "x"}],
+            "index must be an integer",
+        ),
+        ([{"action": "insert_after", "index": 0, "text": "  "}], "non-empty text"),
+        (["not-an-object"], "each op must be an object"),
+        ("not-a-list", "ops must be a list"),
+    ]:
+        with pytest.raises(ValueError, match=match):
+            _edit(db, bad)
+    assert _content_of(db) == RICH
+
+
+async def test_too_many_ops_rejected():
+    db = _rich_db()
+    ops = [
+        {"action": "insert_after", "index": i, "text": "x"}
+        for i in range(writes.MAX_OPS_PER_CALL + 1)
+    ]
+    with pytest.raises(ValueError, match="at most 20 operations"):
+        _edit(db, ops)
+
+
+async def test_edit_escapes_markup():
+    db = _rich_db()
+    _edit(db, [{"action": "replace", "index": 1, "text": "<script>x</script>"}])
+    assert "<script>" not in _content_of(db)
+    assert "&lt;script&gt;" in _content_of(db)
+
+
+async def test_edit_enforces_caps_on_the_rebuilt_string():
+    db = _rich_db()
+    with pytest.raises(writes.LimitExceededError) as exc:
+        _edit(
+            db,
+            [
+                {
+                    "action": "replace",
+                    "index": 1,
+                    "text": " ".join(["w"] * (writes.MAX_CHAPTER_WORDS + 1)),
+                }
+            ],
+        )
+    assert exc.value.limit_name == "chapter_words"
+    assert _content_of(db) == RICH
+
+
+async def test_edit_is_owner_scoped():
+    db = _rich_db()
+    path = "stories/story-b/chapters/chb"
+    with pytest.raises(data.StoryNotFoundError):
+        writes.edit_chapter_blocks(
+            db,
+            UID_A,
+            "story-b",
+            "chb",
+            [{"action": "replace", "index": 0, "text": "mine now"}],
+            _revision_of(db, path),
+        )
+
+
+async def test_edit_on_a_missing_chapter_raises_entity_not_found():
+    db = _rich_db()
+    with pytest.raises(data.EntityNotFoundError):
+        writes.edit_chapter_blocks(
+            db,
+            UID_A,
+            "story-a",
+            "no-such-chapter",
+            [{"action": "replace", "index": 0, "text": "x"}],
+            "1",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Editing — idempotency
+# ---------------------------------------------------------------------------
+
+
+async def test_identical_append_replays_instead_of_appending_twice():
+    db = _rich_db()
+    revision = _revision_of(db)
+    first = writes.append_to_chapter(db, UID_A, "story-a", "rich", "Once.", revision)
+    after_first = _content_of(db)
+    second = writes.append_to_chapter(db, UID_A, "story-a", "rich", "Once.", revision)
+    assert first["idempotent_replay"] is False
+    assert second["idempotent_replay"] is True
+    assert second["revision"] == first["revision"]
+    assert _content_of(db) == after_first
+
+
+async def test_identical_edit_replays_instead_of_editing_twice():
+    db = _rich_db()
+    revision = _revision_of(db)
+    ops = [{"action": "insert_after", "index": 0, "text": "Inserted."}]
+    first = writes.edit_chapter_blocks(db, UID_A, "story-a", "rich", ops, revision)
+    after_first = _content_of(db)
+    second = writes.edit_chapter_blocks(db, UID_A, "story-a", "rich", ops, revision)
+    assert second["idempotent_replay"] is True
+    assert _content_of(db) == after_first
+    assert _content_of(db).count("Inserted.") == 1
+    assert first["block_count"] == second["block_count"]
+
+
+async def test_same_ops_against_the_new_revision_is_a_fresh_edit():
+    """A replay is anchored to the base version, not to the text of the call."""
+    db = _rich_db()
+    ops = [{"action": "insert_after", "index": 0, "text": "Again."}]
+    writes.edit_chapter_blocks(db, UID_A, "story-a", "rich", ops, _revision_of(db))
+    writes.edit_chapter_blocks(db, UID_A, "story-a", "rich", ops, _revision_of(db))
+    assert _content_of(db).count("Again.") == 2
+
+
+async def test_op_order_does_not_change_the_idempotency_key():
+    db = _rich_db()
+    revision = _revision_of(db)
+    ops = [
+        {"action": "replace", "index": 0, "text": "A."},
+        {"action": "insert_after", "index": 2, "text": "B."},
+    ]
+    writes.edit_chapter_blocks(db, UID_A, "story-a", "rich", ops, revision)
+    replay = writes.edit_chapter_blocks(
+        db, UID_A, "story-a", "rich", list(reversed(ops)), revision
+    )
+    assert replay["idempotent_replay"] is True
+
+
+async def test_failed_edit_releases_the_reservation():
+    """A corrected retry must not be blocked by the failed attempt's claim."""
+    db = _rich_db()
+    revision = _revision_of(db)
+    with pytest.raises(writes.LimitExceededError):
+        writes.edit_chapter_blocks(
+            db,
+            UID_A,
+            "story-a",
+            "rich",
+            [
+                {
+                    "action": "replace",
+                    "index": 1,
+                    "text": " ".join(["w"] * (writes.MAX_CHAPTER_WORDS + 1)),
+                }
+            ],
+            revision,
+        )
+    ok = writes.edit_chapter_blocks(
+        db,
+        UID_A,
+        "story-a",
+        "rich",
+        [{"action": "replace", "index": 1, "text": "short"}],
+        revision,
+    )
+    assert ok["idempotent_replay"] is False
+
+
+async def test_another_users_completed_edit_cannot_be_replayed():
+    """Ownership is checked before the reservation is consulted, so an attacker
+    who somehow knew the exact arguments of someone else's successful edit gets
+    "not found" rather than a replay of its result."""
+    db = _rich_db()
+    story = writes.create_story(db, UID_B, "B's book")
+    chapter = writes.create_chapter(db, UID_B, story["story_id"], "Ch", "text")
+    path = f"stories/{story['story_id']}/chapters/{chapter['chapter_id']}"
+    revision = _revision_of(db, path)
+    writes.append_to_chapter(
+        db, UID_B, story["story_id"], chapter["chapter_id"], "hi", revision
+    )
+    with pytest.raises(data.StoryNotFoundError):
+        writes.append_to_chapter(
+            db, UID_A, story["story_id"], chapter["chapter_id"], "hi", revision
+        )
+
+
+# ---------------------------------------------------------------------------
+# Editing — through the MCP tool layer
+# ---------------------------------------------------------------------------
+
+
+async def test_edit_tools_require_the_write_scope():
+    db = _rich_db()
+    mcp = _tool_server(db, enable_writes=True)
+    with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A)):
+        for name, args in [
+            ("append_to_chapter", {"content": "x"}),
+            (
+                "edit_chapter_blocks",
+                {"ops": [{"action": "replace", "index": 0, "text": "x"}]},
+            ),
+        ]:
+            with pytest.raises(ToolError, match="read-only"):
+                await mcp.call_tool(
+                    name,
+                    {
+                        "story_id": "story-a",
+                        "chapter_id": "rich",
+                        "revision": _revision_of(db),
+                        **args,
+                    },
+                )
+    assert _content_of(db) == RICH
+
+
+async def test_edit_tool_idor_returns_story_not_found():
+    db = _rich_db()
+    mcp = _tool_server(db, enable_writes=True)
+    with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
+        with pytest.raises(ToolError, match="Story not found"):
+            await mcp.call_tool(
+                "append_to_chapter",
+                {
+                    "story_id": "story-b",
+                    "chapter_id": "chb",
+                    "content": "mine now",
+                    "revision": _revision_of(db, "stories/story-b/chapters/chb"),
+                },
+            )
+    assert _content_of(db, "stories/story-b/chapters/chb") == "secret text"
+
+
+async def test_edit_tool_missing_chapter_says_chapter_not_found():
+    db = _rich_db()
+    mcp = _tool_server(db, enable_writes=True)
+    with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
+        with pytest.raises(ToolError, match="Chapter not found"):
+            await mcp.call_tool(
+                "append_to_chapter",
+                {
+                    "story_id": "story-a",
+                    "chapter_id": "nope",
+                    "content": "x",
+                    "revision": "1",
+                },
+            )
+
+
+async def test_stale_revision_through_the_tool_layer_tells_the_model_to_reread():
+    db = _rich_db()
+    mcp = _tool_server(db, enable_writes=True)
+    with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
+        with pytest.raises(ToolError, match="changed since you read it"):
+            await mcp.call_tool(
+                "append_to_chapter",
+                {
+                    "story_id": "story-a",
+                    "chapter_id": "rich",
+                    "content": "x",
+                    "revision": "stale",
+                },
+            )
+    assert _content_of(db) == RICH
+
+
+async def test_edit_tools_share_the_write_rate_limiter():
+    db = _rich_db()
+    mcp = _tool_server(db, enable_writes=True, write_rpm=1)
+    with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
+        await _call(
+            mcp,
+            "append_to_chapter",
+            {
+                "story_id": "story-a",
+                "chapter_id": "rich",
+                "content": "one",
+                "revision": _revision_of(db),
+            },
+        )
+        with pytest.raises(ToolError, match="Write rate limit"):
+            await mcp.call_tool(
+                "append_to_chapter",
+                {
+                    "story_id": "story-a",
+                    "chapter_id": "rich",
+                    "content": "two",
+                    "revision": _revision_of(db),
+                },
+            )
+
+
+@pytest.mark.parametrize(
+    "tool,arguments,expected_extra",
+    [
+        (
+            "create_story",
+            {"title": "Audited", "description": "blurb"},
+            {"title_chars": 7, "description_chars": 5, "tag_count": 0},
+        ),
+        (
+            "create_chapter",
+            {"story_id": "story-a", "title": "Audited", "content": "One two."},
+            {"order": 4, "chapter_count": 3, "attempts": 1},
+        ),
+    ],
+)
+async def test_every_write_is_audited_with_the_caller_and_target(
+    tool, arguments, expected_extra
+):
+    """The audit line is the only record of who changed what, so its spine —
+    uid, connector, story, replay flag — has to survive refactoring."""
+    db = _rich_db()
+    mcp = _tool_server(db, enable_writes=True)
+    with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
+        with capture_logs() as logs:
+            await _call(mcp, tool, arguments)
+
+    line = next(entry for entry in logs if entry["event"].startswith("mcp_write_"))
+    assert line["uid"] == UID_A
+    assert line["client_id"] == "c1"
+    assert line["story_id"]
+    assert line["idempotent_replay"] is False
+    for field, value in expected_extra.items():
+        assert line[field] == value
+
+
+async def test_audit_lines_carry_no_user_prose():
+    """Lengths and counts only. A result field holding the author's words must
+    never reach the logs, which is why _audit forwards nothing implicitly."""
+    db = _rich_db()
+    mcp = _tool_server(db, enable_writes=True)
+    secret = "Zephyrine unmistakable prose"
+    with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
+        with capture_logs() as logs:
+            await _call(
+                mcp,
+                "create_story",
+                {"title": secret, "description": secret, "tags": [secret[:20]]},
+            )
+    assert not any(
+        secret[:20] in str(value) for entry in logs for value in entry.values()
+    )
+
+
+async def test_chapter_edits_are_audited_with_the_chapter_id():
+    db = _rich_db()
+    mcp = _tool_server(db, enable_writes=True)
+    with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
+        with capture_logs() as logs:
+            await _call(
+                mcp,
+                "append_to_chapter",
+                {
+                    "story_id": "story-a",
+                    "chapter_id": "rich",
+                    "content": "Postscript.",
+                    "revision": _revision_of(db),
+                },
+            )
+    line = next(e for e in logs if e["event"] == "mcp_write_chapter_appended")
+    assert line["chapter_id"] == "rich"
+    assert line["appended_chars"] == len("Postscript.")
+    assert line["block_count"] == 6
+
+
+async def test_full_edit_cycle_through_the_tools():
+    """Read blocks, edit by index with the revision it gave, read back."""
+    db = _rich_db()
+    mcp = _tool_server(db, enable_writes=True)
+    with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
+        listing = await _call(
+            mcp,
+            "get_chapter_blocks",
+            {"story_id": "story-a", "chapter_id": "rich"},
+        )
+        assert listing["notice"] == UNTRUSTED_NOTICE
+        target = next(b for b in listing["blocks"] if b["preview"].startswith("She"))
+
+        edited = await _call(
+            mcp,
+            "edit_chapter_blocks",
+            {
+                "story_id": "story-a",
+                "chapter_id": "rich",
+                "revision": listing["revision"],
+                "ops": [
+                    {
+                        "action": "replace",
+                        "index": target["index"],
+                        "text": "She counted the steps twice.",
+                    }
+                ],
+            },
+        )
+        # Chain a second edit on the revision the first returned: no re-read.
+        await _call(
+            mcp,
+            "append_to_chapter",
+            {
+                "story_id": "story-a",
+                "chapter_id": "rich",
+                "content": "Postscript.",
+                "revision": edited["revision"],
+            },
+        )
+        final = await _call(
+            mcp, "get_chapter", {"story_id": "story-a", "chapter_id": "rich"}
+        )
+
+    assert "She counted the steps twice." in final["content"]
+    assert final["content"].endswith("<p>Postscript.</p>")
+    # Untouched blocks kept their exact markup through two edits.
+    assert '<ul class="list-disc"><li><p>rope</p></li><li><p>lamp</p></li></ul>' in (
+        final["content"]
+    )
+    assert final["revision"] == _revision_of(db)
+
+
+# ---------------------------------------------------------------------------
 # Drift guards
 # ---------------------------------------------------------------------------
+
+
+def test_revision_token_agrees_across_the_two_real_firestore_types():
+    """The fake cannot catch this, and it breaks every chained edit if wrong.
+
+    A read gives DocumentSnapshot.update_time (DatetimeWithNanoseconds); a
+    write gives WriteResult.update_time (protobuf Timestamp). str() spells the
+    same instant completely differently for the two, so a token taken straight
+    from str() would make an edit's returned revision never match the next
+    read's — refusing every chained edit as stale with nothing else going on.
+    """
+    from google.api_core.datetime_helpers import DatetimeWithNanoseconds
+    from google.protobuf import timestamp_pb2
+
+    from_write = timestamp_pb2.Timestamp(seconds=1_785_000_000, nanos=745_934_000)
+    # The library's own conversion, so both objects are the same instant by
+    # construction rather than by my arithmetic.
+    from_read = DatetimeWithNanoseconds.from_timestamp_pb(from_write)
+
+    assert str(from_write) != str(from_read)  # the trap this guards
+    assert data.revision_token(from_write) == data.revision_token(from_read)
+
+
+def test_revision_token_distinguishes_adjacent_versions():
+    from google.protobuf import timestamp_pb2
+
+    a = timestamp_pb2.Timestamp(seconds=1_785_000_000, nanos=1)
+    b = timestamp_pb2.Timestamp(seconds=1_785_000_000, nanos=2)
+    assert data.revision_token(a) != data.revision_token(b)
+
+
+def test_block_op_actions_match_the_writes_layer():
+    """The tool schema tells the model what to send; writes.py decides what is
+    accepted. If they drift, valid-looking ops start being refused."""
+    from typing import get_args
+
+    field = tools_module.BlockOp.model_fields["action"]
+    assert set(get_args(field.annotation)) == set(writes.OP_ACTIONS)
 
 
 def test_write_scope_is_not_in_required_scopes():

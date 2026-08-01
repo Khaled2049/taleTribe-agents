@@ -96,8 +96,9 @@ def build_mcp_bundle(settings: Settings) -> McpBundle:
         instructions=(
             "Access to the connected user's NovelSync stories: list stories, "
             "read chapters, and inspect characters, places, and plots. With "
-            "write access granted, also create new stories and append "
-            "chapters to them. All access is scoped to stories the user owns."
+            "write access granted, also create new stories, append chapters "
+            "to them, and edit existing chapters paragraph by paragraph. All "
+            "access is scoped to stories the user owns."
         ),
         auth_server_provider=provider,
         auth=AuthSettings(
