@@ -38,11 +38,29 @@ class Settings(BaseSettings):
     # Feature flags
     enable_local_image_generation: bool = True
 
-    # MCP server (OAuth 2.1 authorization server + read-only story tools)
+    # MCP server (OAuth 2.1 authorization server + owner-scoped story tools)
     enable_mcp: bool = True
     mcp_issuer_url: str = ""  # defaults to agent_service_url / localhost (see property)
     mcp_consent_url: str = ""  # frontend consent page (required in production)
     mcp_max_requests_per_minute_per_user: int = 60
+    # Story/chapter creation over MCP. Off by default: it is the only path in
+    # this service that mutates user content, and the Admin SDK bypasses every
+    # limit in firestore.rules, so mcp_server/writes.py re-implements them.
+    enable_mcp_writes: bool = False
+    # Second, much tighter bucket applied only to the write tools, on top of
+    # mcp_max_requests_per_minute_per_user. Also what keeps the soft story cap
+    # honest: the frontend's storyCountTrigger is eventually consistent, so a
+    # burst faster than this could overshoot MAX_STORIES_PER_USER.
+    mcp_max_writes_per_minute_per_user: int = 6
+    # Owner-controlled rollout allowlist: only users with
+    # mcpAccess/{uid}.status == "granted" may connect or call tools. ON by
+    # default while MCP is being trialled — turning it OFF is how the feature
+    # goes generally available, and deletes nothing.
+    enable_mcp_access_allowlist: bool = True
+    # How long an allowlist decision is cached per instance. This is also the
+    # worst-case delay before a revocation disconnects someone, so it trades
+    # Firestore reads against how sharp the "off" switch feels.
+    mcp_access_cache_ttl_seconds: int = 60
     # Per-IP caps on the unauthenticated OAuth endpoints. /register writes a
     # Firestore document per call with no credential required, so it gets a
     # tighter bucket than the rest of the flow.
@@ -67,6 +85,14 @@ class Settings(BaseSettings):
             return max(0, int(v))  # type: ignore[arg-type]
         except (TypeError, ValueError):
             return 20
+
+    @field_validator("mcp_max_writes_per_minute_per_user", mode="before")
+    @classmethod
+    def clamp_write_rpm(cls, v: object) -> int:
+        try:
+            return max(0, int(v))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return 6
 
     @field_validator("cors_origins", mode="before")
     @classmethod
@@ -156,6 +182,11 @@ class Settings(BaseSettings):
         """OAuth issuer / MCP resource base URL (no trailing slash)."""
         raw = self.mcp_issuer_url.strip() or self.agent_service_url.strip()
         return (raw or f"http://localhost:{self.port}").rstrip("/")
+
+    @property
+    def resolved_mcp_writes_enabled(self) -> bool:
+        """Writes can never be on without the MCP server that hosts them."""
+        return self.enable_mcp and self.enable_mcp_writes
 
     @property
     def resolved_mcp_consent_url(self) -> str:

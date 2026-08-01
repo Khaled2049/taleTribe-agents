@@ -116,9 +116,38 @@ variable "credit_proxy_url" {
 }
 
 variable "enable_mcp" {
-  description = "Serve the MCP server (OAuth 2.1 AS + read-only story tools) from this service."
+  description = "Serve the MCP server (OAuth 2.1 AS + owner-scoped story tools) from this service."
   type        = bool
   default     = true
+}
+
+variable "enable_mcp_writes" {
+  description = "Allow MCP clients to create stories and chapters. Off by default: it is the only path in the service that mutates user content, and it requires a token granted the stories:write scope. Flip this in its own commit so a rollback needs no code change."
+  type        = bool
+  default     = false
+}
+
+variable "enable_mcp_access_allowlist" {
+  description = "Restrict MCP to accounts with mcpAccess/{uid}.status == 'granted'. On while MCP is in limited testing; set false to open it to everyone (which deletes no data and is instantly reversible)."
+  type        = bool
+  default     = true
+}
+
+variable "mcp_access_cache_ttl_seconds" {
+  description = "How long an allowlist decision is cached per instance. Also the worst-case delay before a revocation disconnects an active MCP connection."
+  type        = number
+  default     = 60
+}
+
+variable "mcp_max_writes_per_minute_per_user" {
+  description = "Per-user cap on MCP write tool calls, on top of mcp_max_requests_per_minute_per_user. Same per-instance caveat. Deliberately tight: it is what stops a burst outrunning the eventually-consistent story-count cap."
+  type        = number
+  default     = 6
+
+  validation {
+    condition     = var.mcp_max_writes_per_minute_per_user >= 0
+    error_message = "mcp_max_writes_per_minute_per_user must be >= 0 (0 disables the limiter)."
+  }
 }
 
 variable "mcp_consent_url" {

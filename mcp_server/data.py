@@ -5,6 +5,9 @@ the caller does not own: `stories/{id}.userId == uid`. Missing and non-owned
 stories are indistinguishable to the caller ("not found") so story IDs cannot
 be probed for existence.
 
+Reads only — nothing here mutates. The write tools live in writes.py, which
+imports the ownership gate below rather than reimplementing it.
+
 Deliberately does NOT reuse StoryContextBuilder.build_story_context — that
 path fetches all four subcollections with full chapter bodies and TTL-caches
 the result, which is wasteful for targeted reads and would cache across
@@ -130,12 +133,25 @@ def _iso(value: Any) -> Optional[str]:
     return value.isoformat() if hasattr(value, "isoformat") else None
 
 
+def get_owned_story_snapshot(db: Any, story_id: str, uid: str) -> Any:
+    """The ownership gate, returning the raw snapshot.
+
+    Exists for writes.py, which needs `snap.update_time` to make its
+    chapterCount bump conditional on the version it read. Everyone else wants
+    get_owned_story below. Keeping both on one implementation means there is
+    still exactly one place that decides whether a caller owns a story.
+    """
+    snap = db.collection("stories").document(story_id).get()
+    record = snap.to_dict() if snap.exists else None
+    if not record or record.get("userId") != uid:
+        raise StoryNotFoundError(story_id)
+    return snap
+
+
 def get_owned_story(db: Any, story_id: str, uid: str) -> dict:
     """The single ownership gate every story-scoped read goes through."""
-    snap = db.collection("stories").document(story_id).get()
-    data = snap.to_dict() if snap.exists else None
-    if not data or data.get("userId") != uid:
-        raise StoryNotFoundError(story_id)
+    snap = get_owned_story_snapshot(db, story_id, uid)
+    data = snap.to_dict()
     data["id"] = snap.id
     return data
 
