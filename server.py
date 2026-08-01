@@ -644,6 +644,8 @@ def create_app() -> FastAPI:
                     settings.mcp_oauth_requests_per_minute_per_ip
                 ),
                 as_metadata=mcp_bundle.as_metadata,
+                resource_metadata=mcp_bundle.resource_metadata,
+                access_gate=mcp_bundle.access_gate,
             )
         )
         # The SDK's OAuth routes are inside the mounted app, out of reach of

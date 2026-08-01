@@ -22,7 +22,7 @@ RUN pip install --no-cache-dir poetry poetry-plugin-export \
 # Copy the entire agents directory
 COPY agents/ /app/agents/
 
-# Copy the MCP server package (OAuth 2.1 AS + read-only story tools).
+# Copy the MCP server package (OAuth 2.1 AS + owner-scoped story tools).
 # server.py falls back to an MCP-less app on ImportError, so forgetting this
 # COPY ships a silently degraded image — keep it explicit.
 COPY mcp_server/ /app/mcp_server/

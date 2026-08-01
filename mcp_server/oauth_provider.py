@@ -30,7 +30,11 @@ from mcp.server.auth.provider import (
 )
 from mcp.server.auth.routes import build_metadata
 from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
-from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
+from mcp.shared.auth import (
+    OAuthClientInformationFull,
+    OAuthToken,
+    ProtectedResourceMetadata,
+)
 from pydantic import AnyHttpUrl, AnyUrl
 
 from mcp_server.oauth_store import (
@@ -135,6 +139,39 @@ def public_client_metadata(
         if field in document:
             document[field] = [PUBLIC_CLIENT_AUTH_METHOD]
     return document
+
+
+def public_resource_metadata(
+    *,
+    issuer_url: AnyHttpUrl,
+    scopes_supported: list[str],
+) -> dict[str, Any]:
+    """The RFC 9728 protected-resource document, with scopes we choose.
+
+    The SDK builds this itself from AuthSettings.required_scopes
+    (fastmcp/server.py create_protected_resource_routes). That welds the one
+    field telling a client which scopes it MAY request to the list
+    RequireAuthMiddleware demands it ALREADY has — and that middleware is
+    conjunctive over the whole /mcp mount, so a scope in that list is required
+    of every caller. stories:write can never go there without making write
+    access mandatory and read-only connections impossible.
+
+    Left alone, the consequence is that no SDK client ever asks for write:
+    get_client_metadata_scopes() in the client copies scopes_supported verbatim
+    into its registration and its /authorize request, and validate_scope() then
+    rejects anything outside the client's own registered ceiling. The write
+    tools would be unreachable.
+
+    So this document is served in place of the SDK's, from a FastAPI route that
+    wins over the mount — the same technique, and the same class of reason, as
+    public_client_metadata above.
+    """
+    metadata = ProtectedResourceMetadata(
+        resource=AnyHttpUrl(f"{str(issuer_url).rstrip('/')}/mcp"),
+        authorization_servers=[issuer_url],
+        scopes_supported=list(scopes_supported),
+    )
+    return metadata.model_dump(mode="json", exclude_none=True)
 
 
 def _validate_redirect_uris(uris: list[Any]) -> None:
@@ -383,7 +420,9 @@ class FirestoreOAuthProvider:
         The accepted cost is a false positive: a client that retries a refresh
         because the response was lost in flight replays a token that really was
         consumed, and gets logged out. The spec takes that trade deliberately,
-        and here it costs the user one re-consent on a read-only grant.
+        and here it costs the user one re-consent. That is cheap on a read-only
+        grant and merely inconvenient on a write one — no content is lost,
+        since the reuse revokes tokens, not stories.
 
         Because those two cases are indistinguishable at the moment of the
         replay, the log carries the one fact that separates them after the

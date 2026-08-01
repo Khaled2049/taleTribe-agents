@@ -19,6 +19,8 @@ os.environ["MCP_MAX_REQUESTS_PER_MINUTE_PER_USER"] = "1000"
 os.environ["MCP_REGISTER_REQUESTS_PER_MINUTE_PER_IP"] = "1000"
 os.environ["MCP_OAUTH_REQUESTS_PER_MINUTE_PER_IP"] = "1000"
 os.environ["ENABLE_MCP"] = "true"
+# Writes on, so this module can exercise the stories:write grant end to end.
+os.environ["ENABLE_MCP_WRITES"] = "true"
 os.environ["MCP_CONSENT_URL"] = "https://consent.example/mcp-connect"
 # RFC 8414 requires HTTPS issuers; the SDK carves out localhost for testing.
 os.environ["MCP_ISSUER_URL"] = "http://localhost:8000"
@@ -36,6 +38,11 @@ import mcp_server.app as mcp_app_module  # noqa: E402
 from tests.mcp_fakes import FakeFirestoreClient  # noqa: E402
 
 fake_db = FakeFirestoreClient()
+# The rollout allowlist is on by default, so the flow's test user has to be
+# approved or every consent in this module would 403. test_access_gate.py
+# covers the refusal path.
+fake_db.seed("mcpAccess/user-a", {"status": "granted"})
+fake_db.seed("mcpAccess/emu-user", {"status": "granted"})
 
 with patch.object(mcp_app_module, "_make_firestore_client", return_value=fake_db):
     from server import create_app
@@ -60,23 +67,28 @@ def _pkce_pair() -> tuple[str, str]:
     return verifier, challenge
 
 
-def _register(client) -> str:
-    resp = client.post(
-        "/register",
-        json={
-            "client_name": "Flow Test Client",
-            "redirect_uris": [REDIRECT_URI],
-            "token_endpoint_auth_method": "none",
-            "grant_types": ["authorization_code", "refresh_token"],
-            "response_types": ["code"],
-        },
-    )
+def _register(client, scope: str | None = None) -> str:
+    """Register a client. `scope` omitted means the server's default_scopes."""
+    body = {
+        "client_name": "Flow Test Client",
+        "redirect_uris": [REDIRECT_URI],
+        "token_endpoint_auth_method": "none",
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+    }
+    if scope is not None:
+        body["scope"] = scope
+    resp = client.post("/register", json=body)
     assert resp.status_code == 201, resp.text
     return resp.json()["client_id"]
 
 
 def _authorize(
-    client, client_id: str, challenge: str, resource: str | None = None
+    client,
+    client_id: str,
+    challenge: str,
+    resource: str | None = None,
+    scope: str = "stories:read",
 ) -> str:
     """Run /authorize; return the consent txn id."""
     params = {
@@ -86,7 +98,7 @@ def _authorize(
         "code_challenge": challenge,
         "code_challenge_method": "S256",
         "state": "state-123",
-        "scope": "stories:read",
+        "scope": scope,
     }
     if resource:
         params["resource"] = resource
@@ -507,3 +519,142 @@ def test_agent_execute_still_requires_internal_token(client):
     # be treated as an MCP route; it still hits the guarded host endpoint.
     assert resp.status_code in (200, 401, 422, 500)
     assert "jsonrpc" not in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Write scope
+# ---------------------------------------------------------------------------
+
+
+def test_protected_resource_metadata_advertises_write(client):
+    """The SDK builds this document from required_scopes, which is the list
+    RequireAuthMiddleware demands a token ALREADY has — so stories:write can
+    never appear there. Without the shadow route in oauth_routes.py the client
+    SDK would copy scopes_supported into its registration verbatim and could
+    never request write at all, leaving the write tools unreachable."""
+    resp = client.get("/.well-known/oauth-protected-resource/mcp")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body["scopes_supported"]) == {"stories:read", "stories:write"}
+    assert body["resource"].rstrip("/").endswith("/mcp")
+    assert body["authorization_servers"]
+
+
+def test_register_defaults_to_read_only(client):
+    """Omitting `scope` must not hand out write by accident."""
+    resp = client.post(
+        "/register",
+        json={
+            "client_name": "Defaulting Client",
+            "redirect_uris": [REDIRECT_URI],
+            "token_endpoint_auth_method": "none",
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["scope"] == "stories:read"
+
+
+def test_register_rejects_unknown_scope(client):
+    resp = client.post(
+        "/register",
+        json={
+            "client_name": "Greedy Client",
+            "redirect_uris": [REDIRECT_URI],
+            "token_endpoint_auth_method": "none",
+            "grant_types": ["authorization_code"],
+            "response_types": ["code"],
+            "scope": "stories:admin",
+        },
+    )
+    assert resp.status_code == 400, resp.text
+
+
+def test_authorize_rejects_write_for_a_read_only_registration(client):
+    """Write cannot be self-granted after the fact: /authorize validates the
+    request against the CLIENT's registered ceiling, not the server's."""
+    client_id = _register(client, scope="stories:read")
+    _verifier, challenge = _pkce_pair()
+    resp = client.get(
+        "/authorize",
+        params={
+            "response_type": "code",
+            "client_id": client_id,
+            "redirect_uri": REDIRECT_URI,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "state": "state-123",
+            "scope": "stories:read stories:write",
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code in (302, 307)
+    location = resp.headers["location"]
+    assert location.startswith(REDIRECT_URI)
+    assert "error=invalid_scope" in location
+
+
+def test_write_scoped_flow_end_to_end(client):
+    client_id = _register(client, scope="stories:read stories:write")
+    verifier, challenge = _pkce_pair()
+    txn_id = _authorize(
+        client, client_id, challenge, scope="stories:read stories:write"
+    )
+    code = _approve(client, txn_id)
+    resp = _exchange(client, client_id, code, verifier)
+    assert resp.status_code == 200, resp.text
+    granted = set(resp.json()["scope"].split())
+    assert granted == {"stories:read", "stories:write"}
+
+
+def test_consent_page_sees_the_write_scope(client):
+    """The consent copy in mcpConsentScopes.ts keys off exactly this list."""
+    client_id = _register(client, scope="stories:read stories:write")
+    _verifier, challenge = _pkce_pair()
+    txn_id = _authorize(
+        client, client_id, challenge, scope="stories:read stories:write"
+    )
+    resp = client.get(f"/oauth/txn/{txn_id}")
+    assert resp.status_code == 200
+    assert set(resp.json()["scopes"]) == {"stories:read", "stories:write"}
+
+
+# ---------------------------------------------------------------------------
+# Rollout allowlist
+# ---------------------------------------------------------------------------
+
+
+def test_consent_refused_for_a_user_not_on_the_allowlist(client):
+    """A non-approved user must never receive a grant at all — refusing at
+    consent is what stops them holding a token that only fails later."""
+    client_id = _register(client)
+    _verifier, challenge = _pkce_pair()
+    txn_id = _authorize(client, client_id, challenge)
+    with patch(
+        "mcp_server.oauth_routes.google_id_token.verify_firebase_token",
+        return_value={"sub": "stranger-uid"},
+    ):
+        resp = client.post(
+            "/oauth/complete",
+            json={"txn_id": txn_id, "approve": True, "id_token": "stub-token"},
+        )
+    assert resp.status_code == 403
+    # The app wraps HTTPException detail in its standard error envelope.
+    assert "request access" in resp.json()["error"]["message"].lower()
+
+
+def test_revoked_status_is_refused_like_an_absent_record(client):
+    fake_db.seed("mcpAccess/revoked-uid", {"status": "revoked"})
+    client_id = _register(client)
+    _verifier, challenge = _pkce_pair()
+    txn_id = _authorize(client, client_id, challenge)
+    with patch(
+        "mcp_server.oauth_routes.google_id_token.verify_firebase_token",
+        return_value={"sub": "revoked-uid"},
+    ):
+        resp = client.post(
+            "/oauth/complete",
+            json={"txn_id": txn_id, "approve": True, "id_token": "stub-token"},
+        )
+    assert resp.status_code == 403

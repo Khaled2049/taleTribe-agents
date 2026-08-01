@@ -166,6 +166,26 @@ resource "google_cloud_run_v2_service" "app" {
       }
 
       env {
+        name  = "ENABLE_MCP_WRITES"
+        value = tostring(var.enable_mcp_writes)
+      }
+
+      env {
+        name  = "MCP_MAX_WRITES_PER_MINUTE_PER_USER"
+        value = tostring(var.mcp_max_writes_per_minute_per_user)
+      }
+
+      env {
+        name  = "ENABLE_MCP_ACCESS_ALLOWLIST"
+        value = tostring(var.enable_mcp_access_allowlist)
+      }
+
+      env {
+        name  = "MCP_ACCESS_CACHE_TTL_SECONDS"
+        value = tostring(var.mcp_access_cache_ttl_seconds)
+      }
+
+      env {
         name  = "FIREBASE_FUNCTIONS_SERVICE_ACCOUNT"
         value = var.firebase_functions_service_account
       }
@@ -242,14 +262,17 @@ resource "google_cloud_run_v2_service" "app" {
   ]
 }
 
-# Firestore TTL garbage collection for expired MCP OAuth artifacts.
+# Firestore TTL garbage collection for expired MCP artifacts.
 # TTL deletion can lag 24-72h; the application re-checks expiresAt on every
 # read, so TTL here is cleanup, not enforcement.
 # mcpOauthClients is included because /register is unauthenticated: a client
 # record starts with a short expiry that only slides forward once the client is
 # actually used, so abandoned registrations get collected.
+# mcpWrites holds 2-minute write-idempotency reservations. It is keyed on
+# enable_mcp rather than enable_mcp_writes so that flipping writes on does not
+# also require a TTL policy change — the collection is simply unused until then.
 resource "google_firestore_field" "mcp_oauth_ttl" {
-  for_each = var.enable_mcp ? toset(["mcpOauthTxns", "mcpOauthCodes", "mcpOauthTokens", "mcpOauthClients"]) : toset([])
+  for_each = var.enable_mcp ? toset(["mcpOauthTxns", "mcpOauthCodes", "mcpOauthTokens", "mcpOauthClients", "mcpWrites"]) : toset([])
 
   project    = var.project_id
   database   = "(default)"

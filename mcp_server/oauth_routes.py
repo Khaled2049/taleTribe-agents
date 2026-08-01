@@ -27,6 +27,7 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 from pydantic import BaseModel, Field
 
+from mcp_server.access import AccessGate
 from mcp_server.oauth_provider import FirestoreOAuthProvider, TxnNotFoundError
 from mcp_server.throttle import client_ip
 from rate_limit import PerUserRateLimiter
@@ -68,6 +69,8 @@ def build_oauth_router(
     auth_request: google_requests.Request,
     ip_rate_limiter: PerUserRateLimiter,
     as_metadata: dict,
+    resource_metadata: dict,
+    access_gate: AccessGate,
 ) -> APIRouter:
     # No prefix: this router also serves a /.well-known document, which must sit
     # at the domain root. Paths are spelled out rather than sharing an /oauth
@@ -86,6 +89,24 @@ def build_oauth_router(
         read discovery cannot start the flow at all.
         """
         return as_metadata
+
+    @router.get("/.well-known/oauth-protected-resource/mcp", include_in_schema=False)
+    async def protected_resource_metadata():
+        """Overrides the SDK's copy, which is mounted below this router.
+
+        The SDK builds this document's `scopes_supported` from
+        AuthSettings.required_scopes — the list RequireAuthMiddleware enforces
+        conjunctively. So the field that tells a client which scopes it MAY ask
+        for is welded to the list of scopes it MUST already have, and
+        stories:write cannot go in the second without 403-ing every read-only
+        token. Left alone, no SDK client would ever request write access:
+        get_client_metadata_scopes() copies scopes_supported straight into its
+        registration and /authorize request.
+
+        Same technique and same class of reason as the authorization-server
+        document above. Deliberately not throttled, for the same reason.
+        """
+        return resource_metadata
 
     @router.get("/oauth/txn/{txn_id}")
     async def get_txn(txn_id: str, request: Request):
@@ -136,6 +157,18 @@ def build_oauth_router(
                 error_type=type(exc).__name__,
             )
             raise HTTPException(status_code=401, detail="Invalid Firebase ID token")
+
+        # Rollout allowlist. Refusing here means a non-approved user never gets
+        # an MCP token at all, rather than getting one that fails on first use.
+        # The gate is re-checked per tool call too (see tools._authorized_uid),
+        # because this one only runs at grant time.
+        if not await anyio.to_thread.run_sync(access_gate.is_allowed, uid):
+            logger.warning("mcp_access_denied_at_consent", uid=uid)
+            raise HTTPException(
+                status_code=403,
+                detail="MCP access is currently limited to approved accounts. "
+                "You can request access from your NovelSync profile.",
+            )
 
         try:
             redirect_url = await provider.complete_authorization(body.txn_id, uid)

@@ -25,14 +25,23 @@ from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import AnyHttpUrl
 
 from config import Settings
-from mcp_server.oauth_provider import FirestoreOAuthProvider, public_client_metadata
+from mcp_server.access import AccessGate
+from mcp_server.oauth_provider import (
+    FirestoreOAuthProvider,
+    public_client_metadata,
+    public_resource_metadata,
+)
 from mcp_server.oauth_store import OAuthStore
 from mcp_server.tools import register_tools
 from rate_limit import PerUserRateLimiter
 
 logger = structlog.get_logger(__name__)
 
-MCP_SCOPES = ["stories:read"]
+MCP_READ_SCOPE = "stories:read"
+MCP_WRITE_SCOPE = "stories:write"
+MCP_REQUIRED_SCOPES = [MCP_READ_SCOPE]
+MCP_VALID_SCOPES = [MCP_READ_SCOPE, MCP_WRITE_SCOPE]
+MCP_DEFAULT_SCOPES = [MCP_READ_SCOPE]
 
 
 @dataclass
@@ -41,9 +50,10 @@ class McpBundle:
     provider: FirestoreOAuthProvider
     db: Any
     tool_rate_limiter: PerUserRateLimiter
-    # Served in place of the SDK's own /.well-known/oauth-authorization-server,
-    # which advertises client_secret auth this server does not accept.
+    write_rate_limiter: PerUserRateLimiter
+    access_gate: AccessGate
     as_metadata: dict
+    resource_metadata: dict
 
 
 def _make_firestore_client(project_id: str) -> firestore.Client:
@@ -66,27 +76,34 @@ def build_mcp_bundle(settings: Settings) -> McpBundle:
     )
 
     issuer = settings.resolved_mcp_issuer_url
+    writes_enabled = settings.resolved_mcp_writes_enabled
+    # With writes off the scope is not merely unused: /register rejects it and
+    # discovery stops advertising it, so the flag is a real kill switch rather
+    # than a check somewhere downstream.
+    valid_scopes = MCP_VALID_SCOPES if writes_enabled else MCP_REQUIRED_SCOPES
+
     # Named locals so the served metadata is built from the same options the
     # server actually enforces, rather than a second copy that can drift.
     registration_options = ClientRegistrationOptions(
         enabled=True,
-        valid_scopes=MCP_SCOPES,
-        default_scopes=MCP_SCOPES,
+        valid_scopes=valid_scopes,
+        default_scopes=MCP_DEFAULT_SCOPES,
     )
     revocation_options = RevocationOptions(enabled=True)
 
     mcp = FastMCP(
         "NovelSync",
         instructions=(
-            "Read-only access to the connected user's NovelSync stories: "
-            "list stories, read chapters, and inspect characters, places, "
-            "and plots. All access is scoped to stories the user owns."
+            "Access to the connected user's NovelSync stories: list stories, "
+            "read chapters, and inspect characters, places, and plots. With "
+            "write access granted, also create new stories and append "
+            "chapters to them. All access is scoped to stories the user owns."
         ),
         auth_server_provider=provider,
         auth=AuthSettings(
             issuer_url=AnyHttpUrl(issuer),
             resource_server_url=AnyHttpUrl(f"{issuer}/mcp"),
-            required_scopes=MCP_SCOPES,
+            required_scopes=MCP_REQUIRED_SCOPES,
             client_registration_options=registration_options,
             revocation_options=revocation_options,
         ),
@@ -104,21 +121,42 @@ def build_mcp_bundle(settings: Settings) -> McpBundle:
     tool_rate_limiter = PerUserRateLimiter(
         settings.mcp_max_requests_per_minute_per_user
     )
-    register_tools(mcp, db=db, rate_limiter=tool_rate_limiter)
+    write_rate_limiter = PerUserRateLimiter(settings.mcp_max_writes_per_minute_per_user)
+    access_gate = AccessGate(
+        db,
+        enabled=settings.enable_mcp_access_allowlist,
+        cache_ttl_seconds=settings.mcp_access_cache_ttl_seconds,
+    )
+    register_tools(
+        mcp,
+        db=db,
+        rate_limiter=tool_rate_limiter,
+        write_rate_limiter=write_rate_limiter,
+        enable_writes=writes_enabled,
+        access_gate=access_gate,
+    )
 
     logger.info(
         "mcp_server_built",
         issuer=issuer,
         consent_url=settings.resolved_mcp_consent_url,
+        writes_enabled=writes_enabled,
+        access_allowlist=access_gate.enabled,
     )
     return McpBundle(
         mcp=mcp,
         provider=provider,
         db=db,
         tool_rate_limiter=tool_rate_limiter,
+        write_rate_limiter=write_rate_limiter,
+        access_gate=access_gate,
         as_metadata=public_client_metadata(
             issuer_url=AnyHttpUrl(issuer),
             registration_options=registration_options,
             revocation_options=revocation_options,
+        ),
+        resource_metadata=public_resource_metadata(
+            issuer_url=AnyHttpUrl(issuer),
+            scopes_supported=valid_scopes,
         ),
     )

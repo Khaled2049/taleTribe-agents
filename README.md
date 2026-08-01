@@ -13,7 +13,7 @@ Every AI feature in NovelSync flows through this service. It reads the writer's 
 - **Brain memory system** — four-layer cognitive memory (working, procedural, semantic, episodic) for richer continuity across sessions
 - **BYOK support** — per-request API key forwarding to Gemini, Claude, or OpenAI without touching platform credits
 - **Provider-agnostic** — LLM provider is configured in creditProxy; the agents never hard-code a model
-- **Remote MCP server** — read-only story tools for Claude and other MCP harnesses at `/mcp`, secured by an embedded OAuth 2.1 authorization server (`mcp_server/`)
+- **Remote MCP server** — owner-scoped story tools for Claude and other MCP harnesses at `/mcp`, secured by an embedded OAuth 2.1 authorization server (`mcp_server/`)
 
 ## Quick start
 
@@ -33,7 +33,7 @@ poetry run python server.py
 
 ## MCP server
 
-The service also hosts a remote MCP server (streamable HTTP) at `/mcp`, plus the OAuth 2.1 endpoints MCP clients discover at the domain root (`/.well-known/*`, `/authorize`, `/token`, `/register`, `/revoke`). Tools are read-only and owner-scoped: list stories, read chapters (paginated), and inspect characters/places/plots. Login is delegated to the frontend consent page (`MCP_CONSENT_URL`); tokens are opaque, hashed, and stored in Firestore.
+The service also hosts a remote MCP server (streamable HTTP) at `/mcp`, plus the OAuth 2.1 endpoints MCP clients discover at the domain root (`/.well-known/*`, `/authorize`, `/token`, `/register`, `/revoke`). Tools are owner-scoped: list stories, read chapters (paginated), and inspect characters/places/plots — all needing only the `stories:read` scope. Two write tools (`create_story`, `create_chapter`) additionally require the `stories:write` scope *and* `ENABLE_MCP_WRITES=true`; they are off by default and are never registered when the flag is off. Login is delegated to the frontend consent page (`MCP_CONSENT_URL`); tokens are opaque, hashed, and stored in Firestore.
 
 Local run against the emulators:
 

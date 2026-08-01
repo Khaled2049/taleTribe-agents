@@ -588,6 +588,9 @@ async def test_refresh_reuse_survives_a_token_without_a_family():
 
 
 async def test_refresh_never_widens_scope():
+    """Now load-bearing: stories:write is a real scope, so a refresh that could
+    widen into it would be a genuine privilege escalation rather than a
+    hypothetical one."""
     store, _ = _store()
     provider = _provider(store)
     client = _client()
