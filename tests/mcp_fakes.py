@@ -22,6 +22,14 @@ class FakeWriteOption:
         self.last_update_time = last_update_time
 
 
+class FakeWriteResult:
+    """What the real client returns from update(); writes.py reads update_time
+    off it to report the revision an edit produced."""
+
+    def __init__(self, update_time):
+        self.update_time = update_time
+
+
 class FakeSnapshot:
     def __init__(self, doc_id: str, data: Optional[dict], update_time):
         self.id = doc_id
@@ -77,7 +85,9 @@ class FakeDocRef:
             raise gcp_exceptions.AlreadyExists(f"document {self._path} exists")
         self._db.docs[self._path] = (copy.deepcopy(data), next(_versions))
 
-    def update(self, patch: dict, option: Optional[FakeWriteOption] = None) -> None:
+    def update(
+        self, patch: dict, option: Optional[FakeWriteOption] = None
+    ) -> FakeWriteResult:
         if self._db.before_update is not None:
             # Lets a test act as a concurrent writer in the window between the
             # caller's read and its precondition-guarded update. Without this
@@ -91,7 +101,9 @@ class FakeDocRef:
             raise gcp_exceptions.FailedPrecondition("stale update_time")
         merged = dict(data)
         merged.update(copy.deepcopy(patch))
-        self._db.docs[self._path] = (merged, next(_versions))
+        version = next(_versions)
+        self._db.docs[self._path] = (merged, version)
+        return FakeWriteResult(version)
 
     def delete(self, option: Optional[FakeWriteOption] = None) -> None:
         entry = self._db.docs.get(self._path)

@@ -1,43 +1,3 @@
-"""Owner-enforced Firestore writes backing the MCP write tools.
-
-This module is the entire mutation surface of the MCP server. It is separate
-from data.py on purpose: that module's promise is that it cannot change
-anything, and a reviewer asking "what can this server mutate?" should have
-exactly one file to read. Ownership is not re-implemented here — every
-story-scoped write goes through data.get_owned_story_snapshot, the same gate
-the read path uses.
-
-Three things this file exists to get right:
-
-1. **The Admin SDK bypasses firestore.rules.** Every ceiling the frontend
-   relies on is unenforced on this path, so they are re-declared below as
-   module constants and checked in code. Writing a document that violates them
-   produces a story the owner can no longer save from the editor.
-
-2. **Some derived fields have no trigger.** chapterIndex, users/{uid}.storyCount
-   and re-embedding are maintained by Firestore triggers in the frontend repo,
-   which fire on Admin SDK writes too. But `chapterCount`, `wordCount` and
-   `stories/{id}.updatedAt` are client-maintained, so this module must write
-   them itself. Missing `updatedAt` is the worst of the three: Firestore's
-   order_by excludes documents lacking the field, so the story disappears from
-   list_my_stories, and the frontend's mapStoryDoc calls .toDate() on it
-   unguarded, so story lists throw.
-
-3. **An LLM harness issues tool calls in parallel.** The frontend's own
-   addChapter derives `order` from the denormalized `chapterCount`, which is a
-   lost update under concurrency and additionally collides after any mid-book
-   delete (deleteChapter decrements the counter without renumbering). This
-   module claims `order` from a `nextChapterOrder` counter on the story doc,
-   bumped in the SAME last_update_time-preconditioned update as chapterCount —
-   deriving it from a separate max(order) read would leave a window between a
-   winner's claim and its chapter write in which a second caller re-derives
-   the same value (the claim moves the story doc, but the chapter that
-   justifies the next order does not exist yet).
-
-All functions are synchronous (google-cloud-firestore sync client); tools.py
-bridges them with anyio.to_thread, matching data.py.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -51,7 +11,7 @@ import structlog
 from google.api_core import exceptions as gcp_exceptions
 from google.cloud.firestore_v1.query import Query
 
-from mcp_server import data
+from mcp_server import blocks, data
 from mcp_server.oauth_store import as_utc
 
 logger = structlog.get_logger(__name__)
@@ -77,6 +37,25 @@ MAX_STORIES_PER_USER = 100
 
 # Retries for the chapterCount precondition before giving up.
 MAX_CLAIM_ATTEMPTS = 3
+
+# Positional edit operations. Two actions cover the ground: "replace" with
+# empty text removes a block, so a third "delete" action would add schema
+# without adding reach.
+OP_ACTIONS = ("replace", "insert_after")
+
+# Which blocks a `replace` may rewrite, keyed on the tag the splitter reports.
+#
+# _to_paragraph_html only ever emits <p>, so applying it to whatever block the
+# caller named would turn an <h2> into a paragraph and flatten a <ul> into one
+# soft-wrapped line — silently, and the product has no undo. Paragraphs are
+# rewritten as before; headings keep their level; everything else carries
+# structure this module cannot rebuild from plain text and is refused instead
+# of downgraded. See _replacement_html.
+PLAIN_BLOCK_TAGS = frozenset({"p", blocks.TEXT_TAG})
+HEADING_TAGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
+# Enough for a thorough revision pass over one chapter, small enough that a
+# runaway model cannot smuggle a whole-chapter rewrite through as ops.
+MAX_OPS_PER_CALL = 20
 
 # Write-idempotency reservations. Service-only; see the firestore.rules deny
 # block and the Terraform TTL policy on `expiresAt`.
@@ -104,6 +83,16 @@ class WriteConflictError(Exception):
 
 class DuplicateInFlightError(Exception):
     """An identical call from the same user is still running."""
+
+
+class StaleRevisionError(Exception):
+    """The chapter moved after the caller read it, so the edit's base is gone.
+
+    Distinct from WriteConflictError, which means "we lost a race we can
+    retry". This one is not retryable by the server: the content the caller
+    reasoned about no longer exists, and only the caller can decide whether its
+    edit still makes sense against the new text.
+    """
 
 
 def _now() -> datetime:
@@ -190,6 +179,23 @@ def _to_paragraph_html(content: Any) -> str:
     )
 
 
+def _clean_revision(value: Any) -> str:
+    """The caller's claimed base version, as an opaque string.
+
+    Not parsed or reformatted beyond stripping: it is compared verbatim against
+    data.revision_token() of a freshly read update_time, so interpreting it as
+    a timestamp here would only create ways for an equal version to compare
+    unequal.
+    """
+    text = value.strip() if isinstance(value, str) else ""
+    if not text:
+        raise ValueError(
+            "revision is required. Call get_chapter_blocks (or get_chapter) "
+            "and pass the revision it returns."
+        )
+    return text
+
+
 def _count_words(stored: str) -> int:
     """Word count over the STORED string, matching StoriesRepo.countWords.
 
@@ -251,14 +257,46 @@ def _claim(db: Any, key: str, uid: str, tool: str) -> Optional[dict]:
 
     snap = ref.get()
     existing = snap.to_dict() if snap.exists else None
-    if existing is None or _expired(existing):
-        # TTL collection lags by hours; an expired reservation is ours to take.
-        ref.set(record)
+    if existing is None:
+        # Gone between the create above and this read — a concurrent _release,
+        # or the TTL collector. The key is free again, so claim it the same way
+        # the first attempt would have.
+        _claim_vacant(ref, record, tool)
+        return None
+    if _expired(existing):
+        # TTL collection lags by hours, so an expired reservation is ours to
+        # take — but only if we win it. Unconditionally overwriting would let
+        # two retries that observe the SAME expired record both proceed and
+        # both write, losing the exactly-one-winner property `create` gives the
+        # common path for free.
+        #
+        # `result: None` clears any result recorded in the expired round; the
+        # check below already reads a non-dict result as "no result". A field
+        # delete would be tidier but needs a sentinel, and this module keeps
+        # sentinels out of its writes (see create_story's note on
+        # SERVER_TIMESTAMP).
+        try:
+            ref.update(
+                {**record, "result": None},
+                option=db.write_option(last_update_time=snap.update_time),
+            )
+        except gcp_exceptions.FailedPrecondition:
+            raise DuplicateInFlightError(tool)
+        except gcp_exceptions.NotFound:
+            _claim_vacant(ref, record, tool)
         return None
     result = existing.get("result")
     if isinstance(result, dict) and result:
         return result
     raise DuplicateInFlightError(tool)
+
+
+def _claim_vacant(ref: Any, record: dict, tool: str) -> None:
+    """Claim a key whose document is absent, losing to anyone who beats us."""
+    try:
+        ref.create(record)
+    except gcp_exceptions.AlreadyExists:
+        raise DuplicateInFlightError(tool)
 
 
 def _record(db: Any, key: str, result: dict) -> None:
@@ -448,15 +486,14 @@ def _next_order(db: Any, story_id: str) -> int:
     return int(value) + 1
 
 
-def create_chapter(
-    db: Any, uid: str, story_id: str, title: str, content: str = ""
-) -> dict:
-    """Append a chapter to a story owned by `uid`.
+def _check_content_limits(stored: str) -> int:
+    """Enforce the content ceilings on a stored chapter string; return its words.
 
-    `content` is plain text; it is escaped and paragraph-wrapped before storage.
+    Shared by creation and every edit, and always applied to the string that is
+    about to be written rather than to the caller's input — the rule the Admin
+    SDK bypasses measures the stored value, and an edit's result is the join of
+    blocks the caller never sent.
     """
-    title = _clean_title(title)
-    stored = _to_paragraph_html(content)
     if len(stored) > MAX_CHAPTER_CONTENT_CHARS:
         # Measured on the stored string because that is what the rule measures.
         raise LimitExceededError(
@@ -474,6 +511,19 @@ def create_chapter(
             MAX_CHAPTER_WORDS,
             f"Chapter content must be at most {MAX_CHAPTER_WORDS} words.",
         )
+    return word_count
+
+
+def create_chapter(
+    db: Any, uid: str, story_id: str, title: str, content: str = ""
+) -> dict:
+    """Append a chapter to a story owned by `uid`.
+
+    `content` is plain text; it is escaped and paragraph-wrapped before storage.
+    """
+    title = _clean_title(title)
+    stored = _to_paragraph_html(content)
+    word_count = _check_content_limits(stored)
 
     # Ownership before the reservation: without this, a caller aiming at a
     # story they don't own still makes the service write (and then release) an
@@ -601,3 +651,407 @@ def _append_chapter(
         }
 
     raise WriteConflictError(story_id)
+
+
+# ----------------------------------------------------------------------
+# Editing an existing chapter
+#
+# Both tools below take a caller-supplied `revision` and make exactly ONE
+# attempt. That is the deliberate difference from _append_chapter's retry loop:
+# there, the precondition guards server-derived counters the server can simply
+# re-derive, so retrying is transparent to the caller's intent. Here it guards
+# the base version the CALLER read and reasoned about. A lost precondition
+# means that text is gone, and re-reading and re-applying server-side would
+# silently overwrite whoever changed it — precisely the lost update the
+# revision exists to prevent. So a precondition failure is reported, not
+# retried, and the caller re-reads and decides.
+# ----------------------------------------------------------------------
+
+
+def _chapter_ref(db: Any, story_id: str, chapter_id: str) -> Any:
+    return (
+        db.collection("stories")
+        .document(story_id)
+        .collection("chapters")
+        .document(chapter_id)
+    )
+
+
+def _load_chapter_for_edit(
+    db: Any, story_id: str, chapter_id: str, revision: str
+) -> Any:
+    """Re-read the chapter and verify the caller's base version.
+
+    Returns the snapshot so the update can precondition on the SAME
+    update_time this check saw. The two are not redundant: this check turns the
+    common case into a cheap, clearly-worded refusal before any content is
+    built or validated, and the precondition closes the window between the
+    check and the write, where a concurrent editor save would otherwise land.
+    """
+    snap = _chapter_ref(db, story_id, chapter_id).get()
+    if not snap.exists:
+        raise data.EntityNotFoundError(chapter_id)
+    if data.revision_token(snap.update_time) != revision:
+        raise StaleRevisionError(chapter_id)
+    return snap
+
+
+def _touch_story(db: Any, story_id: str) -> None:
+    """Bump the parent story's updatedAt. Best effort, failures swallowed.
+
+    `updatedAt` is client-maintained (no trigger writes it), and stories
+    missing it drop out of list_my_stories' order_by entirely — so it must be
+    written. But it is written AFTER the chapter, and its failure must not
+    propagate: the edit is already durable at that point, and raising would
+    tell the model its edit failed. The model would then retry, idempotency
+    would replay the recorded result, and the human would have been told
+    something false for no gain. A stale updatedAt only mis-sorts the story
+    until the next save from any path.
+
+    No precondition: this is a pure touch, so contending with a concurrent
+    writer over who stamps it last is meaningless.
+    """
+    try:
+        db.collection("stories").document(story_id).update({"updatedAt": _now()})
+    except Exception as exc:
+        logger.warning(
+            "mcp_write_story_touch_failed",
+            story_id=story_id,
+            error_type=type(exc).__name__,
+        )
+
+
+def _write_chapter_content(
+    db: Any,
+    story_id: str,
+    chapter_id: str,
+    snap: Any,
+    stored: str,
+    word_count: int,
+) -> str:
+    """Write content+wordCount under the read version; return the new revision.
+
+    Writes exactly the two fields StoriesRepo.updateChapter writes minus the
+    title, which no tool here edits. Notably NOT chapterCount: no chapter is
+    created or destroyed by an edit.
+    """
+    try:
+        result = _chapter_ref(db, story_id, chapter_id).update(
+            {"content": stored, "wordCount": word_count},
+            option=db.write_option(last_update_time=snap.update_time),
+        )
+    except gcp_exceptions.FailedPrecondition:
+        # Someone wrote the chapter between the check above and this update.
+        raise StaleRevisionError(chapter_id)
+    except gcp_exceptions.NotFound:
+        raise data.EntityNotFoundError(chapter_id)
+
+    _touch_story(db, story_id)
+    # Through the same canonicaliser as the read path: WriteResult.update_time
+    # is a protobuf Timestamp where a snapshot's is a DatetimeWithNanoseconds,
+    # and str() of the two never matches (see data.revision_token). Getting
+    # this wrong would make every chained edit look stale.
+    return data.revision_token(result.update_time)
+
+
+def append_to_chapter(
+    db: Any,
+    uid: str,
+    story_id: str,
+    chapter_id: str,
+    content: str,
+    revision: str,
+) -> dict:
+    """Append paragraphs to the end of a chapter owned by `uid`.
+
+    `content` is plain text; it is escaped and paragraph-wrapped exactly as
+    create_chapter does, so a tool argument can never introduce markup.
+
+    Appending needs no block splitting — adding after the last block is
+    concatenation with the standard separator, and the existing string is
+    carried over byte for byte.
+    """
+    revision = _clean_revision(revision)
+    addition = _to_paragraph_html(content)
+    if not addition:
+        raise ValueError("content must not be empty.")
+
+    # Ownership before the reservation, same write-amplifier argument as
+    # create_chapter: a caller aiming at someone else's story should not make
+    # this service write (and then release) an mcpWrites document.
+    data.get_owned_story_snapshot(db, story_id, uid)
+
+    key = idempotency_key(
+        uid,
+        "append_to_chapter",
+        {
+            "story_id": story_id,
+            "chapter_id": chapter_id,
+            # The base version is part of the key, so a retry replays against
+            # the version it was written for, while the same text sent again
+            # after a successful append is a different (and genuinely new) call.
+            "revision": revision,
+            "content": addition,
+        },
+    )
+    replay = _claim(db, key, uid, "append_to_chapter")
+    if replay is not None:
+        return {**replay, "idempotent_replay": True}
+
+    try:
+        snap = _load_chapter_for_edit(db, story_id, chapter_id, revision)
+        existing = (snap.to_dict() or {}).get("content") or ""
+        if existing:
+            stored = existing + blocks.BLOCK_SEPARATOR + addition
+        else:
+            stored = addition
+        word_count = _check_content_limits(stored)
+        new_revision = _write_chapter_content(
+            db, story_id, chapter_id, snap, stored, word_count
+        )
+        result = {
+            "story_id": story_id,
+            "chapter_id": chapter_id,
+            "word_count": word_count,
+            "content_chars": len(stored),
+            "appended_blocks": len(blocks.split_blocks(addition)),
+            # Re-split of the WHOLE chapter, deliberately, even though summing
+            # the two halves looks equivalent and would save a parse of up to
+            # MAX_CHAPTER_CONTENT_CHARS. It isn't equivalent: an unclosed tag
+            # in the existing content leaves the parser at depth > 0, so the
+            # appended <p> opens no new top-level block and the two counts
+            # differ —
+            #     "<p>unclosed" + "\n" + "<p>new</p>"  ->  1 block, not 2
+            # Editor output is well-formed, but this module never gets to
+            # assume that about content it did not write. `block_count` is the
+            # index range the caller's next edit will address, so it has to be
+            # what split_blocks will actually say next time it is asked.
+            "block_count": len(blocks.split_blocks(stored)),
+            # The version this write produced, so the caller can chain another
+            # edit without a re-read.
+            "revision": new_revision,
+        }
+    except Exception:
+        _release(db, key)
+        raise
+
+    _record(db, key, result)
+    return {**result, "idempotent_replay": False}
+
+
+def _range_message(action: str, index: int, count: int) -> str:
+    if count == 0:
+        return (
+            f"This chapter has no blocks yet, so {action} at index {index} has "
+            "nothing to address. Use insert_after with index -1 to add the "
+            "first block."
+        )
+    high = count - 1
+    low = 0 if action == "replace" else -1
+    return (
+        f"{action} index {index} is out of range: valid indices are {low} to "
+        f"{high} ({count} blocks). Call get_chapter_blocks for current indices."
+    )
+
+
+def _normalize_ops(ops: Any) -> list[dict]:
+    """Validate and canonicalize the op list. Raises ValueError on bad input.
+
+    Re-validates everything the tool layer's schema already types, because that
+    schema is a hint to the model and this module is the boundary that has to
+    hold regardless of what reaches it.
+
+    Sorting descending by index is what lets every index mean a position in the
+    ORIGINAL block list: applying from the back means no earlier op has shifted
+    the positions an later one refers to. It also makes the idempotency key
+    insensitive to the order the model happened to list its ops in.
+    """
+    if not isinstance(ops, (list, tuple)):
+        raise ValueError("ops must be a list of edit operations.")
+    if not ops:
+        raise ValueError("ops must contain at least one operation.")
+    if len(ops) > MAX_OPS_PER_CALL:
+        raise ValueError(
+            f"at most {MAX_OPS_PER_CALL} operations per call; got {len(ops)}."
+        )
+
+    normalized: list[dict] = []
+    seen: set[int] = set()
+    for op in ops:
+        if not isinstance(op, dict):
+            raise ValueError("each op must be an object with action, index and text.")
+        action = op.get("action")
+        if action not in OP_ACTIONS:
+            raise ValueError(f"action must be one of {', '.join(OP_ACTIONS)}.")
+        index = op.get("index")
+        if isinstance(index, bool) or not isinstance(index, int):
+            raise ValueError("index must be an integer block index.")
+        # `op.get("text") or ""` would coerce every FALSY non-string — 0,
+        # False, [], None — to "", which is the block-DELETION sentinel, so a
+        # malformed op would quietly destroy a paragraph instead of being
+        # refused. An absent key still means "" because that is the schema
+        # default; anything present must actually be a string.
+        raw_text = op.get("text", "")
+        if not isinstance(raw_text, str):
+            raise ValueError('text must be a string (pass "" to delete the block).')
+        html = _to_paragraph_html(raw_text)
+        if action == "insert_after" and not html:
+            raise ValueError("insert_after requires non-empty text.")
+        if index in seen:
+            # Two ops on one block would need a defined relative order, and any
+            # pair worth expressing is expressible as a single replace.
+            raise ValueError(
+                f"two operations target block {index}. Combine them into one "
+                "replace whose text contains everything that block should become."
+            )
+        seen.add(index)
+        # `text` rides along beside the rendered html because the final markup
+        # of a replace depends on the tag being replaced, which is only known
+        # once the chapter is read (see _replacement_html). Both are derived
+        # from the same input, so the idempotency key stays deterministic.
+        normalized.append(
+            {"action": action, "index": index, "html": html, "text": raw_text}
+        )
+
+    normalized.sort(key=lambda entry: entry["index"], reverse=True)
+    return normalized
+
+
+def _is_single_paragraph(text: str) -> bool:
+    return len(_PARAGRAPH_BREAK.split(text.strip())) == 1
+
+
+def _replacement_html(op: dict, tag: str, index: int) -> str:
+    """The markup a replace should store, given the tag it is replacing.
+
+    Paragraphs (and bare top-level text, which the editor normalises into one)
+    keep the existing behaviour. A heading is rebuilt at its own level: heading
+    nodes hold INLINE content, so the text goes in bare — <h2><p>x</p></h2> is
+    not something the editor's schema accepts — and internal whitespace
+    collapses because a heading has no paragraphs to separate.
+
+    Everything else is refused. A <ul> rewritten through _to_paragraph_html
+    comes back as one soft-wrapped <p>, which loses every item boundary; the
+    same goes for tables, figures and code. Refusing costs the caller a trip to
+    the editor, where silently flattening costs the author their formatting
+    with nothing to restore it from.
+    """
+    if tag in PLAIN_BLOCK_TAGS:
+        return op["html"]
+    if tag in HEADING_TAGS:
+        if not _is_single_paragraph(op["text"]):
+            raise ValueError(
+                f"block {index} is an <{tag}> heading, which holds a single "
+                "line. Remove the blank line from `text`, or delete the "
+                "heading and insert_after the paragraphs you want."
+            )
+        inline = escape(" ".join(op["text"].split()), quote=False)
+        return f"<{tag}>{inline}</{tag}>"
+    raise ValueError(
+        f"block {index} is a <{tag}>, which carries formatting this tool "
+        "cannot rewrite without flattening it into a plain paragraph. Edit it "
+        "in the NovelSync editor, or delete it (replace with empty text) and "
+        "insert_after the replacement paragraphs."
+    )
+
+
+def _apply_ops(parts: list[str], tags: list[str], normalized: list[dict]) -> None:
+    """Apply canonicalized ops to a block list in place.
+
+    Indices are validated against the ORIGINAL length, never the running one,
+    so an out-of-range op is rejected on what the caller actually saw. `tags`
+    is the parallel list of original tags and is never mutated, so tags[index]
+    keeps naming the block the caller addressed even after a higher-indexed op
+    has removed or inserted entries in `parts`.
+    """
+    count = len(parts)
+    for op in normalized:
+        index = op["index"]
+        action = op["action"]
+        if action == "replace":
+            if not 0 <= index < count:
+                raise ValueError(_range_message("replace", index, count))
+            if op["html"]:
+                parts[index : index + 1] = [_replacement_html(op, tags[index], index)]
+            else:
+                # Documented behaviour: replacing with empty text deletes the
+                # block. Allowed for EVERY tag, including the structural ones
+                # _replacement_html refuses to rewrite: removing a list is an
+                # explicit act the caller asked for, where rewriting one would
+                # be a silent downgrade they did not.
+                del parts[index]
+        else:  # insert_after; -1 means "before the first block"
+            if not -1 <= index < count:
+                raise ValueError(_range_message("insert_after", index, count))
+            # One op's text may render as several <p> blocks. Splicing it as a
+            # single entry is byte-equivalent under join_blocks and avoids
+            # splitting on "\n", which _to_paragraph_html also emits INSIDE a
+            # paragraph for a soft-wrapped line.
+            parts.insert(index + 1, op["html"])
+
+
+def edit_chapter_blocks(
+    db: Any,
+    uid: str,
+    story_id: str,
+    chapter_id: str,
+    ops: Any,
+    revision: str,
+) -> dict:
+    """Apply positional block edits to a chapter owned by `uid`.
+
+    Blocks the ops do not name are carried through byte for byte (see
+    blocks.py), so an edit cannot disturb the author's headings, lists, images
+    or inline formatting elsewhere in the chapter.
+    """
+    revision = _clean_revision(revision)
+    normalized = _normalize_ops(ops)
+
+    data.get_owned_story_snapshot(db, story_id, uid)
+
+    key = idempotency_key(
+        uid,
+        "edit_chapter_blocks",
+        {
+            "story_id": story_id,
+            "chapter_id": chapter_id,
+            "revision": revision,
+            "ops": normalized,
+        },
+    )
+    replay = _claim(db, key, uid, "edit_chapter_blocks")
+    if replay is not None:
+        return {**replay, "idempotent_replay": True}
+
+    try:
+        snap = _load_chapter_for_edit(db, story_id, chapter_id, revision)
+        current = (snap.to_dict() or {}).get("content") or ""
+        split = blocks.split_blocks(current)
+        parts = [block.html for block in split]
+        _apply_ops(parts, [block.tag for block in split], normalized)
+
+        # Legitimately "" when every block was removed: that is the state
+        # StoriesRepo.addChapter seeds a chapter in, and the editor renders it.
+        stored = blocks.join_blocks(parts)
+        word_count = _check_content_limits(stored)
+        new_revision = _write_chapter_content(
+            db, story_id, chapter_id, snap, stored, word_count
+        )
+        result = {
+            "story_id": story_id,
+            "chapter_id": chapter_id,
+            "op_count": len(normalized),
+            # Re-split rather than len(parts): one op's text can introduce
+            # several blocks, and this is the index range the caller's next
+            # call must address.
+            "block_count": len(blocks.split_blocks(stored)),
+            "word_count": word_count,
+            "content_chars": len(stored),
+            "revision": new_revision,
+        }
+    except Exception:
+        _release(db, key)
+        raise
+
+    _record(db, key, result)
+    return {**result, "idempotent_replay": False}
