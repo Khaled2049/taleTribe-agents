@@ -51,7 +51,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .venv
-          key: venv-${{ runner.os }}-py3.11-${{ hashFiles('poetry.lock') }}
+          key: venv-${{ runner.os }}-${{ github.repository }}-py3.11-${{ hashFiles('poetry.lock') }}
 
       - name: Install dependencies
         run: poetry install --with dev

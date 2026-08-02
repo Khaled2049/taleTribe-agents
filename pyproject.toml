@@ -25,13 +25,18 @@ dependencies = [
 ]
 
 [tool.poetry.group.dev.dependencies]
-sentence-transformers = ">=2.2.0"
 pytest = "*"
 pytest-asyncio = "*"
 ruff = "*"
 black = "*"
 isort = "*"
 pre-commit = "^4.6.0"
+
+[tool.poetry.group.local-embeddings]
+optional = true
+
+[tool.poetry.group.local-embeddings.dependencies]
+sentence-transformers = ">=2.2.0"
 
 [tool.poetry.group.image-gen]
 optional = true

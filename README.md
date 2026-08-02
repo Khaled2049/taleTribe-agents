@@ -21,8 +21,12 @@ Every AI feature in NovelSync flows through this service. It reads the writer's 
 # Install Poetry (if not already installed)
 pip install poetry
 
-# Install dependencies (no image generation)
+# Install dependencies (lint + tests; no ML stack). This is what CI installs.
 poetry install --with dev
+
+# Add the local sentence-transformers embedder (heavy — pulls torch, ~2 GB).
+# Only needed without GOOGLE_API_KEY; otherwise the GoogleAI embedder is used.
+poetry install --with dev,local-embeddings
 
 # Install with local image generation (heavy — ~5 GB)
 poetry install --with dev,image-gen
