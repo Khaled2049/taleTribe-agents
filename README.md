@@ -1,4 +1,4 @@
-# novelsync-agents
+# taleTribe-agents
 
 The AI engine behind NovelSync — a FastAPI service that turns story context into generated content.
 
@@ -38,7 +38,7 @@ The service also hosts a remote MCP server (streamable HTTP) at `/mcp`, plus the
 Local run against the emulators:
 
 ```bash
-# Firestore + Auth emulators (from novelsync-frontend): firebase emulators:start
+# Firestore + Auth emulators (from taleTribe-frontend): firebase emulators:start
 poetry run python server.py
 # MCP endpoint: http://localhost:8000/mcp — test with:
 npx @modelcontextprotocol/inspector

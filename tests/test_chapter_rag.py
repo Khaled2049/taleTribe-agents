@@ -132,7 +132,7 @@ def test_compose_entity_text_empty_returns_empty():
 
 
 # The embedded-field set per kind MUST match the frontend's SIGNATURE_FIELDS in
-# novelsync-frontend/functions/src/entityIndexTrigger.ts, which decides when a
+# taleTribe-frontend/functions/src/entityIndexTrigger.ts, which decides when a
 # re-embed fires. This mirror catches Python-side drift (a TS-side change still needs
 # a human to update both). If you change one, change the other.
 _FRONTEND_SIGNATURE_FIELDS = {

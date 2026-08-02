@@ -12,7 +12,7 @@ live here (``ENTITY_ARRAY_FIELDS``) so the full embedded-field set is documented
 one place.
 
 The field NAMES must stay in lockstep with the frontend's ``SIGNATURE_FIELDS`` in
-``novelsync-frontend/functions/src/entityFields.ts`` — that list decides when a
+``taleTribe-frontend/functions/src/entityFields.ts`` — that list decides when a
 re-embed fires, so a mismatch means edits to a field either never re-embed (the AI
 answers from a stale vector) or re-embed needlessly (burning indexing budget).
 

@@ -18,7 +18,7 @@ _GOOGLE_DEFAULT_MODEL = "gemini-embedding-001"
 # Single source of truth for the embedding dimension. EVERY vector we write
 # (chapter_chunks AND semantic_memory) and EVERY native vector index must use this.
 # Keep it in lockstep with:
-#   novelsync-frontend/firestore.indexes.json
+#   taleTribe-frontend/firestore.indexes.json
 #     → fieldOverrides[chapter_chunks].vectorConfig.dimension
 # If the embedder's output dim != this, native find_nearest can't match the index's
 # vector dimension and queries fail — retrieval silently returns nothing (there is no

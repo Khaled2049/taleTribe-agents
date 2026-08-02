@@ -1,7 +1,7 @@
 [project]
-name = "novelsync-agents"
+name = "taleTribe-agents"
 version = "0.1.0"
-description = "NovelsSync AI agent backend"
+description = "TheTaleTribe AI agent backend"
 license = {text = "MIT"}
 authors = [
     {name = "Khaled Hossain", email = "khaledhossain.not@gmail.com"}

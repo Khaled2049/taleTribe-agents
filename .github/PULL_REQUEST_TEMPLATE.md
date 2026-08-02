@@ -1,4 +1,4 @@
-<!-- Thanks for contributing to novelsync-agents! Please fill out the sections below. -->
+<!-- Thanks for contributing to taleTribe-agents! Please fill out the sections below. -->
 
 ## Summary
 

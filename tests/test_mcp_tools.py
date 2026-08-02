@@ -2178,11 +2178,11 @@ def test_write_limits_match_the_client_limits():
     Skipped when the sibling repo isn't checked out — this has none of the
     CI-credential cost that retired the previous cross-repo test.
     """
-    root = pathlib.Path(__file__).resolve().parents[2] / "novelsync-frontend"
+    root = pathlib.Path(__file__).resolve().parents[2] / "taleTribe-frontend"
     repo = root / "src" / "services" / "StoriesRepo.ts"
     rules = root / "firestore.rules"
     if not repo.exists() or not rules.exists():
-        pytest.skip("novelsync-frontend not checked out beside this repo")
+        pytest.skip("taleTribe-frontend not checked out beside this repo")
 
     repo_src = repo.read_text()
     word_limit = int(re.search(r"WORD_LIMIT\s*=\s*(\d+)", repo_src).group(1))

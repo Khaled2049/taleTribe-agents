@@ -27,4 +27,4 @@ When reporting, please include as much of the following as you can:
 - I'll investigate and keep you updated on the progress.
 - Once resolved, I'm happy to credit you for the disclosure if you'd like.
 
-Thank you for helping keep novelsync-agents and its users safe.
+Thank you for helping keep taleTribe-agents and its users safe.

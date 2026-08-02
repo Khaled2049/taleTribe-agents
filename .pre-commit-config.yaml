@@ -1,4 +1,4 @@
-# Pre-commit hooks for novelsync-agents.
+# Pre-commit hooks for taleTribe-agents.
 # Uses repo-local hooks so the tool versions exactly match pyproject/CI (no drift).
 #
 # Setup (once):
