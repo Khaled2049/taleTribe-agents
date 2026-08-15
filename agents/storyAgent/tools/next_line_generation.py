@@ -167,6 +167,7 @@ Respond ONLY with the JSON array containing the {NUMBER_OF_SUGGESTIONS} generate
         content: str,
         cursorPosition: int,
         chapter_id: Optional[str] = None,
+        context_override: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Generates 3 next line suggestions based on story context and cursor position.
@@ -189,7 +190,7 @@ Respond ONLY with the JSON array containing the {NUMBER_OF_SUGGESTIONS} generate
         )
 
         # Build Macro Context
-        context = self.context_builder.build_story_context(story_id)
+        context = context_override or self.context_builder.build_story_context(story_id)
         chapters_count = len(context.get("chapters", []))
         logger.info("Story context built, chapters count=%s", chapters_count)
 
@@ -197,7 +198,18 @@ Respond ONLY with the JSON array containing the {NUMBER_OF_SUGGESTIONS} generate
         current_chapter_number = None
         previous_chapters_text = ""
         if chapter_id:
-            current_chapter = self._get_chapter(story_id, chapter_id)
+            current_chapter = (
+                next(
+                    (
+                        chapter
+                        for chapter in context.get("chapters", [])
+                        if chapter.get("id") == chapter_id
+                    ),
+                    None,
+                )
+                if context_override
+                else self._get_chapter(story_id, chapter_id)
+            )
             if current_chapter:
                 current_chapter_number = current_chapter.get(
                     "chapterNumber"

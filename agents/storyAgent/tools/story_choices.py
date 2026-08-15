@@ -175,6 +175,7 @@ class StoryChoicesTool:
         chapter_id: Optional[str] = None,
         turn_count: int = 0,
         brain_context: Optional[str] = None,
+        context_override: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Generate story choices for opening, continuation, or ending mode.
@@ -208,7 +209,7 @@ class StoryChoicesTool:
                 "error": f"Invalid mode '{mode}'. Must be 'opening', 'continuation', or 'ending'.",
             }
 
-        context = self.context_builder.build_story_context(story_id)
+        context = context_override or self.context_builder.build_story_context(story_id)
         firestore_context = self.context_builder.format_context_for_prompt(context)
         formatted_context = (
             (brain_context + "\n\n" + firestore_context)

@@ -33,6 +33,7 @@ class ChatWithContextTool:
         chat_history: Optional[List[Dict[str, str]]] = None,
         brain_context: Optional[str] = None,
         chapter_excerpts: Optional[str] = None,
+        context_override: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Generate chat response using story context (RAG).
@@ -57,8 +58,15 @@ class ChatWithContextTool:
         # Slim context: metadata + names + plot/chapter titles. Reads the
         # denormalized chapter index, NOT every chapter body — so cost no longer
         # grows with book length. Depth comes from chapter_excerpts + brain memory.
-        context = self.context_builder.build_slim_chat_context(story_id)
-        slim_firestore = self.context_builder.format_slim_context_for_chat(context)
+        context = context_override or self.context_builder.build_slim_chat_context(
+            story_id
+        )
+        if context_override is None:
+            slim_firestore = self.context_builder.format_slim_context_for_chat(context)
+        else:
+            from ..postgres_context import PostgresStoryContext
+
+            slim_firestore = PostgresStoryContext.format_slim_context(context)
 
         # Layer the prompt: brain memory (style/recall) + slim story map + the
         # specific excerpts retrieved for this question.

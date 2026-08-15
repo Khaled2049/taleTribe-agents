@@ -93,6 +93,7 @@ class EnhanceTextTool:
         action: str,
         selected_text: str,
         chapter_id: Optional[str] = None,
+        context_override: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Enhance selected text based on action type.
@@ -115,11 +116,22 @@ class EnhanceTextTool:
                 f"Invalid action: {action}. Must be one of {valid_actions}"
             )
 
-        context = self.context_builder.build_story_context(story_id)
+        context = context_override or self.context_builder.build_story_context(story_id)
         story_data = context.get("story", {})
 
         if chapter_id:
-            chapter = self._get_chapter(story_id, chapter_id)
+            chapter = (
+                next(
+                    (
+                        item
+                        for item in context.get("chapters", [])
+                        if item.get("id") == chapter_id
+                    ),
+                    None,
+                )
+                if context_override
+                else self._get_chapter(story_id, chapter_id)
+            )
             if chapter and chapter.get("title"):
                 story_data["current_chapter"] = chapter.get("title")
 
