@@ -75,6 +75,12 @@ class Settings(BaseSettings):
     # Firestore emulator (auto-set to localhost:8080 in non-production if blank)
     firestore_emulator_host: str = ""
 
+    # PostgreSQL story workspace + pgvector. When empty, legacy Firestore AI
+    # behavior remains available for Firestore stories during the rollout.
+    story_data_database_url: str = ""
+    indexing_worker_enabled: bool = False
+    indexing_worker_interval_seconds: float = 2.0
+
     # Server port
     port: int = 8000
 

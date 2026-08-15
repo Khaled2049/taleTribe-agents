@@ -12,6 +12,7 @@ try:
     from .brain import Brain, BrainConfig, ReflectionInput
     from .chapter_rag import ChapterRAG, format_excerpts
     from .llm_provider import get_llm_provider
+    from .postgres_context import PostgresIndexWorker, PostgresStoryContext
     from .tools import (
         BrainstormingTool,
         ChapterGenerationTool,
@@ -32,6 +33,10 @@ except ImportError:
     from agents.storyAgent.brain import Brain, BrainConfig, ReflectionInput
     from agents.storyAgent.chapter_rag import ChapterRAG, format_excerpts
     from agents.storyAgent.llm_provider import get_llm_provider
+    from agents.storyAgent.postgres_context import (
+        PostgresIndexWorker,
+        PostgresStoryContext,
+    )
     from agents.storyAgent.tools import (
         BrainstormingTool,
         ChapterGenerationTool,
@@ -101,6 +106,11 @@ class StoryAgent:
         )
         # Chapter RAG shares the process-wide embedder + Firestore client.
         self.chapter_rag = ChapterRAG(self._db, self._embedder)
+        self.postgres_context = PostgresStoryContext()
+        self.index_worker = PostgresIndexWorker(self.postgres_context, self._embedder)
+
+    async def start(self) -> None:
+        await self.postgres_context.start()
 
     @property
     def llm_provider(self):
@@ -113,6 +123,7 @@ class StoryAgent:
             close = getattr(provider, "aclose", None)
             if close is not None:
                 await close()
+        await self.postgres_context.close()
 
     def _make_brain(self, user_id: str, context_id: str) -> Brain:
         return Brain(
@@ -145,8 +156,13 @@ class StoryAgent:
         Returns:
             Dictionary containing the suggestions array.
         """
+        context = (
+            await self.postgres_context.context(story_id)
+            if self.postgres_context.enabled
+            else None
+        )
         return await self.next_line_tool.execute(
-            story_id, content, cursorPosition, chapter_id
+            story_id, content, cursorPosition, chapter_id, context
         )
 
     async def generate_chapter(
@@ -265,6 +281,15 @@ class StoryAgent:
         brain = None
         assembled = None
         chapter_excerpts = None
+        context_override = None
+
+        if self.postgres_context.enabled:
+            try:
+                context_override = await self.postgres_context.context(story_id)
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "postgres_context_failed story_id=%s", story_id
+                )
 
         if self._embedder is not None:
             log = logging.getLogger(__name__)
@@ -281,17 +306,28 @@ class StoryAgent:
                     story_id,
                 )
 
-            try:
-                brain = self._make_brain(user_id, story_id)
-            except Exception:
-                brain = None
-                log.warning("make_brain failed for story_id=%s", story_id)
+            # The legacy Brain persists its memories in Firestore. PostgreSQL
+            # stories use the canonical pgvector path exclusively until memory
+            # gets its own migration, avoiding mixed-source context.
+            if not self.postgres_context.enabled:
+                try:
+                    brain = self._make_brain(user_id, story_id)
+                except Exception:
+                    brain = None
+                    log.warning("make_brain failed for story_id=%s", story_id)
 
             # Chapter retrieval and brain assembly are independent → run concurrently.
             async def _retrieve_excerpts():
-                excerpts = await self.chapter_rag.retrieve(
-                    story_id, message, top_k=4, query_embedding=query_vec
-                )
+                if self.postgres_context.enabled:
+                    excerpts = await self.postgres_context.retrieve(
+                        story_id,
+                        query_vec or await self._embedder.embed(message),
+                        top_k=4,
+                    )
+                else:
+                    excerpts = await self.chapter_rag.retrieve(
+                        story_id, message, top_k=4, query_embedding=query_vec
+                    )
                 return format_excerpts(excerpts) or None
 
             async def _assemble_brain():
@@ -342,6 +378,7 @@ class StoryAgent:
             chat_history,
             brain_context=brain_context,
             chapter_excerpts=chapter_excerpts,
+            context_override=context_override,
         )
 
         if brain is not None and assembled is not None and background_tasks is not None:
@@ -375,8 +412,13 @@ class StoryAgent:
         Returns:
             Dictionary containing enhanced text
         """
+        context = (
+            await self.postgres_context.context(story_id)
+            if self.postgres_context.enabled
+            else None
+        )
         return await self.enhance_text_tool.execute(
-            story_id, action, selected_text, chapter_id
+            story_id, action, selected_text, chapter_id, context
         )
 
     async def summarize_chapter(
@@ -440,7 +482,7 @@ class StoryAgent:
         brain = None
         assembled = None
 
-        if self._embedder is not None:
+        if self._embedder is not None and not self.postgres_context.enabled:
             try:
                 logger.info(
                     "Generating story choices for story_id=%s mode=%s", story_id, mode
@@ -468,6 +510,11 @@ class StoryAgent:
                     story_id,
                 )
 
+        context = (
+            await self.postgres_context.context(story_id)
+            if self.postgres_context.enabled
+            else None
+        )
         result = await self.story_choices_tool.execute(
             story_id,
             mode,
@@ -475,6 +522,7 @@ class StoryAgent:
             chapter_id,
             turn_count,
             brain_context=brain_context,
+            context_override=context,
         )
 
         if brain is not None and assembled is not None and background_tasks is not None:
