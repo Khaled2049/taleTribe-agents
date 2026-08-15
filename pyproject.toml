@@ -32,6 +32,13 @@ black = "*"
 isort = "*"
 pre-commit = "^4.6.0"
 
+[tool.poetry.group.recommendations]
+optional = true
+
+[tool.poetry.group.recommendations.dependencies]
+asyncpg = ">=0.29.0"
+pgvector = ">=0.3.0"
+
 [tool.poetry.group.local-embeddings]
 optional = true
 

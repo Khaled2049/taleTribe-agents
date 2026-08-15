@@ -48,7 +48,11 @@ poetry run python server.py
 npx @modelcontextprotocol/inspector
 ```
 
-Set `ENABLE_MCP=false` to run the service without it. Full connection and tool reference: `../story/wiki/docs/14-mcp-server.md`.
+Set `ENABLE_MCP=false` to run the service without it. See the [MCP implementation guide and review](docs/mcp-implementation.md) for the connection flow, tool reference, security design, and current-spec findings.
+
+## Brain architecture
+
+The StoryAgent brain combines story-local scene state, user and story writing preferences, vector-retrieved facts, and vector-retrieved past events. See the [brain architecture and review](docs/brain-architecture.md) for the complete assemble/reflection lifecycle, storage model, relationship to ChapterRAG, and prioritized correctness findings.
 
 ## Operational notes
 
