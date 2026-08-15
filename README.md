@@ -2,7 +2,7 @@
 
 The AI engine behind NovelSync — a FastAPI service that turns story context into generated content.
 
-Every AI feature in NovelSync flows through this service. It reads the writer's characters, places, and plot from Firestore, builds a rich prompt, and returns structured results for the editor to use. All LLM calls are credit-metered through creditProxy, with optional per-user BYOK to bypass platform limits.
+Every AI feature in NovelSync flows through this service. Legacy stories read from Firestore; PostgreSQL stories read canonical context and pgvector embeddings when `STORY_DATA_DATABASE_URL` is configured. All LLM calls are credit-metered through creditProxy, with optional per-user BYOK to bypass platform limits.
 
 ## Key features
 
@@ -34,6 +34,11 @@ poetry install --with dev,image-gen
 # Run the server
 poetry run python server.py
 ```
+
+For the PostgreSQL context pipeline, start `story-data`'s pgvector Compose stack
+and set `STORY_DATA_DATABASE_URL` plus `INDEXING_WORKER_ENABLED=true`. The worker
+claims `indexing_outbox` rows, writes embeddings to `story_vector_chunks`, and chat
+retrieves only story-scoped pgvector excerpts.
 
 ## MCP server
 
