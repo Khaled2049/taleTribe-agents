@@ -28,7 +28,7 @@ MAX_TAG_CHARS = 40
 MAX_CATEGORY_CHARS = 60
 # firestore.rules: chapter create/update require content.size() <= 100000.
 MAX_CHAPTER_CONTENT_CHARS = 100_000
-# StoriesRepo.WORD_LIMIT, and generateChapterTask.MAX_CHAPTER_WORDS.
+# StoriesRepo.WORD_LIMIT.
 MAX_CHAPTER_WORDS = 5_000
 # StoriesRepo.CHAPTER_LIMIT.
 MAX_CHAPTERS_PER_STORY = 50

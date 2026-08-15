@@ -15,7 +15,6 @@ try:
     from .postgres_context import PostgresIndexWorker, PostgresStoryContext
     from .tools import (
         BrainstormingTool,
-        ChapterGenerationTool,
         CharacterBrainstormingTool,
         ChatWithContextTool,
         EnhanceTextTool,
@@ -39,7 +38,6 @@ except ImportError:
     )
     from agents.storyAgent.tools import (
         BrainstormingTool,
-        ChapterGenerationTool,
         CharacterBrainstormingTool,
         ChatWithContextTool,
         EnhanceTextTool,
@@ -77,9 +75,6 @@ class StoryAgent:
         self._db = _get_firestore_client(self.project_id)
 
         # Initialize tools
-        self.chapter_tool = ChapterGenerationTool(
-            self.project_id, self.location, llm_provider=self._llm_provider
-        )
         self.brainstorm_tool = BrainstormingTool(
             self.project_id, self.location, llm_provider=self._llm_provider
         )
@@ -163,40 +158,6 @@ class StoryAgent:
         )
         return await self.next_line_tool.execute(
             story_id, content, cursorPosition, chapter_id, context
-        )
-
-    async def generate_chapter(
-        self,
-        story_id: str,
-        chapter_number: int,
-        previous_chapters: Optional[list] = None,
-        plot_context: Optional[str] = None,
-        order: Optional[float] = None,
-        prev_chapter: Optional[Dict[str, Any]] = None,
-        next_chapter: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """
-        Generate a chapter.
-
-        Args:
-            story_id: Firestore story document ID
-            chapter_number: Chapter number to generate
-            previous_chapters: Legacy full list of previous chapters
-            order: Float ordering key of the chapter being generated
-            prev_chapter: Full immediate previous neighbor
-            next_chapter: Full immediate next neighbor (for mid-story inserts)
-
-        Returns:
-            Generated chapter content
-        """
-        return await self.chapter_tool.execute(
-            story_id,
-            chapter_number,
-            previous_chapters=previous_chapters,
-            plot_context=plot_context,
-            order=order,
-            prev_chapter=prev_chapter,
-            next_chapter=next_chapter,
         )
 
     async def brainstorm_ideas(
@@ -445,7 +406,7 @@ class StoryAgent:
             "or labels.\n\n"
             f"CHAPTER:\n{text}"
         )
-        summary = await self.chapter_tool.llm_provider.generate_content_async(
+        summary = await self._llm_provider.generate_content_async(
             prompt, max_output_tokens=256
         )
         return {"summary": (summary or "").strip()}
@@ -625,7 +586,7 @@ class StoryAgent:
         Execute agent action dynamically.
 
         Args:
-            action: Action to perform (generateChapter/brainstorm/etc.)
+            action: Action to perform (brainstorm/enhanceText/etc.)
             parameters: Parameters for the action
             background_tasks: Optional FastAPI BackgroundTasks for async brain reflection
 
@@ -641,23 +602,13 @@ class StoryAgent:
 
         # effective_user_id is only plumbed to actions that personalize via the brain
         # memory system or are billed per user (chat, story choices, wizard input,
-        # clear memory). The other actions (generateChapter,
+        # clear memory). The other actions (summarizeChapter,
         # brainstorm*, generateNextLines, enhanceText) are stateless from the brain's
         # perspective and don't take a user_id parameter — adding one here would be
         # dead plumbing until those actions opt in.
         param_user_id = self._param(parameters, "userId", "user_id")
         effective_user_id = param_user_id or user_id
 
-        if action == "generateChapter":
-            return await self.generate_chapter(
-                self._param(parameters, "storyId", "story_id"),
-                self._param(parameters, "chapterNumber", "chapter_number"),
-                self._param(parameters, "previousChapters", "previous_chapters"),
-                self._param(parameters, "plotContext", "plot_context"),
-                order=self._param(parameters, "order"),
-                prev_chapter=self._param(parameters, "prevChapter", "prev_chapter"),
-                next_chapter=self._param(parameters, "nextChapter", "next_chapter"),
-            )
         if action == "summarizeChapter":
             return await self.summarize_chapter(
                 self._param(parameters, "storyId", "story_id"),

@@ -6,7 +6,6 @@ The tools have been refactored into separate modules in the tools/ subdirectory 
 
 try:
     from .tools.brainstorming import BrainstormingTool
-    from .tools.chapter_generation import ChapterGenerationTool
     from .tools.character_brainstorming import CharacterBrainstormingTool
     from .tools.chat_with_context import ChatWithContextTool
     from .tools.enhance_text import EnhanceTextTool
@@ -22,7 +21,6 @@ except ImportError:
         sys.path.insert(0, str(parent_dir))
 
     from agents.storyAgent.tools.brainstorming import BrainstormingTool
-    from agents.storyAgent.tools.chapter_generation import ChapterGenerationTool
     from agents.storyAgent.tools.character_brainstorming import (
         CharacterBrainstormingTool,
     )
@@ -31,7 +29,6 @@ except ImportError:
     from agents.storyAgent.tools.plot_brainstorming import PlotBrainstormingTool
 
 __all__ = [
-    "ChapterGenerationTool",
     "BrainstormingTool",
     "CharacterBrainstormingTool",
     "PlotBrainstormingTool",

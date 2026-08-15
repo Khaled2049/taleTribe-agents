@@ -2,7 +2,6 @@
 
 # Export all tools for easy importing
 from .brainstorming import BrainstormingTool
-from .chapter_generation import ChapterGenerationTool
 from .character_brainstorming import CharacterBrainstormingTool
 from .chat_with_context import ChatWithContextTool
 from .enhance_text import EnhanceTextTool
@@ -12,7 +11,6 @@ from .plot_brainstorming import PlotBrainstormingTool
 from .story_choices import StoryChoicesTool
 
 __all__ = [
-    "ChapterGenerationTool",
     "BrainstormingTool",
     "CharacterBrainstormingTool",
     "PlotBrainstormingTool",

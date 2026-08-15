@@ -234,9 +234,9 @@ def _chapters_in_reading_order(db: Any, story_id: str) -> Any:
     nothing to show for it. Same reasoning as list_stories_for_user.
 
     Firestore omits documents that lack the order field, which makes `order` the
-    one safe choice: every write path sets it (`StoriesRepo.addChapter` and
-    `generateChapterTask` in the frontend repo), whereas `chapterNumber` is only
-    written by the generation path. This matches what
+    one safe choice: every write path sets it (`StoriesRepo.addChapter` in the
+    frontend repo), whereas `chapterNumber` is not written by every path. This
+    matches what
     `StoryContextBuilder.build_story_context` already does for the same
     collection, so the two read paths agree on which chapters exist.
     """
