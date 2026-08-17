@@ -7,7 +7,7 @@ silently rotting recall.
 
 import pytest
 
-from agents.storyAgent.brain.embedding_provider import (
+from agents.storyAgent.embedding_provider import (
     EXPECTED_EMBEDDING_DIM,
     EmbeddingProvider,
     MockEmbeddingProvider,

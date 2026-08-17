@@ -20,12 +20,30 @@ TRUSTED_SA = "trusted@project.iam.gserviceaccount.com"
 AGENT_URL = "https://agents.example.run.app"
 
 
+def require_production_env(monkeypatch):
+    """Set what a production Settings needs beyond the field under test.
+
+    ENABLE_MCP defaults on, and production then requires MCP_CONSENT_URL and
+    STORY_DATA_URL. These tests are about OIDC audience and the caller
+    allowlist, so they supply those explicitly rather than inheriting whichever
+    values another test module happened to leak into os.environ.
+    """
+    monkeypatch.setenv("MCP_CONSENT_URL", "https://consent.example/mcp-connect")
+    monkeypatch.setenv("STORY_DATA_URL", "http://story-data.internal:8084")
+    # Set to "false" rather than deleted: create_app() calls load_dotenv, which
+    # fills in anything absent from os.environ, and the developer .env in this
+    # repo turns writes on. With STORY_DATA_URL set that is a rejected
+    # combination, and it is not what these tests exercise.
+    monkeypatch.setenv("ENABLE_MCP_WRITES", "false")
+
+
 # ------------------------------------------------------------------
 # Settings.oidc_audience  (replaces _normalize_service_url / _production_oidc_audience)
 # ------------------------------------------------------------------
 
 
 def test_oidc_audience_strips_trailing_slash(monkeypatch):
+    require_production_env(monkeypatch)
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("AGENT_SERVICE_URL", f"{AGENT_URL}/")
     monkeypatch.setenv("FIREBASE_FUNCTIONS_SERVICE_ACCOUNT", TRUSTED_SA)
@@ -53,6 +71,7 @@ def test_oidc_audience_requires_agent_service_url_in_production(monkeypatch):
 
 
 def test_oidc_audience_returns_normalized_url(monkeypatch):
+    require_production_env(monkeypatch)
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("AGENT_SERVICE_URL", f"{AGENT_URL}/")
     monkeypatch.setenv("FIREBASE_FUNCTIONS_SERVICE_ACCOUNT", TRUSTED_SA)
@@ -66,6 +85,7 @@ def test_oidc_audience_returns_normalized_url(monkeypatch):
 
 
 def test_allowed_callers_from_single_sa(monkeypatch):
+    require_production_env(monkeypatch)
     monkeypatch.delenv("ALLOWED_SERVICE_ACCOUNTS", raising=False)
     monkeypatch.setenv("FIREBASE_FUNCTIONS_SERVICE_ACCOUNT", TRUSTED_SA)
     monkeypatch.setenv("ENVIRONMENT", "production")
@@ -75,6 +95,7 @@ def test_allowed_callers_from_single_sa(monkeypatch):
 
 
 def test_allowed_callers_from_comma_list(monkeypatch):
+    require_production_env(monkeypatch)
     monkeypatch.setenv(
         "ALLOWED_SERVICE_ACCOUNTS",
         f"{TRUSTED_SA}, other@project.iam.gserviceaccount.com ",
@@ -135,6 +156,7 @@ def test_create_app_fails_in_production_without_caller_allowlist(monkeypatch):
 
 
 def test_create_app_sets_production_auth_state(monkeypatch):
+    require_production_env(monkeypatch)
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("AGENT_SERVICE_URL", AGENT_URL)
     monkeypatch.setenv("FIREBASE_FUNCTIONS_SERVICE_ACCOUNT", TRUSTED_SA)

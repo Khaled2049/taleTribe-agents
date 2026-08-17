@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
-from ..context_builder import StoryContextBuilder
+from ..context_format import format_context_for_prompt
 from ..llm_provider import LLMProvider, get_llm_provider
 
 
@@ -21,7 +21,6 @@ class BrainstormingTool:
         self.llm_provider: LLMProvider = llm_provider or get_llm_provider(
             project_id, location
         )
-        self.context_builder = StoryContextBuilder(project_id)
 
     async def execute(
         self,
@@ -29,6 +28,7 @@ class BrainstormingTool:
         idea_type: str,
         prompt: Optional[str] = None,
         count: int = 5,
+        context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Generate brainstorming ideas.
@@ -42,9 +42,13 @@ class BrainstormingTool:
         Returns:
             Dictionary with list of generated ideas
         """
-        # Build context from Firestore
-        context = self.context_builder.build_story_context(story_id)
-        formatted_context = self.context_builder.format_context_for_prompt(context)
+        # Context is supplied by the caller (StoryAgent reads it from
+        # story-data). This tool used to build it from Firestore itself and was
+        # the only one that took no override, so it silently generated against
+        # an empty story for every migrated story.
+        if context is None:
+            raise ValueError("story context is required")
+        formatted_context = format_context_for_prompt(context)
 
         story = context["story"]
         genre = story.get("genre", "general fiction")

@@ -14,6 +14,58 @@ from google.cloud.firestore_v1.query import Query
 from mcp_server import blocks, data
 from mcp_server.oauth_store import as_utc
 
+
+def _owned_story_snapshot(db: Any, story_id: str, uid: str) -> Any:
+    """The ownership gate, Firestore-shaped, returning the raw snapshot.
+
+    Lives here rather than in data.py because the write path is the only thing
+    that still needs a Firestore snapshot: it makes the chapterCount bump
+    conditional on `snap.update_time`, the version it read. data.py now reads
+    through story-data over HTTP and has no snapshot to hand back.
+
+    Kept identical in behaviour to the gate it came from — missing and non-owned
+    raise the same error, so story ids cannot be probed for existence.
+    """
+    snap = db.collection("stories").document(story_id).get()
+    record = snap.to_dict() if snap.exists else None
+    if not record or record.get("userId") != uid:
+        raise data.StoryNotFoundError(story_id)
+    return snap
+
+
+def _revision_token(update_time: Any) -> str:
+    """Canonical version string for a Firestore document, from either spelling.
+
+    Opaque to callers: they pass it back unmodified, and the write path compares
+    it against a freshly derived one.
+
+    The normalisation is not cosmetic. A read hands back a
+    DatetimeWithNanoseconds (DocumentSnapshot.update_time) while a write hands
+    back a protobuf Timestamp (WriteResult.update_time), and str() spells the
+    same instant completely differently for the two:
+
+        "2026-08-01 13:54:57.745934+00:00"
+        "seconds: 1785000000\\nnanos: 745934000\\n"
+
+    Taking the token straight from str() would therefore mean the revision an
+    edit returns never equals the one the next read reports, so every chained
+    edit would be refused as stale with no concurrent writer anywhere.
+
+    story-data needs none of this — it carries an integer `revision` per row —
+    so when the write tools move, this goes away and If-Match replaces it.
+    """
+    seconds = getattr(update_time, "seconds", None)
+    nanos = getattr(update_time, "nanos", None)
+    if isinstance(seconds, int) and isinstance(nanos, int):
+        return f"{seconds}.{nanos:09d}"  # protobuf Timestamp
+    as_pb = getattr(update_time, "timestamp_pb", None)
+    if callable(as_pb):
+        stamp = as_pb()  # DatetimeWithNanoseconds
+        return f"{stamp.seconds}.{stamp.nanos:09d}"
+    # The test fake's monotonic counter, and any other opaque version object.
+    return str(update_time)
+
+
 logger = structlog.get_logger(__name__)
 
 # Ceilings the Admin SDK bypasses. Each names the upstream source of truth in
@@ -28,7 +80,7 @@ MAX_TAG_CHARS = 40
 MAX_CATEGORY_CHARS = 60
 # firestore.rules: chapter create/update require content.size() <= 100000.
 MAX_CHAPTER_CONTENT_CHARS = 100_000
-# StoriesRepo.WORD_LIMIT, and generateChapterTask.MAX_CHAPTER_WORDS.
+# StoriesRepo.WORD_LIMIT.
 MAX_CHAPTER_WORDS = 5_000
 # StoriesRepo.CHAPTER_LIMIT.
 MAX_CHAPTERS_PER_STORY = 50
@@ -183,7 +235,7 @@ def _clean_revision(value: Any) -> str:
     """The caller's claimed base version, as an opaque string.
 
     Not parsed or reformatted beyond stripping: it is compared verbatim against
-    data.revision_token() of a freshly read update_time, so interpreting it as
+    _revision_token() of a freshly read update_time, so interpreting it as
     a timestamp here would only create ways for an equal version to compare
     unequal.
     """
@@ -529,7 +581,7 @@ def create_chapter(
     # story they don't own still makes the service write (and then release) an
     # mcpWrites document. One extra read closes that small write amplifier;
     # _append_chapter re-reads inside its retry loop regardless.
-    data.get_owned_story_snapshot(db, story_id, uid)
+    _owned_story_snapshot(db, story_id, uid)
 
     key = idempotency_key(
         uid,
@@ -580,7 +632,7 @@ def _append_chapter(
 
     while attempts < MAX_CLAIM_ATTEMPTS:
         attempts += 1
-        snap = data.get_owned_story_snapshot(db, story_id, uid)
+        snap = _owned_story_snapshot(db, story_id, uid)
         story = snap.to_dict() or {}
 
         raw_count = story.get("chapterCount")
@@ -691,7 +743,7 @@ def _load_chapter_for_edit(
     snap = _chapter_ref(db, story_id, chapter_id).get()
     if not snap.exists:
         raise data.EntityNotFoundError(chapter_id)
-    if data.revision_token(snap.update_time) != revision:
+    if _revision_token(snap.update_time) != revision:
         raise StaleRevisionError(chapter_id)
     return snap
 
@@ -751,7 +803,7 @@ def _write_chapter_content(
     # is a protobuf Timestamp where a snapshot's is a DatetimeWithNanoseconds,
     # and str() of the two never matches (see data.revision_token). Getting
     # this wrong would make every chained edit look stale.
-    return data.revision_token(result.update_time)
+    return _revision_token(result.update_time)
 
 
 def append_to_chapter(
@@ -779,7 +831,7 @@ def append_to_chapter(
     # Ownership before the reservation, same write-amplifier argument as
     # create_chapter: a caller aiming at someone else's story should not make
     # this service write (and then release) an mcpWrites document.
-    data.get_owned_story_snapshot(db, story_id, uid)
+    _owned_story_snapshot(db, story_id, uid)
 
     key = idempotency_key(
         uid,
@@ -1007,7 +1059,7 @@ def edit_chapter_blocks(
     revision = _clean_revision(revision)
     normalized = _normalize_ops(ops)
 
-    data.get_owned_story_snapshot(db, story_id, uid)
+    _owned_story_snapshot(db, story_id, uid)
 
     key = idempotency_key(
         uid,

@@ -5,7 +5,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-from ..context_builder import StoryContextBuilder
+from ..context_format import format_context_for_prompt
 from ..llm_provider import LLMProvider, get_llm_provider
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,6 @@ class StoryChoicesTool:
         self.llm_provider: LLMProvider = llm_provider or get_llm_provider(
             project_id, location
         )
-        self.context_builder = StoryContextBuilder(project_id)
 
     # ------------------------------------------------------------------
     # Prompt builders
@@ -174,7 +173,7 @@ class StoryChoicesTool:
         current_content: str = "",
         chapter_id: Optional[str] = None,
         turn_count: int = 0,
-        brain_context: Optional[str] = None,
+        context_override: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Generate story choices for opening, continuation, or ending mode.
@@ -185,8 +184,6 @@ class StoryChoicesTool:
             current_content: HTML content already in the editor (empty for opening)
             chapter_id: Optional chapter document ID (reserved for future chapter-scoped context)
             turn_count: How many choices the user has selected so far (used for arc guidance)
-            brain_context: Optional pre-assembled brain memory context; replaces the legacy
-                           formatted Firestore context string when provided
 
         Returns:
             For opening: {"storyId": ..., "openingScene": ..., "choices": [...]}
@@ -194,11 +191,10 @@ class StoryChoicesTool:
             For ending: {"storyId": ..., "choices": [{"label": ..., "sceneText": ..., "isFinal": true}]}
         """
         logger.info(
-            "StoryChoicesTool story_id=%s mode=%s turn_count=%s brain_context=%s",
+            "StoryChoicesTool story_id=%s mode=%s turn_count=%s",
             story_id,
             mode,
             turn_count,
-            "yes" if brain_context else "no",
         )
 
         if mode not in ("opening", "continuation", "ending"):
@@ -208,13 +204,10 @@ class StoryChoicesTool:
                 "error": f"Invalid mode '{mode}'. Must be 'opening', 'continuation', or 'ending'.",
             }
 
-        context = self.context_builder.build_story_context(story_id)
-        firestore_context = self.context_builder.format_context_for_prompt(context)
-        formatted_context = (
-            (brain_context + "\n\n" + firestore_context)
-            if brain_context
-            else firestore_context
-        )
+        if context_override is None:
+            raise ValueError("story context is required")
+        context = context_override
+        formatted_context = format_context_for_prompt(context)
         plain_text = _strip_html(current_content) if current_content else ""
 
         if mode == "opening":

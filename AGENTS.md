@@ -1,79 +1,42 @@
 # Repository Guidelines — taleTribe-agents
 
-## Multi-Repo Context
+This FastAPI service runs NovelSync’s AI story workflows. It calls LLMs through
+creditProxy and uses story-data as the canonical source for migrated stories
+and pgvector context.
 
-This repo is one of three in the NovelSync project:
+## Commands
 
-- **taleTribe-agents** (this repo): Python FastAPI service hosting AI story agents, deployed to Google Cloud Run.
-- **taleTribe-frontend** (`../taleTribe-frontend`): React/TypeScript frontend + Firebase Cloud Functions.
-- **contracts** (`../contracts`): Solidity smart contracts (TippingPlatform) built with Foundry.
+- `source venv/bin/activate && python server.py`: run locally on port 8000.
+- `source venv/bin/activate && pytest`: run tests.
+- `docker build --platform=linux/amd64 -t <image> .`: build the Cloud Run
+  image.
+- For the integrated stack, use `../story/dev-new.sh` rather than starting
+  dependencies independently.
 
-## Project Structure
+## Integration rules
 
-- `server.py`: FastAPI application entry point. Exposes `POST /agent/execute` and `GET /health`.
-- `agents/storyAgent/`: StoryAgent implementation — `agent.py`, `tools.py`, `action_schemas.py`, `context_builder.py`, `llm_provider.py`.
-- `image-generation/`: Optional local image generation module (disabled in production via `ENABLE_LOCAL_IMAGE_GENERATION`).
-- `terraform/`: Terraform configuration for GCP (Cloud Run, IAM, Artifact Registry).
-- `.github/workflows/`: PR validation (`pr-check.yml`) and deploy (`deploy.yml`) GitHub Actions workflows.
-- `scripts/`: Utility scripts.
-- `tests/`: pytest test suite.
-- `requirements.txt`: Full Python dependencies including ML libs (local dev).
-- `requirements-prod.txt`: Slim dependencies for Cloud Run (no ML libs; keeps image ~500 MB).
-- `Dockerfile`: Multi-stage build using `requirements-prod.txt`.
-- `README.md`: Repo entrypoint.
+- Route all LLM calls through `CREDIT_PROXY_URL`; do not call a paid provider
+  directly for platform-funded work.
+- With `STORY_DATA_DATABASE_URL` set, PostgreSQL is canonical for story context
+  and `INDEXING_WORKER_ENABLED=true` consumes the durable indexing outbox.
+- Preserve the legacy Firestore path only for non-migrated stories/features.
+  Do not introduce Firestore writes for a story-data-owned domain.
+- pgvector embeddings are 768 dimensions. Validate dimensions before writing.
+- Metadata written to JSONB must be JSON-serializable; convert database values
+  such as `Decimal`, UUIDs, and timestamps deliberately.
+- New actions require schemas, agent wiring, tests, and safe user-visible error
+  handling.
 
-## Build, Test, and Development Commands
+## Configuration and security
 
-- `python server.py`: run the FastAPI server locally (default port 8000; set `PORT` env var to override).
-- `pip install -r requirements.txt`: install all deps including ML libs for local dev.
-- `pip install -r requirements-prod.txt`: install Cloud Run-only deps.
-- `pytest`: run the test suite (config in `pytest.ini`).
-- `docker build --platform=linux/amd64 -t <image> .`: build the production Docker image (always use `linux/amd64` to avoid arch mismatch on Apple Silicon).
+- Use environment variables and secret managers for credentials; never commit
+  `.env`, service-account keys, or provider API keys.
+- Local integrated values include `CREDIT_PROXY_URL=http://localhost:8090`,
+  Firestore emulator `localhost:8080`, and story-data PostgreSQL on port 5433.
+- Production deployment remains GitHub Actions plus Terraform/Cloud Run.
 
-## Environment Variables
+## Verification
 
-| Variable | Required | Description |
-|---|---|---|
-| `GOOGLE_CLOUD_PROJECT` | Yes | GCP project ID |
-| `CREDIT_PROXY_URL` | Yes | creditProxy gateway URL — all LLM calls route here (e.g. `http://localhost:8080`) |
-| `VERTEX_AI_LOCATION` | No (default `us-central1`) | Vertex AI region |
-| `FIRESTORE_EMULATOR_HOST` | No | Firestore emulator address. **Note:** Firebase emulator also uses `:8080` by default — set a different port if running alongside creditProxy |
-| `ENABLE_LOCAL_IMAGE_GENERATION` | No (default `true`) | Set to `false` to disable image generation module |
-| `PORT` | No (default `8000`) | HTTP server port |
-
-Provider and model selection is configured in **creditProxy** via `LLM_PROVIDER` — not in this repo. See `../creditProxy/.env.example`.
-
-Copy `.env.example` to `.env` for local setup; never commit `.env`.
-
-## Coding Style & Naming Conventions
-
-- Python; follow existing module structure and naming.
-- Use Pydantic models (`BaseModel`) for all request/response schemas.
-- New agent actions must be added to `action_schemas.py` and wired up in `agent.py`.
-- Keep `requirements.txt` and `requirements-prod.txt` in sync (prod omits ML libs only).
-
-## Testing Guidelines
-
-- Run `pytest` from the repo root.
-- All new agent actions should have corresponding tests in `tests/`.
-- Minimum validation before opening a PR: `pytest` passing and a manual `curl` of `/health` and `/agent/execute`.
-
-## Deployment
-
-Deployments are fully automated via GitHub Actions on push to `main`:
-1. CI runs lint and tests (`ci.yml`).
-2. Deploy workflow builds the Docker image, pushes to Artifact Registry, and applies Terraform to update Cloud Run (`deploy.yml`).
-
-See `../story/wiki/taleTribe-agents/deployment.md` for setup instructions and deployment behavior.
-
-## Commit & Pull Request Guidelines
-
-- Short, imperative, lowercase commit messages (e.g. `add brainstorm action`, `fix context builder timeout`).
-- PRs should include: scope, rationale, linked task (if any), and verification steps (`pytest` output + endpoint test).
-
-## Security & Configuration Tips
-
-- API keys (Google AI Studio) are stored in GCP Secret Manager and injected at runtime — never in code or `.env` committed to the repo.
-- GitHub Actions uses Workload Identity Federation (keyless OIDC auth); no service account JSON keys are stored anywhere.
-- Never commit `.env` or `terraform.tfvars` with real secrets (both are in `.gitignore`).
-- See `../story/wiki/taleTribe-agents/deployment.md` for deployment and secret-management details.
+Run focused tests and `pytest`, then check `GET /health`. For changes to the
+PostgreSQL pipeline, verify one outbox event is embedded and persisted without
+errors.

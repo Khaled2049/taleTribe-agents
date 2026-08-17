@@ -2,14 +2,13 @@
 
 import pytest
 
-from agents.storyAgent.brain.vector_store import _to_list
-from agents.storyAgent.chapter_rag import (
+from agents.storyAgent.embedding_text import (
     CHUNK_OVERLAP_WORDS,
     CHUNK_WORDS,
     _chunk_text,
     compose_entity_text,
-    format_excerpts,
 )
+from agents.storyAgent.excerpts import format_excerpts
 
 pytestmark = pytest.mark.unit
 
@@ -40,16 +39,6 @@ def test_chunk_long_text_overlaps_and_covers_all_words():
     assert first_words[step:] == second_words[:CHUNK_OVERLAP_WORDS]
     # All original words are present across chunks (no data dropped).
     assert words[-1] in chunks[-1].split()
-
-
-def test_to_list_handles_list_and_vector_like():
-    assert _to_list([1.0, 2.0]) == [1.0, 2.0]
-    assert _to_list(None) == []
-
-    class FakeVector:
-        value = [3.0, 4.0]
-
-    assert _to_list(FakeVector()) == [3.0, 4.0]
 
 
 def test_format_excerpts_empty():
@@ -131,10 +120,11 @@ def test_compose_entity_text_empty_returns_empty():
     assert compose_entity_text("place", {}) == "Place: Untitled"
 
 
-# The embedded-field set per kind MUST match the frontend's SIGNATURE_FIELDS in
-# taleTribe-frontend/functions/src/entityIndexTrigger.ts, which decides when a
-# re-embed fires. This mirror catches Python-side drift (a TS-side change still needs
-# a human to update both). If you change one, change the other.
+# The embedded-field set per kind, pinned. It used to mirror the frontend's
+# SIGNATURE_FIELDS in entityIndexTrigger.ts, which decided when a re-embed fired;
+# that trigger is gone and story-data's indexing_outbox decides now. The list stays
+# asserted because it defines what compose_entity_text embeds — changing it silently
+# changes every future pgvector chunk while leaving existing ones on the old shape.
 _FRONTEND_SIGNATURE_FIELDS = {
     "character": [
         "name",

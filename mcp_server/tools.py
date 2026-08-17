@@ -10,7 +10,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import BaseModel, Field
 
-from mcp_server import data, writes
+from mcp_server import data, story_data, writes
 from mcp_server.access import AccessGate
 from rate_limit import PerUserRateLimiter
 
@@ -144,13 +144,24 @@ async def _bridge(fn, *args, **kwargs) -> Any:
     return await anyio.to_thread.run_sync(functools.partial(fn, *args, **kwargs))
 
 
-async def _read(fn, *args, **kwargs) -> Any:
+async def _read(coro) -> Any:
+    """Await a data.py read, mapping its failures onto tool errors.
+
+    Takes the coroutine rather than a callable: data.py reads over HTTP now, so
+    there is nothing blocking left to push onto a thread. _write still uses
+    _bridge because writes.py remains on the synchronous Firestore client.
+    """
     try:
-        return await _bridge(fn, *args, **kwargs)
+        return await coro
     except data.StoryNotFoundError:
         raise ToolError("Story not found.")
     except data.EntityNotFoundError:
         raise ToolError("Not found in this story.")
+    except story_data.StoryDataError as exc:
+        # Reaching the story service failed. Say so rather than reporting an
+        # empty story, which the model would take as fact.
+        logger.warning("mcp_story_data_unavailable", error=str(exc))
+        raise ToolError("The story service is unavailable. Try again shortly.")
     except ValueError as exc:
         raise ToolError(str(exc))
 
@@ -305,7 +316,7 @@ def register_tools(
             limit: Maximum number of stories to return (1-100, default 20).
         """
         uid = (await _authorized_uid(rate_limiter, access_gate=access_gate)).uid
-        stories = await _read(data.list_stories_for_user, db, uid, limit)
+        stories = await _read(data.list_stories_for_user(uid, limit))
         return _result({"stories": stories, "count": len(stories)})
 
     @mcp.tool()
@@ -319,7 +330,7 @@ def register_tools(
             story_id: The story's ID (from list_my_stories).
         """
         uid = (await _authorized_uid(rate_limiter, access_gate=access_gate)).uid
-        overview = await _read(data.get_story_overview, db, story_id, uid)
+        overview = await _read(data.get_story_overview(story_id, uid))
         return _result(overview)
 
     @mcp.tool()
@@ -334,7 +345,7 @@ def register_tools(
             story_id: The story's ID.
         """
         uid = (await _authorized_uid(rate_limiter, access_gate=access_gate)).uid
-        page = await _read(data.list_chapters, db, story_id, uid)
+        page = await _read(data.list_chapters(story_id, uid))
         return _result(
             {
                 "chapters": page.items,
@@ -363,7 +374,7 @@ def register_tools(
         """
         uid = (await _authorized_uid(rate_limiter, access_gate=access_gate)).uid
         chapter = await _read(
-            data.get_chapter, db, story_id, chapter_id, uid, offset, max_chars
+            data.get_chapter(story_id, chapter_id, uid, offset, max_chars)
         )
         return _result(chapter)
 
@@ -396,13 +407,7 @@ def register_tools(
         """
         uid = (await _authorized_uid(rate_limiter, access_gate=access_gate)).uid
         listing = await _read(
-            data.get_chapter_blocks,
-            db,
-            story_id,
-            chapter_id,
-            uid,
-            start_index,
-            max_blocks,
+            data.get_chapter_blocks(story_id, chapter_id, uid, start_index, max_blocks)
         )
         return _result(listing)
 
@@ -419,7 +424,7 @@ def register_tools(
             entity_type: One of "characters", "places", "plots".
         """
         uid = (await _authorized_uid(rate_limiter, access_gate=access_gate)).uid
-        page = await _read(data.list_entities, db, story_id, uid, entity_type)
+        page = await _read(data.list_entities(story_id, uid, entity_type))
         return _result(
             {
                 "entity_type": entity_type,
@@ -444,7 +449,7 @@ def register_tools(
             entity_id: The entity's ID (from list_entities).
         """
         uid = (await _authorized_uid(rate_limiter, access_gate=access_gate)).uid
-        entity = await _read(data.get_entity, db, story_id, uid, entity_type, entity_id)
+        entity = await _read(data.get_entity(story_id, uid, entity_type, entity_id))
         return _result(entity)
 
     tool_count = 7

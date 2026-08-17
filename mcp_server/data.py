@@ -1,42 +1,41 @@
-"""Owner-enforced Firestore reads backing the MCP tools.
+"""Owner-enforced story-data reads backing the MCP tools.
 
 Every function takes the caller's Firebase uid and refuses to return anything
-the caller does not own: `stories/{id}.userId == uid`. Missing and non-owned
-stories are indistinguishable to the caller ("not found") so story IDs cannot
-be probed for existence.
+the caller does not own. Missing and non-owned stories are indistinguishable to
+the caller ("not found") so story IDs cannot be probed for existence.
 
-Reads only — nothing here mutates. The write tools live in writes.py, which
-imports the ownership gate below rather than reimplementing it.
+Reads only — nothing here mutates. The write tools live in writes.py, which is
+still Firestore-backed and carries its own ownership gate.
 
-Deliberately does NOT reuse StoryContextBuilder.build_story_context — that
-path fetches all four subcollections with full chapter bodies and TTL-caches
-the result, which is wasteful for targeted reads and would cache across
-callers. The projection/limit/sort patterns are mirrored from it instead.
+Ownership is asserted twice on purpose. story-data enforces it (the asserted uid
+scopes `GET /v1/stories`, and worldbuilding goes through its owner check), but
+`GetStory` and `ListChapters` deliberately serve a *published* story to any
+caller so the public reader can use them. MCP is owner-only on every tool, so
+get_owned_story re-checks `ownerId == uid` rather than inheriting that allowance.
 
-All functions are synchronous (google-cloud-firestore sync client); tools.py
-bridges them with anyio.to_thread.
+All functions are async: the transport is HTTP now, so tools.py awaits them
+directly rather than bridging with anyio.to_thread.
 """
 
 from __future__ import annotations
 
 from typing import Any, NamedTuple, Optional
 
-from google.cloud.firestore_v1.base_query import FieldFilter
-from google.cloud.firestore_v1.query import Query
-
 from agents.storyAgent.entity_schema import embedded_field_names
-from mcp_server import blocks
+from mcp_server import blocks, story_data
 
-# Mirrors StoryContextBuilder.COLLECTION_FETCH_LIMIT: bounded subcollection reads.
+# Bounded reads, unchanged from the Firestore path so page sizes and the
+# `truncated` contract stay the same for callers.
 COLLECTION_FETCH_LIMIT = 200
 MAX_STORY_LIST_LIMIT = 100
 SHORT_TEXT_LIMIT = 300
 MAX_BLOCKS_PER_PAGE = 1000
 DEFAULT_BLOCKS_PER_PAGE = 500
 
-# MCP tools address entities by Firestore collection name (plural); the shared
-# field vocabulary in entity_schema.py is keyed by entity kind (singular). One
-# explicit mapping instead of the two lists happening to line up.
+# MCP tools address entities by collection name (plural), which is also the
+# story-data path segment; the shared field vocabulary in entity_schema.py is
+# keyed by entity kind (singular). One explicit mapping instead of the two lists
+# happening to line up.
 ENTITY_KIND_BY_COLLECTION = {
     "characters": "character",
     "places": "place",
@@ -77,7 +76,7 @@ class EntityNotFoundError(Exception):
 
 
 class Page(NamedTuple):
-    """A capped subcollection read: the rows, plus whether more were left behind.
+    """A capped read: the rows, plus whether more were left behind.
 
     `truncated` exists because silence is the wrong answer here. A caller that
     receives 200 chapters cannot tell "that is the whole book" from "that is
@@ -89,15 +88,11 @@ class Page(NamedTuple):
     truncated: bool
 
 
-def _page(query: Any, limit: int = COLLECTION_FETCH_LIMIT) -> tuple[list, bool]:
-    """Stream at most `limit` documents, reading one extra to detect truncation.
-
-    The probe row is fetched and discarded: one surplus document is far cheaper
-    than a count query, and it turns "we got exactly the cap" (which might mean
-    either) into a definite answer.
-    """
-    docs = list(query.limit(limit + 1).stream())
-    return docs[:limit], len(docs) > limit
+def _cap(
+    rows: list[dict], limit: int = COLLECTION_FETCH_LIMIT
+) -> tuple[list[dict], bool]:
+    """Trim to `limit`, reporting whether anything was dropped."""
+    return rows[:limit], len(rows) > limit
 
 
 def _truncate(value: Any, limit: int = SHORT_TEXT_LIMIT) -> Optional[str]:
@@ -108,11 +103,7 @@ def _truncate(value: Any, limit: int = SHORT_TEXT_LIMIT) -> Optional[str]:
 
 
 def _display_name(data: dict) -> str:
-    """Always a non-empty str, so callers can sort on it.
-
-    Firestore holds whatever the writer's client put there: a character named
-    "7" arrives as an int and would break a `.lower()` sort.
-    """
+    """Always a non-empty str, so callers can sort on it."""
     for field in ("name", "title"):
         value = data.get(field)
         if value is None or isinstance(value, bool):
@@ -123,173 +114,143 @@ def _display_name(data: dict) -> str:
     return "Unnamed"
 
 
-def _chapter_sort_key(chapter: dict) -> float:
-    """Float `order` first, then `chapterNumber`, then 0.0 — same as context_builder."""
-    for field in ("order", "chapterNumber"):
-        value = chapter.get(field)
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            return float(value)
+def _order(chapter: dict) -> float:
+    """story-data's `position` is the running-order key."""
+    value = chapter.get("position")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
     return 0.0
 
 
-def _iso(value: Any) -> Optional[str]:
-    return value.isoformat() if hasattr(value, "isoformat") else None
+def _numbered(chapters: list[dict]) -> list[tuple[int, dict]]:
+    """Pair each chapter with its 1-based place in reading order.
 
-
-def get_owned_story_snapshot(db: Any, story_id: str, uid: str) -> Any:
-    """The ownership gate, returning the raw snapshot.
-
-    Exists for writes.py, which needs `snap.update_time` to make its
-    chapterCount bump conditional on the version it read. Everyone else wants
-    get_owned_story below. Keeping both on one implementation means there is
-    still exactly one place that decides whether a caller owns a story.
+    story-data has no `chapterNumber` column, and `position` cannot stand in for
+    one: it is a sort key that keeps gaps after a delete and takes fractional
+    values on an insert between neighbours. The ordinal callers want is the index
+    within the ordered list, so it is derived here rather than read.
     """
-    snap = db.collection("stories").document(story_id).get()
-    record = snap.to_dict() if snap.exists else None
-    if not record or record.get("userId") != uid:
-        raise StoryNotFoundError(story_id)
-    return snap
+    return list(enumerate(sorted(chapters, key=_order), start=1))
 
 
-def get_owned_story(db: Any, story_id: str, uid: str) -> dict:
+def _revision(record: dict) -> str:
+    """story-data carries an integer `revision` per row; callers want a token."""
+    return str(record.get("revision", ""))
+
+
+async def get_owned_story(story_id: str, uid: str) -> dict:
     """The single ownership gate every story-scoped read goes through."""
-    snap = get_owned_story_snapshot(db, story_id, uid)
-    data = snap.to_dict()
-    data["id"] = snap.id
-    return data
+    try:
+        story = await story_data.client().get_story(uid, story_id)
+    except story_data.NotFound as exc:
+        raise StoryNotFoundError(story_id) from exc
+    # story-data serves a published story to any caller; MCP is owner-only.
+    if not isinstance(story, dict) or story.get("ownerId") != uid:
+        raise StoryNotFoundError(story_id)
+    return story
 
 
-def list_stories_for_user(db: Any, uid: str, limit: int) -> list[dict]:
+async def list_stories_for_user(uid: str, limit: int) -> list[dict]:
     limit = max(1, min(int(limit), MAX_STORY_LIST_LIMIT))
-    # Order in Firestore, not in Python: sorting a client-side page would rank
-    # only an arbitrary slice of a prolific author's stories, so the "most
-    # recently updated" promise would break above the page size. Backed by the
-    # existing (userId ASC, updatedAt DESC) composite index. Documents without
-    # `updatedAt` are excluded by the order_by — every story-creation path
-    # writes it.
-    docs = (
-        db.collection("stories")
-        .where(filter=FieldFilter("userId", "==", uid))
-        .order_by("updatedAt", direction=Query.DESCENDING)
-        .limit(limit)
-        .stream()
-    )
+    # story-data already returns the caller's own stories, updated_at DESC
+    # (stories_owner_updated_idx), so the "most recently updated" promise holds
+    # above the page size and the cap can be applied here.
+    rows = await story_data.client().list_stories(uid)
     stories = []
-    for doc in docs:
-        data = doc.to_dict() or {}
+    for record in rows[:limit]:
         stories.append(
             {
-                "story_id": doc.id,
-                "title": data.get("title", "Untitled"),
-                "description": _truncate(data.get("description")),
-                "is_published": bool(data.get("isPublished", False)),
-                "chapter_count": data.get("chapterCount"),
-                "updated_at": _iso(data.get("updatedAt")),
+                "story_id": record.get("id"),
+                "title": record.get("title") or "Untitled",
+                "description": _truncate(record.get("description")),
+                "is_published": bool(record.get("published", False)),
+                # No count column, and counting would mean a request per story.
+                # get_story_overview reports the real number.
+                "chapter_count": None,
+                "updated_at": record.get("updatedAt"),
             }
         )
     return stories
 
 
-def get_story_overview(db: Any, story_id: str, uid: str) -> dict:
-    story = get_owned_story(db, story_id, uid)
-
-    # The denormalized index is rebuilt from an uncapped query
-    # (chapterIndexTrigger.ts), so when it exists this path is always complete.
-    chapter_index = story.get("chapterIndex")
-    truncated = False
-    if not isinstance(chapter_index, list):
-        # Same backfill fallback as _fetch_slim_chat_context: titles only.
-        docs, truncated = _page(_chapters_in_reading_order(db, story_id))
-        chapter_index = [doc.to_dict() or {} for doc in docs]
-    chapters = sorted(chapter_index, key=_chapter_sort_key)
+async def get_story_overview(story_id: str, uid: str) -> dict:
+    story = await get_owned_story(story_id, uid)
+    rows = await story_data.client().list_chapter_index(uid, story_id)
+    chapters, truncated = _cap(rows if isinstance(rows, list) else [])
 
     return {
-        "story_id": story["id"],
-        "title": story.get("title", "Untitled"),
+        "story_id": story.get("id"),
+        "title": story.get("title") or "Untitled",
         "description": story.get("description"),
-        "author": story.get("author"),
+        "author": story.get("authorName"),
         "tags": story.get("tags") or [],
         "category": story.get("category"),
-        "is_published": bool(story.get("isPublished", False)),
-        "chapter_count": story.get("chapterCount"),
-        "updated_at": _iso(story.get("updatedAt")),
+        "is_published": bool(story.get("published", False)),
+        "chapter_count": len(chapters),
+        "updated_at": story.get("updatedAt"),
         "chapters": [
             {
-                "title": chapter.get("title", "Untitled"),
-                "order": chapter.get("order"),
-                "chapter_number": chapter.get("chapterNumber"),
+                "title": chapter.get("title") or "Untitled",
+                "order": chapter.get("position"),
+                "chapter_number": number,
             }
-            for chapter in chapters
+            for number, chapter in _numbered(chapters)
         ],
         "chapters_truncated": truncated,
     }
 
 
-def _chapters_in_reading_order(db: Any, story_id: str) -> Any:
-    """Chapters ordered by `order` in Firestore, not in Python.
-
-    Ordering has to happen server-side: `limit()` on an unordered query returns
-    documents by document id, so sorting the result would rank an arbitrary
-    slice and a long book would come back missing chapters from the middle with
-    nothing to show for it. Same reasoning as list_stories_for_user.
-
-    Firestore omits documents that lack the order field, which makes `order` the
-    one safe choice: every write path sets it (`StoriesRepo.addChapter` and
-    `generateChapterTask` in the frontend repo), whereas `chapterNumber` is only
-    written by the generation path. This matches what
-    `StoryContextBuilder.build_story_context` already does for the same
-    collection, so the two read paths agree on which chapters exist.
-    """
-    return (
-        db.collection("stories")
-        .document(story_id)
-        .collection("chapters")
-        .select(["title", "order", "chapterNumber", "wordCount"])
-        .order_by("order", direction=Query.ASCENDING)
-    )
-
-
-def list_chapters(db: Any, story_id: str, uid: str) -> Page:
-    get_owned_story(db, story_id, uid)
-    docs, truncated = _page(_chapters_in_reading_order(db, story_id))
-    chapters = []
-    for doc in docs:
-        data = doc.to_dict() or {}
-        chapters.append(
-            {
-                "chapter_id": doc.id,
-                "title": data.get("title", "Untitled"),
-                "order": data.get("order"),
-                "chapter_number": data.get("chapterNumber"),
-                "word_count": data.get("wordCount"),
-            }
-        )
-    # Already ordered by the query; re-sorted so the `order`-then-chapterNumber
-    # contract in _chapter_sort_key holds for ties within the page too.
-    chapters.sort(key=_chapter_sort_key)
+async def list_chapters(story_id: str, uid: str) -> Page:
+    await get_owned_story(story_id, uid)
+    # content=false: the default listing carries every chapter body, and this
+    # tool only reports the running order.
+    rows = await story_data.client().list_chapter_index(uid, story_id)
+    capped, truncated = _cap(rows if isinstance(rows, list) else [])
+    chapters = [
+        {
+            "chapter_id": chapter.get("id"),
+            "title": chapter.get("title") or "Untitled",
+            "order": chapter.get("position"),
+            "chapter_number": number,
+            "word_count": chapter.get("wordCount"),
+        }
+        for number, chapter in _numbered(capped)
+    ]
     return Page(chapters, truncated)
 
 
-def get_chapter(
-    db: Any,
+async def _owned_chapter(story_id: str, chapter_id: str, uid: str) -> dict:
+    """One chapter with its body, behind the ownership gate."""
+    await get_owned_story(story_id, uid)
+    try:
+        return await story_data.client().get_chapter(uid, story_id, chapter_id)
+    except story_data.NotFound as exc:
+        raise EntityNotFoundError(chapter_id) from exc
+
+
+async def _chapter_number(story_id: str, chapter_id: str, uid: str) -> Optional[int]:
+    """The chapter's place in reading order, or None if it is no longer listed.
+
+    Costs one extra metadata request (no bodies), which is what buys the same
+    ordinal the list tools report. Deriving it from `position` instead would be
+    wrong the moment a chapter is deleted or inserted between two others.
+    """
+    rows = await story_data.client().list_chapter_index(uid, story_id)
+    for number, chapter in _numbered(rows if isinstance(rows, list) else []):
+        if chapter.get("id") == chapter_id:
+            return number
+    return None
+
+
+async def get_chapter(
     story_id: str,
     chapter_id: str,
     uid: str,
     offset: int,
     max_chars: int,
 ) -> dict:
-    get_owned_story(db, story_id, uid)
-    snap = (
-        db.collection("stories")
-        .document(story_id)
-        .collection("chapters")
-        .document(chapter_id)
-        .get()
-    )
-    if not snap.exists:
-        raise EntityNotFoundError(chapter_id)
-    data = snap.to_dict() or {}
-    content = data.get("content") or ""
+    record = await _owned_chapter(story_id, chapter_id, uid)
+    content = record.get("content") or ""
 
     offset = max(0, int(offset))
     max_chars = max(1, min(int(max_chars), 50_000))
@@ -297,53 +258,20 @@ def get_chapter(
     next_offset = offset + max_chars if offset + max_chars < len(content) else None
 
     return {
-        "chapter_id": snap.id,
-        "title": data.get("title", "Untitled"),
-        "order": data.get("order"),
-        "chapter_number": data.get("chapterNumber"),
-        "word_count": data.get("wordCount"),
+        "chapter_id": record.get("id"),
+        "title": record.get("title") or "Untitled",
+        "order": record.get("position"),
+        "chapter_number": await _chapter_number(story_id, chapter_id, uid),
+        "word_count": record.get("wordCount"),
         "total_chars": len(content),
         "offset": offset,
         "content": window,
         "next_offset": next_offset,
-        "revision": revision_token(snap.update_time),
+        "revision": _revision(record),
     }
 
 
-def revision_token(update_time: Any) -> str:
-    """Canonical version string for a document, from either Firestore spelling.
-
-    Opaque to callers: they pass it back unmodified, and the write path
-    compares it against a freshly derived one.
-
-    The normalisation is not cosmetic. A read hands back a
-    DatetimeWithNanoseconds (DocumentSnapshot.update_time) while a write hands
-    back a protobuf Timestamp (WriteResult.update_time), and str() spells the
-    same instant completely differently for the two:
-
-        "2026-08-01 13:54:57.745934+00:00"
-        "seconds: 1785000000\\nnanos: 745934000\\n"
-
-    Taking the token straight from str() would therefore mean the revision an
-    edit returns never equals the one the next read reports, so every chained
-    edit would be refused as stale with no concurrent writer anywhere. Both
-    paths come through here so the format belongs to this module rather than to
-    whichever object happened to arrive.
-    """
-    seconds = getattr(update_time, "seconds", None)
-    nanos = getattr(update_time, "nanos", None)
-    if isinstance(seconds, int) and isinstance(nanos, int):
-        return f"{seconds}.{nanos:09d}"  # protobuf Timestamp
-    as_pb = getattr(update_time, "timestamp_pb", None)
-    if callable(as_pb):
-        stamp = as_pb()  # DatetimeWithNanoseconds
-        return f"{stamp.seconds}.{stamp.nanos:09d}"
-    # The test fake's monotonic counter, and any other opaque version object.
-    return str(update_time)
-
-
-def get_chapter_blocks(
-    db: Any,
+async def get_chapter_blocks(
     story_id: str,
     chapter_id: str,
     uid: str,
@@ -359,18 +287,8 @@ def get_chapter_blocks(
     editing workflow needs and far cheaper than re-shipping a 100k-char
     chapter to locate one paragraph.
     """
-    get_owned_story(db, story_id, uid)
-    snap = (
-        db.collection("stories")
-        .document(story_id)
-        .collection("chapters")
-        .document(chapter_id)
-        .get()
-    )
-    if not snap.exists:
-        raise EntityNotFoundError(chapter_id)
-    data = snap.to_dict() or {}
-    all_blocks = blocks.split_blocks(data.get("content") or "")
+    record = await _owned_chapter(story_id, chapter_id, uid)
+    all_blocks = blocks.split_blocks(record.get("content") or "")
 
     start_index = max(0, int(start_index))
     max_blocks = max(1, min(int(max_blocks), MAX_BLOCKS_PER_PAGE))
@@ -379,9 +297,9 @@ def get_chapter_blocks(
     next_index = end if end < len(all_blocks) else None
 
     return {
-        "chapter_id": snap.id,
-        "title": data.get("title", "Untitled"),
-        "revision": revision_token(snap.update_time),
+        "chapter_id": record.get("id"),
+        "title": record.get("title") or "Untitled",
+        "revision": _revision(record),
         "block_count": len(all_blocks),
         "start_index": start_index,
         "blocks": [
@@ -403,34 +321,28 @@ def _require_entity_type(entity_type: str) -> str:
     return entity_type
 
 
-def list_entities(db: Any, story_id: str, uid: str, entity_type: str) -> Page:
+async def list_entities(story_id: str, uid: str, entity_type: str) -> Page:
     """Entities for one story, alphabetical, capped at COLLECTION_FETCH_LIMIT.
 
-    Unlike chapters this cannot order in Firestore, so the page really is an
-    arbitrary slice (document id order) when `truncated` is set. There is no
-    field to order on: the display name is whichever of `name`/`title` the
-    writer's client happened to populate, and Firestore holds it as whatever
-    type was written — `_display_name` exists precisely because a character
-    called "7" arrives as an int. Ordering on a field that is sometimes absent
-    would silently drop entities, which is worse than an honest flag.
+    story-data orders characters and places by name and plot lines by creation
+    time, so unlike the Firestore path a truncated page is a real prefix rather
+    than an arbitrary slice. Sorted again here so all three kinds agree.
     """
     _require_entity_type(entity_type)
-    get_owned_story(db, story_id, uid)
-    docs, truncated = _page(
-        db.collection("stories").document(story_id).collection(entity_type)
-    )
+    await get_owned_story(story_id, uid)
+    rows = await story_data.client().list_entities(uid, story_id, entity_type)
+    capped, truncated = _cap(rows if isinstance(rows, list) else [])
     entities = []
-    for doc in docs:
-        data = doc.to_dict() or {}
+    for record in capped:
         descriptor = None
         for field in _DESCRIPTOR_FIELDS[entity_type]:
-            descriptor = _truncate(data.get(field))
+            descriptor = _truncate(record.get(field))
             if descriptor:
                 break
         entities.append(
             {
-                "entity_id": doc.id,
-                "name": _display_name(data),
+                "entity_id": record.get("id"),
+                "name": _display_name(record),
                 "descriptor": descriptor,
             }
         )
@@ -444,40 +356,28 @@ def entity_content_fields(entity_type: str) -> tuple[str, ...]:
     return tuple(embedded_field_names(kind)) + _ENTITY_EXTRA_FIELDS[entity_type]
 
 
-def get_entity(
-    db: Any, story_id: str, uid: str, entity_type: str, entity_id: str
-) -> dict:
+async def get_entity(story_id: str, uid: str, entity_type: str, entity_id: str) -> dict:
     """One entity, projected onto an explicit field set.
 
-    Projected rather than passed through — the same discipline get_chapter uses.
-    A denylist ("pop embedding") was both leaky and unsafe: it shipped userId,
-    storyId, signature and embeddingUpdatedAt as noise in every response, and
-    any *other* raw Firestore value would have broken JSON serialization
-    outright, because embeddings are firestore_v1.vector.Vector and nothing
-    guarantees `embedding` is the only field ever to hold one.
-
-    Array-of-object fields (relationships, events) are passed through whole:
-    they carry the story structure a reader actually wants, and only the
-    frontend writes them, so their contents are plain JSON by construction.
-    Empty and absent values are omitted rather than sent as nulls.
+    Projected rather than passed through, so a column added to story-data cannot
+    start appearing in tool output unreviewed. Array-of-object fields
+    (relationships, events) are passed through whole: they carry the story
+    structure a reader actually wants. Empty and absent values are omitted
+    rather than sent as nulls.
     """
     _require_entity_type(entity_type)
-    get_owned_story(db, story_id, uid)
-    snap = (
-        db.collection("stories")
-        .document(story_id)
-        .collection(entity_type)
-        .document(entity_id)
-        .get()
-    )
-    if not snap.exists:
-        raise EntityNotFoundError(entity_id)
-    raw = snap.to_dict() or {}
+    await get_owned_story(story_id, uid)
+    try:
+        raw = await story_data.client().get_entity(
+            uid, story_id, entity_type, entity_id
+        )
+    except story_data.NotFound as exc:
+        raise EntityNotFoundError(entity_id) from exc
 
     entity: dict[str, Any] = {
-        "entity_id": snap.id,
+        "entity_id": raw.get("id"),
         "name": _display_name(raw),
-        "updated_at": _iso(raw.get("updatedAt") or raw.get("createdAt")),
+        "updated_at": raw.get("updatedAt") or raw.get("createdAt"),
     }
     for field in entity_content_fields(entity_type):
         if field == "name":

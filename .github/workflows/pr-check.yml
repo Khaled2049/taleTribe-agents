@@ -4,10 +4,19 @@ on:
   pull_request:
     branches: [main]
 
+# A new push to the same PR makes the in-flight run obsolete.
+concurrency:
+  group: pr-agents-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   validate:
     name: Validate Changes
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout code
@@ -55,7 +64,7 @@ jobs:
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.5.0
+          terraform_version: 1.14.4
 
       - name: Terraform format check
         working-directory: ./terraform

@@ -33,6 +33,10 @@ from agents.storyAgent.llm_provider import (
     _firebase_token,
 )
 from config import Settings
+
+# Safe to import unconditionally: story_data depends only on httpx, not the MCP
+# SDK, so it does not drag the mount in when ENABLE_MCP is false.
+from mcp_server import story_data
 from rate_limit import PerUserRateLimiter
 
 logger = structlog.get_logger(__name__)
@@ -234,10 +238,40 @@ def create_app() -> FastAPI:
         # the rest of app.state is populated below before the app accepts
         # traffic. Shutdown: release the LLM HTTP client.
         async with AsyncExitStack() as stack:
+            await app.state.agent.start()
+            # The MCP read tools serve story content from story-data. Installed
+            # here rather than at import so tests can supply their own.
+            if mcp_bundle is not None and settings.story_data_url.strip():
+                story_data.configure(
+                    story_data.StoryDataClient(
+                        settings.story_data_url.strip(),
+                        settings.story_data_service_token.strip(),
+                    )
+                )
+            worker_task = None
+            if settings.indexing_worker_enabled:
+                import asyncio
+
+                async def run_indexer():
+                    while True:
+                        try:
+                            await app.state.agent.index_worker.run_once()
+                        except Exception:
+                            logger.exception("indexing_worker_failed")
+                        await asyncio.sleep(settings.indexing_worker_interval_seconds)
+
+                worker_task = asyncio.create_task(run_indexer())
             if mcp_bundle is not None:
                 await stack.enter_async_context(mcp_bundle.mcp.session_manager.run())
             yield
+            if worker_task is not None:
+                worker_task.cancel()
+                try:
+                    await worker_task
+                except asyncio.CancelledError:
+                    pass
         await app.state.agent.aclose()
+        await story_data.aclose()
 
     app = FastAPI(
         title="NovelSync Unified Service",

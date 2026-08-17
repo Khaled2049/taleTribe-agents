@@ -13,10 +13,11 @@ from mcp.server.auth.provider import AccessToken  # noqa: E402
 from mcp.server.fastmcp import FastMCP  # noqa: E402
 from mcp.server.fastmcp.exceptions import ToolError  # noqa: E402
 
+from mcp_server import story_data  # noqa: E402
 from mcp_server.access import AccessGate  # noqa: E402
 from mcp_server.tools import register_tools  # noqa: E402
 from rate_limit import PerUserRateLimiter  # noqa: E402
-from tests.mcp_fakes import FakeFirestoreClient  # noqa: E402
+from tests.mcp_fakes import FakeFirestoreClient, FakeStoryData  # noqa: E402
 
 UID = "user-a"
 
@@ -160,6 +161,17 @@ def test_denials_are_cached_too():
 # ---------------------------------------------------------------------------
 # Enforcement in the tool layer
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _story_data_backend():
+    """These tests exercise the access gate through a read tool, so the read
+    backend has to answer; the gate is what they assert on, not the payload."""
+    fake = FakeStoryData()
+    fake.seed_story("story-a", UID, title="Story A")
+    story_data.configure(fake)
+    yield
+    story_data.configure(None)
 
 
 def _server(db, gate) -> FastMCP:
