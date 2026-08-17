@@ -122,9 +122,15 @@ variable "enable_mcp" {
 }
 
 variable "story_data_url" {
-  description = "Base URL of the story-data service. The MCP read tools serve story content from it, so the agents service refuses to start with ENABLE_MCP on and this unset. The matching shared secret comes from the story-data-service-token Secret Manager secret, which must be pre-created."
+  description = "Override for the story-data base URL. Leave empty to read the deployed novelsync-story-data service's URI directly, which is the normal path — set this only to point at a different instance. The matching shared secret comes from the story-data-service-token Secret Manager secret, which must be pre-created."
   type        = string
   default     = ""
+}
+
+variable "indexing_worker_enabled" {
+  description = "Run the durable indexing_outbox consumer that writes 768-dimension pgvector chunks. Off means content is still written to story-data but never embedded, so chat retrieval silently returns nothing."
+  type        = bool
+  default     = true
 }
 
 variable "enable_mcp_writes" {

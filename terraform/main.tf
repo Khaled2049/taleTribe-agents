@@ -45,6 +45,20 @@ data "google_secret_manager_secret" "story_data_service_token" {
   secret_id = "story-data-service-token"
 }
 
+data "google_secret_manager_secret" "story_data_database_url" {
+  secret_id = "story-data-neon-database-url"
+  project   = var.project_id
+}
+
+# story-data must already be deployed: reading its URI here rather than
+# hardcoding one keeps the two stacks from drifting, and makes a plan fail
+# loudly if the deploy order is reversed.
+data "google_cloud_run_v2_service" "story_data" {
+  name     = "novelsync-story-data"
+  location = var.region
+  project  = var.project_id
+}
+
 # IAM: Allow Cloud Run service account to read secrets from Secret Manager
 resource "google_secret_manager_secret_iam_member" "secret_access" {
   secret_id = data.google_secret_manager_secret.google_ai_studio_api_key.secret_id
@@ -54,6 +68,12 @@ resource "google_secret_manager_secret_iam_member" "secret_access" {
 
 resource "google_secret_manager_secret_iam_member" "story_data_service_token_access" {
   secret_id = data.google_secret_manager_secret.story_data_service_token.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${data.google_service_account.cloud_run_sa.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "story_data_database_url_access" {
+  secret_id = data.google_secret_manager_secret.story_data_database_url.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${data.google_service_account.cloud_run_sa.email}"
 }
@@ -168,7 +188,22 @@ resource "google_cloud_run_v2_service" "app" {
       # so ENABLE_MCP without this fails startup rather than reading nothing.
       env {
         name  = "STORY_DATA_URL"
-        value = var.story_data_url
+        value = coalesce(var.story_data_url, data.google_cloud_run_v2_service.story_data.uri)
+      }
+
+      env {
+        name = "STORY_DATA_DATABASE_URL"
+        value_source {
+          secret_key_ref {
+            secret  = data.google_secret_manager_secret.story_data_database_url.secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      env {
+        name  = "INDEXING_WORKER_ENABLED"
+        value = tostring(var.indexing_worker_enabled)
       }
 
       # OAuth issuer == this service's public URL (also the MCP resource base).
@@ -286,6 +321,8 @@ resource "google_cloud_run_v2_service" "app" {
   depends_on = [
     google_project_service.run,
     google_secret_manager_secret_iam_member.secret_access,
+    google_secret_manager_secret_iam_member.story_data_service_token_access,
+    google_secret_manager_secret_iam_member.story_data_database_url_access,
     google_project_iam_member.firestore_user,
   ]
 }
