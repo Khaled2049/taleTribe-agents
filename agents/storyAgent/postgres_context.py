@@ -14,7 +14,7 @@ from typing import Any
 
 import asyncpg
 
-from .chapter_rag import _chunk_text, compose_entity_text
+from .embedding_text import _chunk_text, compose_entity_text
 
 logger = logging.getLogger(__name__)
 
@@ -133,11 +133,51 @@ class PostgresStoryContext:
                      ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT $1
                    ) UPDATE indexing_outbox o
                    SET locked_at=now(),locked_by=$2,lease_expires_at=now()+interval '5 minutes',attempts=attempts+1
-                   FROM next WHERE o.id=next.id
-                   RETURNING o.id,o.aggregate_type,o.aggregate_id,o.story_id,o.operation,o.revision""",
+                   FROM next, stories s WHERE o.id=next.id AND s.id=o.story_id
+                   RETURNING o.id,o.aggregate_type,o.aggregate_id,o.story_id,o.operation,o.revision,s.owner_id""",
                 limit,
                 worker,
             )
+
+    async def consume_index_budget(self, owner_id: str) -> bool:
+        """Charge one indexing pass to a story owner's daily ceiling.
+
+        Keyed on the UTC day rather than ``current_date``: the Cloud Functions
+        budget this replaces was UTC-keyed, and ``current_date`` would move the
+        reset boundary under any deployment whose database is not UTC.
+
+        Applies to BYOK users too — indexing uses the platform embedder whatever
+        key a user brings, so the platform pays for it either way.
+        """
+        assert self.pool is not None
+        row = await self.pool.fetchrow(
+            """INSERT INTO indexing_usage(user_id,day,pass_count)
+               VALUES($1,(now() AT TIME ZONE 'utc')::date,1)
+               ON CONFLICT(user_id,day) DO UPDATE SET pass_count=indexing_usage.pass_count+1
+               WHERE indexing_usage.pass_count < $2
+               RETURNING pass_count""",
+            owner_id,
+            _index_budget_limit(),
+        )
+        return row is not None
+
+    async def defer(self, event_id: str, reason: str) -> None:
+        """Release an event until the next UTC day without consuming an attempt.
+
+        A budget refusal is not a delivery failure, so it must not burn one of the
+        attempts a failure ceiling would count -- otherwise a user at their limit
+        would exhaust the retry allowance and lose the event outright.
+        """
+        assert self.pool is not None
+        await self.pool.execute(
+            """UPDATE indexing_outbox
+               SET locked_at=NULL,locked_by=NULL,lease_expires_at=NULL,attempts=attempts-1,
+                   available_at=(date_trunc('day', now() AT TIME ZONE 'utc') + interval '1 day') AT TIME ZONE 'utc',
+                   last_error=$2
+               WHERE id=$1""",
+            event_id,
+            reason,
+        )
 
     async def complete(self, event_id: str) -> None:
         assert self.pool is not None
@@ -244,10 +284,16 @@ class PostgresIndexWorker:
         if not self.store.enabled or self.embedder is None:
             return 0
         claimed = await self.store.claim(self.worker_id)
+        superseded = _superseded(claimed)
         for event in claimed:
+            event_id = str(event["id"])
             try:
                 kind, source_id = event["aggregate_type"], str(event["aggregate_id"])
-                if event["operation"] == "delete":
+                if event_id in superseded:
+                    pass
+                elif event["operation"] == "delete":
+                    # Never budgeted: refusing a delete would leave chunks behind
+                    # for content the author removed.
                     await self.store.delete_chunks(kind, source_id)
                 else:
                     source = await self.store.source(
@@ -256,6 +302,18 @@ class PostgresIndexWorker:
                     if source is None:
                         await self.store.delete_chunks(kind, source_id)
                     else:
+                        # Charged after the source resolves, so a delete race
+                        # costs nothing, and before the embedder runs, so the
+                        # ceiling is enforced ahead of the spend.
+                        if not await self.store.consume_index_budget(event["owner_id"]):
+                            logger.warning(
+                                "indexing_budget_exhausted",
+                                extra={"event_id": event_id},
+                            )
+                            await self.store.defer(
+                                event_id, "indexing budget exhausted"
+                            )
+                            continue
                         text, metadata = source
                         await self.store.replace_chunks(
                             str(event["story_id"]),
@@ -266,13 +324,40 @@ class PostgresIndexWorker:
                             metadata,
                             self.embedder,
                         )
-                await self.store.complete(str(event["id"]))
+                await self.store.complete(event_id)
             except Exception as exc:
-                logger.exception(
-                    "indexing_outbox_failed", extra={"event_id": str(event["id"])}
-                )
-                await self.store.fail(str(event["id"]), exc)
+                logger.exception("indexing_outbox_failed", extra={"event_id": event_id})
+                await self.store.fail(event_id, exc)
         return len(claimed)
+
+
+def _superseded(events: list[asyncpg.Record]) -> set[str]:
+    """Event ids outranked by a higher revision of the same source in this batch.
+
+    Nothing collapses the outbox on the write side -- story-data inserts a row per
+    save -- so a burst of autosaves arrives as N events that would each re-embed
+    the same chapter for only the last result to survive. Dropping the losers is
+    what keeps one editing session costing roughly one pass, which is the unit the
+    daily budget is denominated in.
+    """
+    newest: dict[tuple[str, str], asyncpg.Record] = {}
+    for event in events:
+        key = (event["aggregate_type"], str(event["aggregate_id"]))
+        winner = newest.get(key)
+        if winner is None or event["revision"] > winner["revision"]:
+            newest[key] = event
+    kept = {str(event["id"]) for event in newest.values()}
+    return {str(event["id"]) for event in events} - kept
+
+
+def _index_budget_limit() -> int:
+    """Daily embedding passes per user. KEEP IN SYNC with MAX_INDEX_USAGE in the
+    frontend's Cloud Functions, which still meters the legacy Firestore path."""
+    try:
+        parsed = int(os.getenv("MAX_INDEX_USAGE", "300"))
+    except ValueError:
+        return 300
+    return parsed if parsed > 0 else 300
 
 
 def _record(row: asyncpg.Record) -> dict[str, Any]:

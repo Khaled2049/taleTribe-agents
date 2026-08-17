@@ -1,7 +1,7 @@
 """Single source of truth for metadata-entity (character/place/plot) scalar fields.
 
-Both the embedding text (``chapter_rag.compose_entity_text``) and the full generation
-prompt (``context_builder.format_context_for_prompt``) iterate this schema, so the
+Both the embedding text (``embedding_text.compose_entity_text``) and the full generation
+prompt (``context_format.format_context_for_prompt``) iterate this schema, so the
 field lists can't drift between them. Each entry is
 ``(field_name, prompt_label, prompt_char_cap)``; the cap is used only by the prompt
 renderer — the embedding text is not capped.

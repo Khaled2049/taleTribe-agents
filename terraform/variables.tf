@@ -121,6 +121,12 @@ variable "enable_mcp" {
   default     = true
 }
 
+variable "story_data_url" {
+  description = "Base URL of the story-data service. The MCP read tools serve story content from it, so the agents service refuses to start with ENABLE_MCP on and this unset. The matching shared secret comes from the story-data-service-token Secret Manager secret, which must be pre-created."
+  type        = string
+  default     = ""
+}
+
 variable "enable_mcp_writes" {
   description = "Allow MCP clients to create stories and chapters. Off by default: it is the only path in the service that mutates user content, and it requires a token granted the stories:write scope. Flip this in its own commit so a rollback needs no code change."
   type        = bool

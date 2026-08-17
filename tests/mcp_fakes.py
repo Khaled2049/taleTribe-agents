@@ -232,3 +232,159 @@ class FakeFirestoreClient:
 
     def seed(self, path: str, data: dict) -> None:
         self.docs[path] = (copy.deepcopy(data), next(_versions))
+
+
+# ---------------------------------------------------------------------------
+# story-data fake, backing the MCP read tools
+# ---------------------------------------------------------------------------
+
+
+class FakeStoryData:
+    """Stands in for StoryDataClient, seeded with story-data's JSON shapes.
+
+    Reproduces story-data's *authorization* semantics, not just its payloads,
+    because that is what the read path has to be tested against:
+
+    - `GET /v1/stories` is scoped to the caller (WHERE owner_id).
+    - `GET /v1/stories/{id}` and the chapter routes also serve a **published**
+      story to a non-owner, which is why data.get_owned_story re-checks ownerId.
+      A fake that simply refused non-owners everywhere would make that check
+      look redundant and let a real widening of MCP's scope pass the suite.
+    - The worldbuilding routes are owner-only (they go through store.owner).
+    """
+
+    def __init__(self):
+        self.stories: dict[str, dict] = {}
+        self.chapters: dict[str, list[dict]] = {}
+        self.entities: dict[tuple[str, str], list[dict]] = {}
+        # Every path requested, so a test can assert on content=false.
+        self.requests: list[tuple[str, dict]] = []
+
+    # -- seeding ------------------------------------------------------
+
+    def seed_story(self, story_id: str, owner_id: str, **fields: Any) -> dict:
+        record = {
+            "id": story_id,
+            "ownerId": owner_id,
+            "title": "Untitled",
+            "description": "",
+            "authorName": "",
+            "category": "",
+            "tags": [],
+            "published": False,
+            "revision": 1,
+            "createdAt": "2026-07-01T00:00:00Z",
+            "updatedAt": "2026-07-01T00:00:00Z",
+        }
+        record.update(fields)
+        self.stories[story_id] = record
+        self.chapters.setdefault(story_id, [])
+        return record
+
+    def seed_chapter(self, story_id: str, chapter_id: str, **fields: Any) -> dict:
+        record = {
+            "id": chapter_id,
+            "storyId": story_id,
+            "title": "Untitled",
+            "content": "",
+            "position": float(len(self.chapters.get(story_id, [])) + 1),
+            "wordCount": 0,
+            "revision": 1,
+            "createdAt": "2026-07-01T00:00:00Z",
+            "updatedAt": "2026-07-01T00:00:00Z",
+        }
+        record.update(fields)
+        self.chapters.setdefault(story_id, []).append(record)
+        return record
+
+    def seed_entity(
+        self, story_id: str, kind: str, entity_id: str, **fields: Any
+    ) -> dict:
+        record = {
+            "id": entity_id,
+            "storyId": story_id,
+            "name": "Unnamed",
+            "revision": 1,
+        }
+        record.update(fields)
+        self.entities.setdefault((story_id, kind), []).append(record)
+        return record
+
+    # -- internals ----------------------------------------------------
+
+    def _visible_story(self, uid: str, story_id: str) -> dict:
+        """story-data's GetStory: owner always, others only when published."""
+        from mcp_server import story_data
+
+        record = self.stories.get(story_id)
+        if record is None:
+            raise story_data.NotFound(story_id)
+        if record["ownerId"] != uid and not record.get("published"):
+            raise story_data.NotFound(story_id)
+        return copy.deepcopy(record)
+
+    def _owned_story(self, uid: str, story_id: str) -> dict:
+        """store.owner: owner-only, as the worldbuilding routes are."""
+        from mcp_server import story_data
+
+        record = self.stories.get(story_id)
+        if record is None or record["ownerId"] != uid:
+            raise story_data.NotFound(story_id)
+        return record
+
+    # -- client interface ---------------------------------------------
+
+    async def list_stories(self, uid: str) -> list[dict]:
+        self.requests.append(("/v1/stories", {}))
+        mine = [s for s in self.stories.values() if s["ownerId"] == uid]
+        mine.sort(key=lambda s: s.get("updatedAt") or "", reverse=True)
+        return copy.deepcopy(mine)
+
+    async def get_story(self, uid: str, story_id: str) -> dict:
+        self.requests.append((f"/v1/stories/{story_id}", {}))
+        return self._visible_story(uid, story_id)
+
+    async def list_chapter_index(self, uid: str, story_id: str) -> list[dict]:
+        self.requests.append((f"/v1/stories/{story_id}/chapters", {"content": "false"}))
+        self._visible_story(uid, story_id)
+        rows = []
+        for chapter in sorted(
+            self.chapters.get(story_id, []), key=lambda c: c["position"]
+        ):
+            lean = copy.deepcopy(chapter)
+            lean["content"] = ""  # what ?content=false returns
+            rows.append(lean)
+        return rows
+
+    async def get_chapter(self, uid: str, story_id: str, chapter_id: str) -> dict:
+        from mcp_server import story_data
+
+        self.requests.append((f"/v1/stories/{story_id}/chapters/{chapter_id}", {}))
+        self._visible_story(uid, story_id)
+        for chapter in self.chapters.get(story_id, []):
+            if chapter["id"] == chapter_id:
+                return copy.deepcopy(chapter)
+        raise story_data.NotFound(chapter_id)
+
+    async def list_entities(self, uid: str, story_id: str, kind: str) -> list[dict]:
+        self.requests.append((f"/v1/stories/{story_id}/{kind}", {}))
+        self._owned_story(uid, story_id)
+        rows = list(self.entities.get((story_id, kind), []))
+        if kind in ("characters", "places"):
+            rows.sort(key=lambda e: str(e.get("name") or "").lower())
+        return copy.deepcopy(rows)
+
+    async def get_entity(
+        self, uid: str, story_id: str, kind: str, entity_id: str
+    ) -> dict:
+        from mcp_server import story_data
+
+        self.requests.append((f"/v1/stories/{story_id}/{kind}/{entity_id}", {}))
+        self._owned_story(uid, story_id)
+        for entity in self.entities.get((story_id, kind), []):
+            if entity["id"] == entity_id:
+                return copy.deepcopy(entity)
+        raise story_data.NotFound(entity_id)
+
+    async def close(self) -> None:
+        return None

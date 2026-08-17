@@ -70,8 +70,8 @@ def test_enhance_text_accepts_selected_text_at_prompt_limit():
 def test_story_id_max_length():
     with pytest.raises(ValidationError):
         validate_action_parameters(
-            "brainstormPlot",
-            {"storyId": "s" * (MAX_ID_CHARS + 1)},
+            "brainstormIdeas",
+            {"storyId": "s" * (MAX_ID_CHARS + 1), "type": "theme"},
         )
 
 

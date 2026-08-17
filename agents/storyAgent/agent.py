@@ -1,26 +1,22 @@
 """Main ADK agent implementation for story generation."""
 
-import asyncio
 import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 # Handle imports for both direct execution and module import
 try:
-    from .brain import Brain, BrainConfig, ReflectionInput
-    from .chapter_rag import ChapterRAG, format_excerpts
+    from .excerpts import format_excerpts
     from .llm_provider import get_llm_provider
     from .postgres_context import PostgresIndexWorker, PostgresStoryContext
     from .tools import (
         BrainstormingTool,
-        CharacterBrainstormingTool,
         ChatWithContextTool,
         EnhanceTextTool,
         EnhanceWizardInputTool,
         NextLineGenerationTool,
-        PlotBrainstormingTool,
         StoryChoicesTool,
     )
 except ImportError:
@@ -29,8 +25,7 @@ except ImportError:
     parent_dir = current_dir.parent.parent
     if str(parent_dir) not in sys.path:
         sys.path.insert(0, str(parent_dir))
-    from agents.storyAgent.brain import Brain, BrainConfig, ReflectionInput
-    from agents.storyAgent.chapter_rag import ChapterRAG, format_excerpts
+    from agents.storyAgent.excerpts import format_excerpts
     from agents.storyAgent.llm_provider import get_llm_provider
     from agents.storyAgent.postgres_context import (
         PostgresIndexWorker,
@@ -38,12 +33,10 @@ except ImportError:
     )
     from agents.storyAgent.tools import (
         BrainstormingTool,
-        CharacterBrainstormingTool,
         ChatWithContextTool,
         EnhanceTextTool,
         EnhanceWizardInputTool,
         NextLineGenerationTool,
-        PlotBrainstormingTool,
         StoryChoicesTool,
     )
 
@@ -69,19 +62,13 @@ class StoryAgent:
 
         self.location = location
 
-        # Shared brain resources — loaded once per process
+        # Shared providers — loaded once per process
         self._llm_provider = get_llm_provider(self.project_id, self.location)
         self._embedder = _load_embedder()
         self._db = _get_firestore_client(self.project_id)
 
         # Initialize tools
         self.brainstorm_tool = BrainstormingTool(
-            self.project_id, self.location, llm_provider=self._llm_provider
-        )
-        self.character_tool = CharacterBrainstormingTool(
-            self.project_id, self.location, llm_provider=self._llm_provider
-        )
-        self.plot_tool = PlotBrainstormingTool(
             self.project_id, self.location, llm_provider=self._llm_provider
         )
         self.next_line_tool = NextLineGenerationTool(
@@ -99,8 +86,6 @@ class StoryAgent:
         self.story_choices_tool = StoryChoicesTool(
             self.project_id, self.location, llm_provider=self._llm_provider
         )
-        # Chapter RAG shares the process-wide embedder + Firestore client.
-        self.chapter_rag = ChapterRAG(self._db, self._embedder)
         self.postgres_context = PostgresStoryContext()
         self.index_worker = PostgresIndexWorker(self.postgres_context, self._embedder)
 
@@ -119,18 +104,6 @@ class StoryAgent:
             if close is not None:
                 await close()
         await self.postgres_context.close()
-
-    def _make_brain(self, user_id: str, context_id: str) -> Brain:
-        return Brain(
-            config=BrainConfig(
-                user_id=user_id,
-                context_id=context_id,
-                project_id=self.project_id,
-            ),
-            llm_provider=self._llm_provider,
-            embedder=self._embedder,
-            db=self._db,
-        )
 
     async def generate_next_lines(
         self,
@@ -151,11 +124,7 @@ class StoryAgent:
         Returns:
             Dictionary containing the suggestions array.
         """
-        context = (
-            await self.postgres_context.context(story_id)
-            if self.postgres_context.enabled
-            else None
-        )
+        context = await self.postgres_context.context(story_id)
         return await self.next_line_tool.execute(
             story_id, content, cursorPosition, chapter_id, context
         )
@@ -179,43 +148,10 @@ class StoryAgent:
         Returns:
             Dictionary with generated ideas
         """
-        return await self.brainstorm_tool.execute(story_id, idea_type, prompt, count)
-
-    async def brainstorm_character(
-        self,
-        story_id: str,
-        role: Optional[str] = None,
-        archetype: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        Generate character ideas.
-
-        Args:
-            story_id: Firestore story document ID
-            role: Optional character role
-            archetype: Optional character archetype
-
-        Returns:
-            Dictionary with character profile
-        """
-        return await self.character_tool.execute(story_id, role, archetype)
-
-    async def brainstorm_plot(
-        self,
-        story_id: str,
-        plot_type: str = "conflict",
-    ) -> Dict[str, Any]:
-        """
-        Generate plot ideas.
-
-        Args:
-            story_id: Firestore story document ID
-            plot_type: Type of plot element
-
-        Returns:
-            Dictionary with plot suggestions
-        """
-        return await self.plot_tool.execute(story_id, plot_type)
+        context = await self.postgres_context.context(story_id)
+        return await self.brainstorm_tool.execute(
+            story_id, idea_type, prompt, count, context
+        )
 
     async def chat_with_context(
         self,
@@ -226,7 +162,7 @@ class StoryAgent:
         background_tasks=None,
     ) -> Dict[str, Any]:
         """
-        Generate chat response using story context with optional brain-augmented memory.
+        Generate a chat response from story context and retrieved excerpts.
 
         Args:
             story_id: Firestore story document ID
@@ -238,121 +174,39 @@ class StoryAgent:
         Returns:
             Dictionary containing response and context usage
         """
-        brain_context = None
-        brain = None
-        assembled = None
         chapter_excerpts = None
-        context_override = None
-
-        if self.postgres_context.enabled:
-            try:
-                context_override = await self.postgres_context.context(story_id)
-            except Exception:
-                logging.getLogger(__name__).exception(
-                    "postgres_context_failed story_id=%s", story_id
-                )
+        context = await self.postgres_context.context(story_id)
 
         if self._embedder is not None:
             log = logging.getLogger(__name__)
-
-            # Embed the message ONCE. Chapter retrieval and semantic memory both query
-            # on the full message, so they share this vector (episodic uses a truncated
-            # query and embeds its own). Saves one embedding API call per chat turn.
-            query_vec: Optional[List[float]] = None
             try:
                 query_vec = await self._embedder.embed(message)
             except Exception:
+                query_vec = None
                 log.warning(
                     "query embedding failed for story_id=%s; retrieval degraded",
                     story_id,
                 )
-
-            # The legacy Brain persists its memories in Firestore. PostgreSQL
-            # stories use the canonical pgvector path exclusively until memory
-            # gets its own migration, avoiding mixed-source context.
-            if not self.postgres_context.enabled:
+            if query_vec is not None:
                 try:
-                    brain = self._make_brain(user_id, story_id)
-                except Exception:
-                    brain = None
-                    log.warning("make_brain failed for story_id=%s", story_id)
-
-            # Chapter retrieval and brain assembly are independent → run concurrently.
-            async def _retrieve_excerpts():
-                if self.postgres_context.enabled:
                     excerpts = await self.postgres_context.retrieve(
+                        story_id, query_vec, top_k=4
+                    )
+                    chapter_excerpts = format_excerpts(excerpts) or None
+                except Exception:
+                    log.warning(
+                        "vector retrieval failed for story_id=%s, continuing "
+                        "without excerpts",
                         story_id,
-                        query_vec or await self._embedder.embed(message),
-                        top_k=4,
                     )
-                else:
-                    excerpts = await self.chapter_rag.retrieve(
-                        story_id, message, top_k=4, query_embedding=query_vec
-                    )
-                return format_excerpts(excerpts) or None
 
-            async def _assemble_brain():
-                if brain is None:
-                    return None
-                return await brain.assemble(
-                    message,
-                    action_hint="chatWithContext",
-                    query_embedding=query_vec,
-                )
-
-            excerpts_res, assemble_res = await asyncio.gather(
-                _retrieve_excerpts(), _assemble_brain(), return_exceptions=True
-            )
-
-            if isinstance(excerpts_res, Exception):
-                log.warning(
-                    "chapter_rag.retrieve failed for story_id=%s, continuing without excerpts",
-                    story_id,
-                )
-            else:
-                chapter_excerpts = excerpts_res
-
-            if isinstance(assemble_res, Exception):
-                log.warning(
-                    "Brain.assemble failed for story_id=%s, falling back", story_id
-                )
-                brain = None
-            elif assemble_res is not None:
-                assembled = assemble_res
-                brain_context = (
-                    assembled.text if _assembled_has_memory(assembled) else None
-                )
-                if brain_context:
-                    brain_context = (
-                        brain_context.split("\n=== CURRENT REQUEST ===")[0].strip()
-                        or None
-                    )
-                log.info(
-                    "Full brain_context for chat story_id=%s:\n%s",
-                    story_id,
-                    brain_context,
-                )
-
-        result = await self.chat_tool.execute(
+        return await self.chat_tool.execute(
             story_id,
             message,
             chat_history,
-            brain_context=brain_context,
             chapter_excerpts=chapter_excerpts,
-            context_override=context_override,
+            context_override=context,
         )
-
-        if brain is not None and assembled is not None and background_tasks is not None:
-            response_text = result.get("response", "")
-            if response_text:
-                ri = ReflectionInput(
-                    user_message=message,
-                    assistant_response=response_text,
-                    assembled_prompt=assembled,
-                )
-                background_tasks.add_task(brain.reflect, ri)
-
-        return result
 
     async def enhance_text(
         self,
@@ -373,11 +227,7 @@ class StoryAgent:
         Returns:
             Dictionary containing enhanced text
         """
-        context = (
-            await self.postgres_context.context(story_id)
-            if self.postgres_context.enabled
-            else None
-        )
+        context = await self.postgres_context.context(story_id)
         return await self.enhance_text_tool.execute(
             story_id, action, selected_text, chapter_id, context
         )
@@ -431,77 +281,21 @@ class StoryAgent:
             chapter_id: Optional chapter document ID for chapter-specific context
             turn_count: How many choices the user has selected (used for arc-aware prompting)
             user_id: User identifier for procedural memory scoping
-            background_tasks: FastAPI BackgroundTasks for async brain reflection
 
         Returns:
             For opening: {"storyId", "openingScene", "choices": [{label, sceneText}, ...]}
             For continuation: {"storyId", "choices": [{label, sceneText}, ...]}
             For ending: {"storyId", "choices": [{label, sceneText, isFinal: true}]}
         """
-        logger = logging.getLogger(__name__)
-        brain_context = None
-        brain = None
-        assembled = None
-
-        if self._embedder is not None and not self.postgres_context.enabled:
-            try:
-                logger.info(
-                    "Generating story choices for story_id=%s mode=%s", story_id, mode
-                )
-                brain = self._make_brain(user_id, story_id)
-                query = (
-                    f"{mode} scene. {current_content[:200]}"
-                    if current_content
-                    else f"{mode} scene"
-                )
-                assembled = await brain.assemble(
-                    query, action_hint="generateStoryChoices"
-                )
-                brain_context = (
-                    assembled.text if _assembled_has_memory(assembled) else None
-                )
-                if brain_context:
-                    brain_context = (
-                        brain_context.split("\n=== CURRENT REQUEST ===")[0].strip()
-                        or None
-                    )
-            except Exception:
-                logger.warning(
-                    "Brain assembly failed for generateStoryChoices story_id=%s, falling back to legacy context",
-                    story_id,
-                )
-
-        context = (
-            await self.postgres_context.context(story_id)
-            if self.postgres_context.enabled
-            else None
-        )
-        result = await self.story_choices_tool.execute(
+        context = await self.postgres_context.context(story_id)
+        return await self.story_choices_tool.execute(
             story_id,
             mode,
             current_content,
             chapter_id,
             turn_count,
-            brain_context=brain_context,
             context_override=context,
         )
-
-        if brain is not None and assembled is not None and background_tasks is not None:
-            prose = _extract_choices_prose(result)
-            if prose:
-                ri = ReflectionInput(
-                    user_message=f"Generate {mode} story choices",
-                    assistant_response=prose,
-                    assembled_prompt=assembled,
-                )
-                background_tasks.add_task(brain.reflect, ri)
-                logger.info(
-                    "Brain reflection scheduled for generateStoryChoices story_id=%s mode=%s",
-                    story_id,
-                    mode,
-                )
-
-        return result
 
     async def enhance_wizard_input(
         self,
@@ -511,69 +305,6 @@ class StoryAgent:
     ) -> Dict[str, Any]:
         """Enhance wizard input across premise/character/place/conflict/blueprint."""
         return await self.enhance_wizard_tool.execute(user_id, wizard_type, data)
-
-    async def index_chapter(
-        self,
-        story_id: str,
-        chapter_id: str,
-        title: str = "",
-        content: str = "",
-        chapter_number: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        """Embed a chapter's body into the vector index. Called by the chapter-write
-        trigger so retrieval cost is paid once per edit, not per chat message."""
-        if self._embedder is None:
-            logging.getLogger(__name__).info(
-                "index_chapter skipped (no embedder) story_id=%s chapter_id=%s",
-                story_id,
-                chapter_id,
-            )
-            return {"indexed": False, "chunks": 0, "reason": "no_embedder"}
-        chunks = await self.chapter_rag.index_chapter(
-            story_id, chapter_id, title, content, chapter_number
-        )
-        return {"indexed": True, "chunks": chunks, "chapterId": chapter_id}
-
-    async def delete_chapter_chunks(
-        self, story_id: str, chapter_id: str
-    ) -> Dict[str, Any]:
-        """Remove a chapter's chunks from the vector index (chapter deleted)."""
-        removed = await self.chapter_rag.delete_chapter(story_id, chapter_id)
-        return {"deleted": True, "chunks": removed, "chapterId": chapter_id}
-
-    async def index_entity(
-        self,
-        story_id: str,
-        kind: str,
-        entity_id: str,
-        data: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """Embed a metadata entity (character/place/plot) so chat can retrieve its
-        details on demand. Called by the entity-write trigger, once per edit."""
-        if self._embedder is None:
-            return {"indexed": False, "chunks": 0, "reason": "no_embedder"}
-        chunks = await self.chapter_rag.index_entity(
-            story_id, kind, entity_id, data or {}
-        )
-        return {"indexed": True, "chunks": chunks, "entityId": entity_id, "kind": kind}
-
-    async def delete_entity_chunks(
-        self, story_id: str, entity_id: str
-    ) -> Dict[str, Any]:
-        """Remove a metadata entity's chunks from the vector index (entity deleted)."""
-        removed = await self.chapter_rag.delete_entity(story_id, entity_id)
-        return {"deleted": True, "chunks": removed, "entityId": entity_id}
-
-    async def clear_memory(
-        self, story_id: str, user_id: str = "anonymous"
-    ) -> Dict[str, Any]:
-        """Clear all story-scoped brain memory. Global procedural is kept."""
-        brain = self._make_brain(user_id, story_id)
-        await brain.clear()
-        logging.getLogger(__name__).info(
-            "Brain memory cleared story_id=%s user_id=%s", story_id, user_id
-        )
-        return {"cleared": True, "storyId": story_id}
 
     async def execute_agent(
         self,
@@ -588,7 +319,6 @@ class StoryAgent:
         Args:
             action: Action to perform (brainstorm/enhanceText/etc.)
             parameters: Parameters for the action
-            background_tasks: Optional FastAPI BackgroundTasks for async brain reflection
 
         Returns:
             Result from the agent execution
@@ -600,7 +330,7 @@ class StoryAgent:
             sorted(parameters.keys()),
         )
 
-        # effective_user_id is only plumbed to actions that personalize via the brain
+        # effective_user_id is only plumbed to actions that need the caller
         # memory system or are billed per user (chat, story choices, wizard input,
         # clear memory). The other actions (summarizeChapter,
         # brainstorm*, generateNextLines, enhanceText) are stateless from the brain's
@@ -621,17 +351,6 @@ class StoryAgent:
                 self._param(parameters, "type", "idea_type"),
                 self._param(parameters, "prompt"),
                 self._param(parameters, "count", default=5),
-            )
-        if action == "brainstormCharacter":
-            return await self.brainstorm_character(
-                self._param(parameters, "storyId", "story_id"),
-                self._param(parameters, "role"),
-                self._param(parameters, "archetype"),
-            )
-        if action == "brainstormPlot":
-            return await self.brainstorm_plot(
-                self._param(parameters, "storyId", "story_id"),
-                self._param(parameters, "plotType", "plot_type", "conflict"),
             )
         if action == "generateNextLines":
             return await self.generate_next_lines(
@@ -673,41 +392,6 @@ class StoryAgent:
                 background_tasks=background_tasks,
             )
 
-        if action == "clearMemory":
-            return await self.clear_memory(
-                self._param(parameters, "storyId", "story_id"),
-                user_id=effective_user_id,
-            )
-
-        if action == "indexChapter":
-            return await self.index_chapter(
-                self._param(parameters, "storyId", "story_id"),
-                self._param(parameters, "chapterId", "chapter_id"),
-                self._param(parameters, "title", default="") or "",
-                self._param(parameters, "content", default="") or "",
-                self._param(parameters, "chapterNumber", "chapter_number"),
-            )
-
-        if action == "deleteChapterChunks":
-            return await self.delete_chapter_chunks(
-                self._param(parameters, "storyId", "story_id"),
-                self._param(parameters, "chapterId", "chapter_id"),
-            )
-
-        if action == "indexEntity":
-            return await self.index_entity(
-                self._param(parameters, "storyId", "story_id"),
-                self._param(parameters, "kind"),
-                self._param(parameters, "entityId", "entity_id"),
-                self._param(parameters, "data", default={}) or {},
-            )
-
-        if action == "deleteEntityChunks":
-            return await self.delete_entity_chunks(
-                self._param(parameters, "storyId", "story_id"),
-                self._param(parameters, "entityId", "entity_id"),
-            )
-
         raise ValueError(f"Unknown action: {action}")
 
     @staticmethod
@@ -725,36 +409,15 @@ class StoryAgent:
         return default
 
 
-def _assembled_has_memory(assembled) -> bool:
-    """Return True if the assembled prompt contains at least one real memory layer."""
-    return bool(
-        assembled.semantic_count
-        or assembled.episodic_count
-        or assembled.working_injected
-        or assembled.procedural_injected
-    )
-
-
-def _extract_choices_prose(result: dict) -> str:
-    """Extract narrative prose from a generateStoryChoices result for brain reflection."""
-    parts = []
-    if result.get("openingScene"):
-        parts.append(result["openingScene"])
-    for choice in result.get("choices", []):
-        if choice.get("sceneText"):
-            parts.append(choice["sceneText"])
-    return "\n\n".join(parts)
-
-
 def _load_embedder():
     """Load embedding provider once. Returns None if unavailable."""
-    from agents.storyAgent.brain.embedding_provider import (  # noqa: PLC0415
+    from agents.storyAgent.embedding_provider import (  # noqa: PLC0415
         get_embedding_provider,
         verify_embedding_dimension,
     )
 
     embedder = get_embedding_provider(os.getenv("GOOGLE_AI_STUDIO_API_KEY"))
-    # One dimension contract for both chapter RAG and brain memory: fail loud here
+    # One dimension contract for every embedding consumer: fail loud here
     # rather than silently lose recall later (mixed-dim vectors score 0.0).
     verify_embedding_dimension(embedder)
     return embedder

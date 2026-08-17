@@ -142,8 +142,8 @@ def test_agent_execute_returns_429_when_rate_limited(monkeypatch):
 
     with TestClient(test_app) as client:
         payload = {
-            "action": "brainstormPlot",
-            "parameters": {"storyId": "s1"},
+            "action": "brainstormIdeas",
+            "parameters": {"storyId": "s1", "type": "theme"},
             "user_id": "rate-test-user",
         }
         assert client.post("/agent/execute", json=payload).status_code == 200
@@ -164,7 +164,10 @@ def test_agent_execute_rejects_missing_user_id(monkeypatch):
     with TestClient(test_app) as client:
         response = client.post(
             "/agent/execute",
-            json={"action": "brainstormPlot", "parameters": {"storyId": "s1"}},
+            json={
+                "action": "brainstormIdeas",
+                "parameters": {"storyId": "s1", "type": "theme"},
+            },
         )
 
     assert response.status_code == 422
@@ -179,8 +182,8 @@ def test_agent_execute_rejects_empty_user_id(monkeypatch):
         response = client.post(
             "/agent/execute",
             json={
-                "action": "brainstormPlot",
-                "parameters": {"storyId": "s1"},
+                "action": "brainstormIdeas",
+                "parameters": {"storyId": "s1", "type": "theme"},
                 "user_id": "",
             },
         )

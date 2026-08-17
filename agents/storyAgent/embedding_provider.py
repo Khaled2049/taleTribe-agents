@@ -131,7 +131,8 @@ def get_embedding_provider(api_key: str | None = None) -> EmbeddingProvider | No
         return provider
     except ImportError:
         logger.warning(
-            "No embedding provider available; brain memory retrieval disabled"
+            "No embedding provider available; vector retrieval and outbox "
+            "indexing are disabled"
         )
         return None
 
@@ -147,8 +148,8 @@ def verify_embedding_dimension(embedder: EmbeddingProvider | None) -> None:
     """
     if embedder is None:
         logger.warning(
-            "No embedding provider available — chapter RAG and brain memory "
-            "retrieval are DISABLED. Set GOOGLE_AI_STUDIO_API_KEY to enable them."
+            "No embedding provider available — pgvector retrieval and outbox "
+            "indexing are DISABLED. Set GOOGLE_AI_STUDIO_API_KEY to enable them."
         )
         return
 

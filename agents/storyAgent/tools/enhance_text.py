@@ -4,7 +4,6 @@ import logging
 from typing import Any, Dict, Optional
 
 from ..action_schemas import MAX_PROMPT_CHARS
-from ..context_builder import StoryContextBuilder
 from ..llm_provider import LLMProvider, get_llm_provider
 from ..utils import sanitize_for_prompt
 
@@ -27,7 +26,6 @@ class EnhanceTextTool:
         self.llm_provider: LLMProvider = llm_provider or get_llm_provider(
             project_id, location
         )
-        self.context_builder = StoryContextBuilder(project_id)
         self._db = db
 
     def _get_chapter(self, story_id: str, chapter_id: str) -> Optional[Dict[str, Any]]:
@@ -116,7 +114,9 @@ class EnhanceTextTool:
                 f"Invalid action: {action}. Must be one of {valid_actions}"
             )
 
-        context = context_override or self.context_builder.build_story_context(story_id)
+        if context_override is None:
+            raise ValueError("story context is required")
+        context = context_override
         story_data = context.get("story", {})
 
         if chapter_id:

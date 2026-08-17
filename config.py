@@ -81,6 +81,15 @@ class Settings(BaseSettings):
     indexing_worker_enabled: bool = False
     indexing_worker_interval_seconds: float = 2.0
 
+    # story-data's HTTP API, which the MCP read tools go through. Separate from
+    # story_data_database_url above: the indexing worker owns rows directly,
+    # while MCP is a caller like any other and must go through the service so
+    # ownership and validation stay in one place.
+    story_data_url: str = ""
+    # Shared secret that lets MCP assert X-User-ID. story-data ignores the
+    # header without it.
+    story_data_service_token: str = ""
+
     # Server port
     port: int = 8000
 
@@ -155,6 +164,31 @@ class Settings(BaseSettings):
                     "ENABLE_MCP=true (the frontend consent page the OAuth "
                     "authorization flow redirects to)"
                 )
+            if self.enable_mcp and not self.story_data_url.strip():
+                raise ValueError(
+                    "STORY_DATA_URL must be set when ENVIRONMENT=production and "
+                    "ENABLE_MCP=true (the MCP read tools serve story content "
+                    "from story-data; without it every read fails)"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def check_mcp_write_backend(self) -> "Settings":
+        """Refuse the split-brain configuration.
+
+        The MCP read tools go through story-data; the write tools still write
+        Firestore. Enabling writes while reads come from PostgreSQL would let a
+        client create a chapter and then be told it does not exist, so the
+        combination is rejected outright rather than left as a footgun. Lifted
+        when the write tools are ported.
+        """
+        if self.enable_mcp_writes and self.story_data_url.strip():
+            raise ValueError(
+                "ENABLE_MCP_WRITES cannot be enabled yet: the MCP read tools "
+                "read story-data (STORY_DATA_URL) while the write tools still "
+                "write Firestore, so writes would be invisible to reads. Port "
+                "the write tools first, or unset ENABLE_MCP_WRITES."
+            )
         return self
 
     # ------------------------------------------------------------------

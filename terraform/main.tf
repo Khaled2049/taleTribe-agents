@@ -41,9 +41,19 @@ data "google_service_account" "cloud_run_sa" {
   project    = var.project_id
 }
 
+data "google_secret_manager_secret" "story_data_service_token" {
+  secret_id = "story-data-service-token"
+}
+
 # IAM: Allow Cloud Run service account to read secrets from Secret Manager
 resource "google_secret_manager_secret_iam_member" "secret_access" {
   secret_id = data.google_secret_manager_secret.google_ai_studio_api_key.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${data.google_service_account.cloud_run_sa.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "story_data_service_token_access" {
+  secret_id = data.google_secret_manager_secret.story_data_service_token.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${data.google_service_account.cloud_run_sa.email}"
 }
@@ -154,6 +164,13 @@ resource "google_cloud_run_v2_service" "app" {
         value = var.mcp_consent_url
       }
 
+      # story-data's HTTP API. The MCP read tools serve story content from it,
+      # so ENABLE_MCP without this fails startup rather than reading nothing.
+      env {
+        name  = "STORY_DATA_URL"
+        value = var.story_data_url
+      }
+
       # OAuth issuer == this service's public URL (also the MCP resource base).
       env {
         name  = "MCP_ISSUER_URL"
@@ -204,6 +221,17 @@ resource "google_cloud_run_v2_service" "app" {
       env {
         name  = "MAX_REQUESTS_PER_MINUTE_PER_USER"
         value = tostring(var.max_requests_per_minute_per_user)
+      }
+
+      # Lets MCP assert X-User-ID to story-data. Must match SERVICE_TOKEN there.
+      env {
+        name = "STORY_DATA_SERVICE_TOKEN"
+        value_source {
+          secret_key_ref {
+            secret  = data.google_secret_manager_secret.story_data_service_token.secret_id
+            version = "latest"
+          }
+        }
       }
 
       # Secret from Secret Manager (accessed via service account)

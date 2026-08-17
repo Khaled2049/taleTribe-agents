@@ -22,15 +22,87 @@ from structlog.testing import capture_logs  # noqa: E402
 from mcp_server import app as mcp_app  # noqa: E402
 from mcp_server import blocks as blocks_module  # noqa: E402
 from mcp_server import data  # noqa: E402
+from mcp_server import story_data  # noqa: E402
 from mcp_server import writes  # noqa: E402
 from mcp_server import tools as tools_module  # noqa: E402
 from mcp_server.tools import UNTRUSTED_NOTICE, register_tools  # noqa: E402
 from rate_limit import PerUserRateLimiter  # noqa: E402
 from tests import mcp_fakes  # noqa: E402
-from tests.mcp_fakes import FakeFirestoreClient  # noqa: E402
+from tests.mcp_fakes import FakeFirestoreClient, FakeStoryData  # noqa: E402
 
 UID_A = "user-a"
 UID_B = "user-b"
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_story_data():
+    """Leave no client installed between tests.
+
+    data.py reads through a process-wide client, so a fake left behind by one
+    test would silently serve the next. Tests that need one call
+    _use_story_data() explicitly.
+    """
+    story_data.configure(None)
+    yield
+    story_data.configure(None)
+
+
+def _use_story_data(fake: FakeStoryData) -> FakeStoryData:
+    story_data.configure(fake)
+    return fake
+
+
+def _seeded_story_data() -> FakeStoryData:
+    """The read fixture, in story-data's shapes.
+
+    Mirrors the Firestore fixture it replaces: two stories owned by user-a (one
+    with chapters and a character), and one owned by user-b that must stay
+    invisible.
+    """
+    fake = FakeStoryData()
+    fake.seed_story(
+        "story-a",
+        UID_A,
+        title="Story A",
+        description="d" * 400,
+        authorName="Author A",
+        published=False,
+        updatedAt="2026-07-01T00:00:00Z",
+    )
+    fake.seed_chapter(
+        "story-a",
+        "ch1",
+        title="Chapter One",
+        position=1.0,
+        wordCount=5,
+        content="0123456789" * 2500,  # 25_000 chars
+    )
+    fake.seed_chapter(
+        "story-a",
+        "ch2",
+        title="Chapter Two",
+        position=2.0,
+        wordCount=3,
+        content="short",
+    )
+    fake.seed_entity(
+        "story-a",
+        "characters",
+        "char1",
+        name="Mira",
+        personality="p" * 400,
+        soul="steadfast",
+        relationships=[{"name": "Bran", "relation": "brother"}],
+    )
+    fake.seed_story("story-c", UID_A, title="Story C", updatedAt="2026-07-20T00:00:00Z")
+    fake.seed_chapter(
+        "story-c", "cc1", title="Only Chapter", position=1.0, content="hello"
+    )
+    fake.seed_story("story-b", UID_B, title="Story B")
+    fake.seed_chapter(
+        "story-b", "chb", title="Secret", position=1.0, content="secret text"
+    )
+    return _use_story_data(fake)
 
 
 def _seeded_db() -> FakeFirestoreClient:
@@ -104,9 +176,9 @@ def _seeded_db() -> FakeFirestoreClient:
 # ---------------------------------------------------------------------------
 
 
-def test_list_stories_scoped_to_owner_and_sorted():
-    db = _seeded_db()
-    stories = data.list_stories_for_user(db, UID_A, limit=20)
+async def test_list_stories_scoped_to_owner_and_sorted():
+    _seeded_story_data()
+    stories = await data.list_stories_for_user(UID_A, limit=20)
     assert [s["story_id"] for s in stories] == ["story-c", "story-a"]  # newest first
     assert all("Story B" != s["title"] for s in stories)
     # Long description is truncated with an ellipsis.
@@ -115,53 +187,87 @@ def test_list_stories_scoped_to_owner_and_sorted():
     assert story_a["description"].endswith("…")
 
 
-def test_list_stories_limit_clamped():
-    db = _seeded_db()
-    assert len(data.list_stories_for_user(db, UID_A, limit=1)) == 1
-    assert len(data.list_stories_for_user(db, UID_A, limit=99999)) == 2
+async def test_list_stories_limit_clamped():
+    _seeded_story_data()
+    assert len(await data.list_stories_for_user(UID_A, limit=1)) == 1
+    assert len(await data.list_stories_for_user(UID_A, limit=99999)) == 2
 
 
-def test_list_stories_ranks_across_the_whole_collection():
-    """Regression: ordering must happen in Firestore, not over a client-side page.
+async def test_list_stories_ranks_across_the_whole_collection():
+    """Ordering must be applied before the limit, not over an arbitrary slice.
 
-    With more stories than the page size, a sort-after-fetch would rank only an
-    arbitrary slice and could miss the genuinely newest story entirely.
+    story-data returns the caller's stories already ordered by updated_at DESC,
+    so the cap here can only ever trim the tail. With more stories than the cap,
+    a sort-after-trim would miss the genuinely newest one.
     """
-    db = FakeFirestoreClient()
+    fake = _use_story_data(FakeStoryData())
     for i in range(data.MAX_STORY_LIST_LIMIT + 20):
-        db.seed(
-            f"stories/story-{i:04d}",
-            {
-                "userId": UID_A,
-                "title": f"Story {i}",
-                # Newest story sorts LAST by document id, so it only surfaces
-                # if the ordering is applied before the limit.
-                "updatedAt": datetime(2026, 1, 1, tzinfo=timezone.utc)
-                + timedelta(days=i),
-            },
+        fake.seed_story(
+            f"story-{i:04d}",
+            UID_A,
+            title=f"Story {i}",
+            updatedAt=(
+                f"2026-01-01T00:00:{i:02d}Z"
+                if i < 60
+                else f"2026-01-02T{i - 60:02d}:00:00Z"
+            ),
         )
-    stories = data.list_stories_for_user(db, UID_A, limit=3)
+    stories = await data.list_stories_for_user(UID_A, limit=3)
     assert [s["title"] for s in stories] == ["Story 119", "Story 118", "Story 117"]
 
 
-def test_idor_story_of_other_user_is_not_found():
-    db = _seeded_db()
+async def test_idor_story_of_other_user_is_not_found():
+    _seeded_story_data()
     with pytest.raises(data.StoryNotFoundError):
-        data.get_owned_story(db, "story-b", UID_A)
+        await data.get_owned_story("story-b", UID_A)
     with pytest.raises(data.StoryNotFoundError):
-        data.get_story_overview(db, "story-b", UID_A)
+        await data.get_story_overview("story-b", UID_A)
     with pytest.raises(data.StoryNotFoundError):
-        data.list_chapters(db, "story-b", UID_A)
+        await data.list_chapters("story-b", UID_A)
     with pytest.raises(data.StoryNotFoundError):
-        data.get_chapter(db, "story-b", "chb", UID_A, 0, 1000)
+        await data.get_chapter("story-b", "chb", UID_A, 0, 1000)
     with pytest.raises(data.StoryNotFoundError):
-        data.list_entities(db, "story-b", UID_A, "characters")
+        await data.list_entities("story-b", UID_A, "characters")
 
 
-def test_missing_story_indistinguishable_from_not_owned():
-    db = _seeded_db()
+async def test_missing_story_indistinguishable_from_not_owned():
+    _seeded_story_data()
     with pytest.raises(data.StoryNotFoundError):
-        data.get_owned_story(db, "no-such-story", UID_A)
+        await data.get_owned_story("no-such-story", UID_A)
+
+
+async def test_published_story_of_another_user_is_still_not_found():
+    """The check that stops the port from widening MCP's scope.
+
+    story-data serves a *published* story to any caller so the public reader can
+    use the same endpoints. MCP is owner-only on every tool, so get_owned_story
+    re-checks ownerId. Without that check this test returns a story, and MCP
+    quietly becomes "every published story on the platform".
+    """
+    fake = _seeded_story_data()
+    fake.stories["story-b"]["published"] = True
+    # Confirm the fake really does expose it, so this is testing our check and
+    # not an artifact of the fake refusing non-owners anyway.
+    assert await fake.get_story(UID_A, "story-b")
+
+    with pytest.raises(data.StoryNotFoundError):
+        await data.get_owned_story("story-b", UID_A)
+    with pytest.raises(data.StoryNotFoundError):
+        await data.get_chapter("story-b", "chb", UID_A, 0, 1000)
+    with pytest.raises(data.StoryNotFoundError):
+        await data.list_chapters("story-b", UID_A)
+
+
+async def test_unreachable_story_data_is_an_error_not_an_empty_story():
+    """A transport failure must not read as "you have no stories"."""
+
+    class Broken(FakeStoryData):
+        async def list_stories(self, uid):
+            raise story_data.StoryDataError("connection refused")
+
+    _use_story_data(Broken())
+    with pytest.raises(story_data.StoryDataError):
+        await data.list_stories_for_user(UID_A, limit=20)
 
 
 # ---------------------------------------------------------------------------
@@ -169,123 +275,164 @@ def test_missing_story_indistinguishable_from_not_owned():
 # ---------------------------------------------------------------------------
 
 
-def test_story_overview_uses_sorted_chapter_index():
-    db = _seeded_db()
-    overview = data.get_story_overview(db, "story-a", UID_A)
+async def test_story_overview_lists_chapters_in_reading_order():
+    _seeded_story_data()
+    overview = await data.get_story_overview("story-a", UID_A)
     assert overview["title"] == "Story A"
     assert [c["title"] for c in overview["chapters"]] == [
         "Chapter One",
         "Chapter Two",
     ]
+    # chapter_count is derived from the index; story-data has no count column.
+    assert overview["chapter_count"] == 2
+    assert overview["author"] == "Author A"
+    assert overview["chapters_truncated"] is False
 
 
-def test_story_overview_falls_back_to_projected_chapters():
-    db = _seeded_db()
-    overview = data.get_story_overview(db, "story-c", UID_A)
+async def test_story_overview_numbers_chapters_by_position():
+    """chapter_number is the ordinal, not the position key.
+
+    story-data has no chapterNumber column, and `position` cannot stand in for
+    one: it keeps gaps after a delete and takes fractional values on an insert.
+    """
+    fake = _use_story_data(FakeStoryData())
+    fake.seed_story("s", UID_A, title="Gappy")
+    fake.seed_chapter("s", "a", title="First", position=1.0)
+    fake.seed_chapter("s", "b", title="Second", position=7.5)
+    fake.seed_chapter("s", "c", title="Third", position=99.0)
+
+    overview = await data.get_story_overview("s", UID_A)
+    assert [c["chapter_number"] for c in overview["chapters"]] == [1, 2, 3]
+    assert [c["order"] for c in overview["chapters"]] == [1.0, 7.5, 99.0]
+
+
+async def test_story_overview_on_a_story_with_one_chapter():
+    _seeded_story_data()
+    overview = await data.get_story_overview("story-c", UID_A)
     assert [c["title"] for c in overview["chapters"]] == ["Only Chapter"]
     assert overview["chapters_truncated"] is False
 
 
-def test_story_overview_from_chapter_index_is_never_truncated():
-    """The denormalized index is rebuilt uncapped, so that path is complete."""
-    db = _seeded_db()
-    assert data.get_story_overview(db, "story-a", UID_A)["chapters_truncated"] is False
-
-
-def test_list_chapters_sorted_with_ids():
-    db = _seeded_db()
-    page = data.list_chapters(db, "story-a", UID_A)
+async def test_list_chapters_sorted_with_ids():
+    _seeded_story_data()
+    page = await data.list_chapters("story-a", UID_A)
     assert [c["chapter_id"] for c in page.items] == ["ch1", "ch2"]
     assert page.items[0]["word_count"] == 5
+    assert page.items[0]["chapter_number"] == 1
     assert "content" not in page.items[0]
     assert page.truncated is False
 
 
-def test_get_chapter_pagination_arithmetic():
-    db = _seeded_db()
-    first = data.get_chapter(db, "story-a", "ch1", UID_A, 0, 10_000)
+async def test_list_chapters_does_not_fetch_chapter_bodies():
+    """Regression: listing a book must not transfer every word of it.
+
+    story-data's default chapter listing includes full content, so the index
+    request has to ask for content=false. Without it a table of contents costs
+    the whole manuscript.
+    """
+    fake = _seeded_story_data()
+    await data.list_chapters("story-a", UID_A)
+    index_calls = [
+        params
+        for path, params in fake.requests
+        if path == "/v1/stories/story-a/chapters"
+    ]
+    assert index_calls, "expected the chapter index to be requested"
+    assert all(params.get("content") == "false" for params in index_calls)
+
+
+async def test_get_chapter_pagination_arithmetic():
+    _seeded_story_data()
+    first = await data.get_chapter("story-a", "ch1", UID_A, 0, 10_000)
     assert first["total_chars"] == 25_000
     assert len(first["content"]) == 10_000
     assert first["next_offset"] == 10_000
 
-    last = data.get_chapter(db, "story-a", "ch1", UID_A, 20_000, 10_000)
+    last = await data.get_chapter("story-a", "ch1", UID_A, 20_000, 10_000)
     assert len(last["content"]) == 5_000
     assert last["next_offset"] is None
 
     # Windows tile the content exactly.
-    middle = data.get_chapter(db, "story-a", "ch1", UID_A, 10_000, 10_000)
+    middle = await data.get_chapter("story-a", "ch1", UID_A, 10_000, 10_000)
     full = first["content"] + middle["content"] + last["content"]
     assert full == "0123456789" * 2500
 
 
-def test_get_chapter_clamps_inputs():
-    db = _seeded_db()
-    clamped = data.get_chapter(db, "story-a", "ch1", UID_A, -5, 999_999)
+async def test_get_chapter_clamps_inputs():
+    _seeded_story_data()
+    clamped = await data.get_chapter("story-a", "ch1", UID_A, -5, 999_999)
     assert clamped["offset"] == 0
     assert len(clamped["content"]) == 25_000  # max_chars clamped to 50k > total
-    missing = pytest.raises(
-        data.EntityNotFoundError, data.get_chapter, db, "story-a", "nope", UID_A, 0, 10
-    )
-    assert missing
+    with pytest.raises(data.EntityNotFoundError):
+        await data.get_chapter("story-a", "nope", UID_A, 0, 10)
 
 
-def _seed_long_book(db, story_id: str = "story-long") -> int:
-    """A story with more chapters than the cap, and NO chapterIndex.
+async def test_get_chapter_reports_its_reading_order_number():
+    _seeded_story_data()
+    second = await data.get_chapter("story-a", "ch2", UID_A, 0, 10)
+    assert second["chapter_number"] == 2
+    assert second["order"] == 2.0
 
-    Document ids run opposite to `order`, which is what makes the ordering
-    testable: a truncate-before-sort read returns the END of the book by
-    document id and drops the beginning entirely.
+
+def _seed_long_book(fake: FakeStoryData, story_id: str = "story-long") -> int:
+    """A story with more chapters than the cap.
+
+    Ids run opposite to position, so a truncate-before-sort read would return the
+    END of the book and drop the beginning entirely.
     """
     total = data.COLLECTION_FETCH_LIMIT + 50
-    db.seed(f"stories/{story_id}", {"userId": UID_A, "title": "Long Book"})
+    fake.seed_story(story_id, UID_A, title="Long Book")
     for i in range(total):
-        order = total - i
-        db.seed(
-            f"stories/{story_id}/chapters/ch-{i:04d}",
-            {"title": f"Chapter {order}", "order": order, "content": "x"},
+        position = total - i
+        fake.seed_chapter(
+            story_id,
+            f"ch-{i:04d}",
+            title=f"Chapter {position}",
+            position=float(position),
+            content="x",
         )
     return total
 
 
-def test_list_chapters_ranks_across_the_whole_collection():
-    """The cap must slice reading order, not document-id order."""
-    db = _seeded_db()
-    _seed_long_book(db)
+async def test_list_chapters_ranks_across_the_whole_collection():
+    """The cap must slice reading order, not insertion order."""
+    fake = _seeded_story_data()
+    _seed_long_book(fake)
 
-    page = data.list_chapters(db, "story-long", UID_A)
+    page = await data.list_chapters("story-long", UID_A)
 
     assert len(page.items) == data.COLLECTION_FETCH_LIMIT
     assert page.truncated is True
     # Chapter 1 is present and first, rather than the book opening at chapter 51.
-    assert [c["order"] for c in page.items] == list(
-        range(1, data.COLLECTION_FETCH_LIMIT + 1)
-    )
+    assert [c["order"] for c in page.items] == [
+        float(n) for n in range(1, data.COLLECTION_FETCH_LIMIT + 1)
+    ]
 
 
-def test_story_overview_fallback_reports_truncation():
-    db = _seeded_db()
-    _seed_long_book(db)
-    overview = data.get_story_overview(db, "story-long", UID_A)
+async def test_story_overview_reports_truncation():
+    fake = _seeded_story_data()
+    _seed_long_book(fake)
+    overview = await data.get_story_overview("story-long", UID_A)
     assert overview["chapters_truncated"] is True
     assert len(overview["chapters"]) == data.COLLECTION_FETCH_LIMIT
-    assert overview["chapters"][0]["order"] == 1
+    assert overview["chapters"][0]["order"] == 1.0
 
 
-def test_list_entities_reports_truncation():
-    """Entities can't be ordered server-side, so the flag is the whole guarantee."""
-    db = _seeded_db()
+async def test_list_entities_reports_truncation():
+    _seeded_story_data()
+    fake = story_data.client()
     for i in range(data.COLLECTION_FETCH_LIMIT + 5):
-        db.seed(f"stories/story-a/plots/pl-{i:04d}", {"title": f"Plot {i}"})
+        fake.seed_entity("story-a", "plots", f"pl-{i:04d}", name=f"Plot {i}")
 
-    page = data.list_entities(db, "story-a", UID_A, "plots")
+    page = await data.list_entities("story-a", UID_A, "plots")
 
     assert len(page.items) == data.COLLECTION_FETCH_LIMIT
     assert page.truncated is True
 
 
-def test_list_entities_descriptor_and_sorting():
-    db = _seeded_db()
-    page = data.list_entities(db, "story-a", UID_A, "characters")
+async def test_list_entities_descriptor_and_sorting():
+    _seeded_story_data()
+    page = await data.list_entities("story-a", UID_A, "characters")
     assert page.items == [
         {
             "entity_id": "char1",
@@ -298,15 +445,17 @@ def test_list_entities_descriptor_and_sorting():
     assert page.truncated is False
 
 
-def test_list_entities_survives_non_string_names():
-    """A name Firestore holds as a non-string must not break the sort."""
-    db = _seeded_db()
-    db.seed("stories/story-a/places/p1", {"name": 7, "description": "a tower"})
-    db.seed("stories/story-a/places/p2", {"title": True, "description": "a moor"})
-    db.seed("stories/story-a/places/p3", {"name": "   ", "description": "a fen"})
-    db.seed("stories/story-a/places/p4", {"name": "Harbor"})
+async def test_list_entities_survives_non_string_names():
+    """A name that is not a string must not break the sort."""
+    fake = _seeded_story_data()
+    fake.seed_entity("story-a", "places", "p1", name=7, description="a tower")
+    fake.seed_entity(
+        "story-a", "places", "p2", name=None, title=True, description="a moor"
+    )
+    fake.seed_entity("story-a", "places", "p3", name="   ", description="a fen")
+    fake.seed_entity("story-a", "places", "p4", name="Harbor")
 
-    entities = data.list_entities(db, "story-a", UID_A, "places").items
+    entities = (await data.list_entities("story-a", UID_A, "places")).items
 
     by_id = {e["entity_id"]: e["name"] for e in entities}
     assert by_id["p1"] == "7"  # coerced, not crashed
@@ -316,10 +465,10 @@ def test_list_entities_survives_non_string_names():
     assert [e["name"] for e in entities] == ["7", "Harbor", "Unnamed", "Unnamed"]
 
 
-def test_list_entities_falls_back_to_title():
-    db = _seeded_db()
-    db.seed("stories/story-a/plots/pl1", {"title": "The Reckoning"})
-    page = data.list_entities(db, "story-a", UID_A, "plots")
+async def test_list_entities_falls_back_to_title():
+    fake = _seeded_story_data()
+    fake.seed_entity("story-a", "plots", "pl1", name=None, title="The Reckoning")
+    page = await data.list_entities("story-a", UID_A, "plots")
     assert page.items == [
         {"entity_id": "pl1", "name": "The Reckoning", "descriptor": None}
     ]
@@ -367,88 +516,75 @@ def test_tool_entity_type_literal_matches_collections():
     assert set(get_args(EntityType)) == set(data.ENTITY_COLLECTIONS)
 
 
-def test_list_entities_rejects_unknown_type():
-    db = _seeded_db()
+async def test_list_entities_rejects_unknown_type():
+    _seeded_story_data()
     with pytest.raises(ValueError):
-        data.list_entities(db, "story-a", UID_A, "chapters")
+        await data.list_entities("story-a", UID_A, "chapters")
 
 
-def test_get_entity_returns_story_content():
-    db = _seeded_db()
-    entity = data.get_entity(db, "story-a", UID_A, "characters", "char1")
+async def test_get_entity_returns_story_content():
+    _seeded_story_data()
+    entity = await data.get_entity("story-a", UID_A, "characters", "char1")
     assert entity["name"] == "Mira"
     assert entity["soul"] == "steadfast"
     assert entity["relationships"] == [{"name": "Bran", "relation": "brother"}]
-    assert "embedding" not in entity
     with pytest.raises(data.EntityNotFoundError):
-        data.get_entity(db, "story-a", UID_A, "characters", "nope")
+        await data.get_entity("story-a", UID_A, "characters", "nope")
 
 
-def test_get_entity_projects_instead_of_passing_through():
+async def test_get_entity_projects_instead_of_passing_through():
     """Internal bookkeeping must not reach the client, named or not.
 
-    The old denylist popped only `embedding`, so it shipped these as noise —
-    and would have shipped any future internal field automatically.
+    The projection is what makes that structural: a column added to story-data
+    cannot start appearing in tool output without being listed here.
     """
-    db = _seeded_db()
-    db.seed(
-        "stories/story-a/characters/char2",
-        {
-            "name": "Bran",
-            "personality": "wry",
-            "artUrl": "https://example.test/bran.png",
-            # Internal bookkeeping the client has no use for:
-            "userId": UID_A,
-            "storyId": "story-a",
-            "signature": "abc123",
-            "embeddingUpdatedAt": "2026-07-01T00:00:00Z",
-            "embedding": [0.1, 0.2],
-        },
+    fake = _seeded_story_data()
+    fake.seed_entity(
+        "story-a",
+        "characters",
+        "char2",
+        name="Bran",
+        personality="wry",
+        artUrl="https://example.test/bran.png",
+        # Internal bookkeeping the client has no use for:
+        storyId="story-a",
+        signature="abc123",
+        embeddingUpdatedAt="2026-07-01T00:00:00Z",
     )
-    entity = data.get_entity(db, "story-a", UID_A, "characters", "char2")
+    entity = await data.get_entity("story-a", UID_A, "characters", "char2")
 
-    assert entity["personality"] == "wry"
+    assert entity["name"] == "Bran"
     assert entity["artUrl"] == "https://example.test/bran.png"
-    for leaked in ("userId", "storyId", "signature", "embeddingUpdatedAt", "embedding"):
-        assert leaked not in entity, f"{leaked} leaked into the tool result"
+    for internal in ("storyId", "signature", "embeddingUpdatedAt", "revision"):
+        assert internal not in entity, f"{internal} leaked into tool output"
 
 
-def test_get_entity_survives_a_firestore_vector_in_any_field():
-    """A raw Firestore type outside `embedding` used to break serialization.
-
-    Embeddings are stored as firestore_v1.vector.Vector, which is not JSON
-    serializable; the projection is what makes that structurally impossible
-    rather than dependent on remembering the field's name.
-    """
-    from google.cloud.firestore_v1.vector import Vector
-
-    db = _seeded_db()
-    db.seed(
-        "stories/story-a/places/p1",
-        {
-            "name": "The Tower",
-            "description": "tall",
-            "embedding": Vector([0.1, 0.2]),
-            "styleVector": Vector([0.3, 0.4]),  # a field no denylist would name
-        },
+async def test_get_entity_omits_empty_values():
+    fake = _seeded_story_data()
+    fake.seed_entity(
+        "story-a",
+        "places",
+        "p2",
+        name="Bare",
+        description="",
+        atmosphere=None,
+        history="damp",
     )
-    entity = data.get_entity(db, "story-a", UID_A, "places", "p1")
-
-    assert entity["description"] == "tall"
-    assert "styleVector" not in entity
-    json.dumps(entity)  # would raise TypeError on a Vector
-
-
-def test_get_entity_omits_empty_values():
-    db = _seeded_db()
-    db.seed(
-        "stories/story-a/places/p2",
-        {"name": "Bare", "description": "", "atmosphere": None, "history": "damp"},
-    )
-    entity = data.get_entity(db, "story-a", UID_A, "places", "p2")
+    entity = await data.get_entity("story-a", UID_A, "places", "p2")
     assert entity["history"] == "damp"
     assert "description" not in entity
     assert "atmosphere" not in entity
+
+
+async def test_get_entity_is_owner_only_even_when_published():
+    """Worldbuilding is owner-only in story-data, and must stay so through MCP."""
+    fake = _seeded_story_data()
+    fake.stories["story-b"]["published"] = True
+    fake.seed_entity("story-b", "characters", "secret", name="Hidden")
+    with pytest.raises(data.StoryNotFoundError):
+        await data.get_entity("story-b", UID_A, "characters", "secret")
+    with pytest.raises(data.StoryNotFoundError):
+        await data.list_entities("story-b", UID_A, "characters")
 
 
 def test_entity_content_fields_track_the_shared_schema():
@@ -484,6 +620,17 @@ def _tool_server(
     return mcp
 
 
+def _read_tool_server(max_rpm: int = 1000, **kwargs) -> FastMCP:
+    """A tool server whose reads come from story-data.
+
+    The Firestore client is left empty deliberately: if a read tool still
+    reached for it, these tests would fail rather than quietly pass on seeded
+    Firestore data that production no longer has.
+    """
+    _seeded_story_data()
+    return _tool_server(FakeFirestoreClient(), max_rpm, **kwargs)
+
+
 def _token(uid: str = UID_A, scopes=("stories:read",)) -> AccessToken:
     return AccessToken(
         token="mcp_at_test", client_id="c1", scopes=list(scopes), subject=uid
@@ -502,7 +649,7 @@ async def _call(mcp: FastMCP, name: str, arguments: dict) -> dict:
 
 
 async def test_tools_use_token_subject_and_attach_notice():
-    mcp = _tool_server(_seeded_db())
+    mcp = _read_tool_server()
     with patch("mcp_server.tools.get_access_token", return_value=_token()):
         result = await _call(mcp, "list_my_stories", {})
     assert result["count"] == 2
@@ -511,7 +658,7 @@ async def test_tools_use_token_subject_and_attach_notice():
 
 
 async def test_tool_idor_returns_not_found():
-    mcp = _tool_server(_seeded_db())
+    mcp = _read_tool_server()
     with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A)):
         with pytest.raises(ToolError, match="Story not found"):
             await mcp.call_tool("get_story_overview", {"story_id": "story-b"})
@@ -525,7 +672,7 @@ async def test_tool_unauthenticated_rejected():
 
 
 async def test_tool_rate_limit():
-    mcp = _tool_server(_seeded_db(), max_rpm=1)
+    mcp = _read_tool_server(max_rpm=1)
     with patch("mcp_server.tools.get_access_token", return_value=_token()):
         await mcp.call_tool("list_my_stories", {})
         with pytest.raises(ToolError, match="Rate limit"):
@@ -533,7 +680,7 @@ async def test_tool_rate_limit():
 
 
 async def test_tool_get_chapter_roundtrip():
-    mcp = _tool_server(_seeded_db())
+    mcp = _read_tool_server()
     with patch("mcp_server.tools.get_access_token", return_value=_token()):
         result = await _call(
             mcp,
@@ -546,7 +693,7 @@ async def test_tool_get_chapter_roundtrip():
 
 
 async def test_tool_entities_roundtrip():
-    mcp = _tool_server(_seeded_db())
+    mcp = _read_tool_server()
     with patch("mcp_server.tools.get_access_token", return_value=_token()):
         listed = await _call(
             mcp, "list_entities", {"story_id": "story-a", "entity_type": "characters"}
@@ -620,14 +767,18 @@ async def test_no_write_argument_can_target_another_users_story():
 # ---------------------------------------------------------------------------
 
 
-async def test_created_story_is_visible_to_list_stories_for_user():
-    """The strongest test here: Firestore's order_by silently DROPS documents
-    missing `updatedAt`, so a story written without it exists but is invisible.
-    An existence assertion would not catch that; this does."""
+async def test_created_story_carries_the_fields_a_listing_orders_on():
+    """Firestore's order_by silently DROPS documents missing `updatedAt`, so a
+    story written without it exists but is invisible to a listing.
+
+    Previously asserted by listing through data.py; the read path serves
+    story-data now, so the property is asserted at the document instead.
+    """
     db = _seeded_db()
     created = writes.create_story(db, UID_A, "Fresh")
-    listed = data.list_stories_for_user(db, UID_A, 20)
-    assert created["story_id"] in {s["story_id"] for s in listed}
+    doc = db.docs[f"stories/{created['story_id']}"][0]
+    assert doc.get("updatedAt") is not None
+    assert doc["userId"] == UID_A
 
 
 async def test_create_story_writes_every_field_mapstorydoc_reads():
@@ -687,14 +838,14 @@ async def test_create_chapter_bumps_chapter_count_and_story_updated_at():
     assert story["updatedAt"] > before
 
 
-async def test_created_chapter_is_visible_to_read_tools():
+async def test_created_chapter_carries_the_fields_a_listing_needs():
+    """Same shift as above: verified where the write lands, not read back."""
     db = _seeded_db()
     created = writes.create_chapter(db, UID_A, "story-a", "Three", "one two three")
-    page = data.list_chapters(db, "story-a", UID_A)
-    assert created["chapter_id"] in {c["chapter_id"] for c in page.items}
-    fetched = data.get_chapter(db, "story-a", created["chapter_id"], UID_A, 0, 1000)
-    assert fetched["title"] == "Three"
-    assert fetched["word_count"] == 3
+    doc = db.docs[f"stories/story-a/chapters/{created['chapter_id']}"][0]
+    assert doc["title"] == "Three"
+    assert doc["wordCount"] == 3
+    assert doc["order"] == created["order"]
 
 
 # ---------------------------------------------------------------------------
@@ -764,7 +915,7 @@ async def test_no_order_collision_with_a_claimed_but_unwritten_chapter():
     # Caller A: claim the counters exactly as _append_chapter does, then stall
     # before the chapter write.
     story_ref = db.collection("stories").document("s")
-    snap_a = data.get_owned_story_snapshot(db, "s", UID_A)
+    snap_a = writes._owned_story_snapshot(db, "s", UID_A)
     story_a = snap_a.to_dict()
     order_a = max(
         int(story_a.get("nextChapterOrder") or 0), writes._next_order(db, "s")
@@ -1107,7 +1258,7 @@ async def test_write_scoped_token_can_call_write_tools():
 
 
 async def test_write_scoped_token_can_still_call_read_tools():
-    mcp = _tool_server(_seeded_db(), enable_writes=True)
+    mcp = _read_tool_server(enable_writes=True)
     with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
         result = await _call(mcp, "list_my_stories", {})
     assert result["count"] == 2
@@ -1156,34 +1307,44 @@ async def test_write_tool_unauthenticated_rejected():
 
 
 async def test_write_rate_limit_is_separate_and_tighter():
-    mcp = _tool_server(_seeded_db(), enable_writes=True, write_rpm=1)
+    # Writes land in the Firestore fake, reads come from story-data, so the
+    # read assertion below counts the seeded stories rather than the written one.
+    mcp = _read_tool_server(enable_writes=True, write_rpm=1)
     with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
         await mcp.call_tool("create_story", {"title": "First"})
         with pytest.raises(ToolError, match="Write rate limit"):
             await mcp.call_tool("create_story", {"title": "Second"})
         # The shared bucket is untouched: reads still work.
         result = await _call(mcp, "list_my_stories", {})
-    assert result["count"] >= 2
+    assert result["count"] == 2
 
 
-async def test_write_roundtrip_through_read_tools():
+async def test_write_tools_persist_story_and_chapter():
+    """What the write tools store, asserted where they store it.
+
+    This was a write-then-read-back roundtrip through the read tools. The read
+    tools serve story-data now while the write tools still write Firestore, so a
+    roundtrip cannot pass — and the configuration it would need is rejected by
+    config. Until the write tools are ported, the write side is verified at its
+    own backend and the roundtrip is covered end to end against the real stack.
+    """
     db = _seeded_db()
     mcp = _tool_server(db, enable_writes=True)
     with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
         story = await _call(mcp, "create_story", {"title": "Round Trip"})
-        await _call(
+        chapter = await _call(
             mcp,
             "create_chapter",
             {"story_id": story["story_id"], "title": "Ch1", "content": "a b c"},
         )
-        listed = await _call(mcp, "list_my_stories", {})
-        overview = await _call(
-            mcp, "get_story_overview", {"story_id": story["story_id"]}
-        )
-        chapters = await _call(mcp, "list_chapters", {"story_id": story["story_id"]})
-    assert story["story_id"] in {s["story_id"] for s in listed["stories"]}
-    assert overview["title"] == "Round Trip"
-    assert [c["title"] for c in chapters["chapters"]] == ["Ch1"]
+
+    story_doc = db.docs[f"stories/{story['story_id']}"][0]
+    assert story_doc["title"] == "Round Trip"
+    assert story_doc["userId"] == UID_A
+
+    path = f"stories/{story['story_id']}/chapters/{chapter['chapter_id']}"
+    assert db.docs[path][0]["title"] == "Ch1"
+    assert db.docs[path][0]["wordCount"] == 3
 
 
 # ---------------------------------------------------------------------------
@@ -1203,6 +1364,21 @@ RICH = (
 RICH_BLOCKS = ["h2", "p", "ul", "blockquote", "img"]
 
 
+def _rich_story_data() -> FakeStoryData:
+    """The rich-content chapter, served from story-data."""
+    fake = _seeded_story_data()
+    fake.seed_chapter(
+        "story-a",
+        "rich",
+        title="Rich",
+        position=3.0,
+        wordCount=9,
+        content=RICH,
+        revision=4,
+    )
+    return fake
+
+
 def _rich_db() -> FakeFirestoreClient:
     db = _seeded_db()
     db.seed(
@@ -1220,15 +1396,16 @@ def _content_of(db, path: str = "stories/story-a/chapters/rich") -> str:
     return db.docs[path][0]["content"]
 
 
-def test_get_chapter_exposes_a_revision():
-    db = _rich_db()
-    chapter = data.get_chapter(db, "story-a", "rich", UID_A, 0, 100)
-    assert chapter["revision"] == _revision_of(db)
+async def test_get_chapter_exposes_a_revision():
+    """story-data carries an integer revision per row; the token is that value."""
+    _rich_story_data()
+    chapter = await data.get_chapter("story-a", "rich", UID_A, 0, 100)
+    assert chapter["revision"] == "4"
 
 
-def test_get_chapter_blocks_lists_indices_tags_and_previews():
-    db = _rich_db()
-    listing = data.get_chapter_blocks(db, "story-a", "rich", UID_A, 0, 500)
+async def test_get_chapter_blocks_lists_indices_tags_and_previews():
+    _rich_story_data()
+    listing = await data.get_chapter_blocks("story-a", "rich", UID_A, 0, 500)
     assert listing["block_count"] == 5
     assert [b["tag"] for b in listing["blocks"]] == RICH_BLOCKS
     assert [b["index"] for b in listing["blocks"]] == [0, 1, 2, 3, 4]
@@ -1236,42 +1413,42 @@ def test_get_chapter_blocks_lists_indices_tags_and_previews():
     # An image has no text of its own; the tag is what identifies it.
     assert listing["blocks"][4]["preview"] == ""
     assert listing["next_index"] is None
-    assert listing["revision"] == _revision_of(db)
+    assert listing["revision"] == "4"
 
 
-def test_get_chapter_blocks_paginates():
-    db = _rich_db()
-    first = data.get_chapter_blocks(db, "story-a", "rich", UID_A, 0, 2)
+async def test_get_chapter_blocks_paginates():
+    _rich_story_data()
+    first = await data.get_chapter_blocks("story-a", "rich", UID_A, 0, 2)
     assert [b["index"] for b in first["blocks"]] == [0, 1]
     assert first["next_index"] == 2
-    second = data.get_chapter_blocks(
-        db, "story-a", "rich", UID_A, first["next_index"], 2
+    second = await data.get_chapter_blocks(
+        "story-a", "rich", UID_A, first["next_index"], 2
     )
     assert [b["index"] for b in second["blocks"]] == [2, 3]
-    last = data.get_chapter_blocks(db, "story-a", "rich", UID_A, 4, 2)
+    last = await data.get_chapter_blocks("story-a", "rich", UID_A, 4, 2)
     assert [b["index"] for b in last["blocks"]] == [4]
     assert last["next_index"] is None
 
 
-def test_get_chapter_blocks_clamps_inputs():
-    db = _rich_db()
-    listing = data.get_chapter_blocks(db, "story-a", "rich", UID_A, -5, 999_999)
+async def test_get_chapter_blocks_clamps_inputs():
+    _rich_story_data()
+    listing = await data.get_chapter_blocks("story-a", "rich", UID_A, -5, 999_999)
     assert listing["start_index"] == 0
-    assert len(listing["blocks"]) == 5
+    assert listing["block_count"] == 5
 
 
-def test_get_chapter_blocks_is_owner_scoped():
-    db = _rich_db()
+async def test_get_chapter_blocks_is_owner_scoped():
+    _rich_story_data()
     with pytest.raises(data.StoryNotFoundError):
-        data.get_chapter_blocks(db, "story-b", "chb", UID_A, 0, 10)
+        await data.get_chapter_blocks("story-b", "chb", UID_A, 0, 10)
     with pytest.raises(data.EntityNotFoundError):
-        data.get_chapter_blocks(db, "story-a", "no-such-chapter", UID_A, 0, 10)
+        await data.get_chapter_blocks("story-a", "no-such-chapter", UID_A, 0, 10)
 
 
-def test_get_chapter_blocks_on_an_empty_chapter():
-    db = _seeded_db()
-    db.seed("stories/story-a/chapters/blank", {"title": "Blank", "content": ""})
-    listing = data.get_chapter_blocks(db, "story-a", "blank", UID_A, 0, 10)
+async def test_get_chapter_blocks_on_an_empty_chapter():
+    fake = _seeded_story_data()
+    fake.seed_chapter("story-a", "blank", title="Blank", content="")
+    listing = await data.get_chapter_blocks("story-a", "blank", UID_A, 0, 10)
     assert listing["block_count"] == 0
     assert listing["blocks"] == []
 
@@ -1331,11 +1508,26 @@ async def test_concurrent_writer_between_check_and_update_is_caught():
     assert _content_of(db) == "<p>the human typed this</p>"
 
 
-async def test_revision_from_get_chapter_blocks_is_accepted_by_an_edit():
-    """The two sides of the contract must agree on how a revision is spelled."""
+async def test_the_write_path_accepts_its_own_revision_spelling():
+    """The write path must agree with itself on how a revision is spelled.
+
+    This used to take the revision from get_chapter_blocks. It cannot while the
+    read tools serve story-data (integer `revision`) and the write tools write
+    Firestore (a timestamp token) — the two spellings do not meet, which is why
+    config rejects ENABLE_MCP_WRITES alongside STORY_DATA_URL. Porting the write
+    tools restores the cross-side handshake, via If-Match.
+    """
     db = _rich_db()
-    listing = data.get_chapter_blocks(db, "story-a", "rich", UID_A, 0, 10)
-    writes.append_to_chapter(db, UID_A, "story-a", "rich", "ok", listing["revision"])
+    snap = (
+        db.collection("stories")
+        .document("story-a")
+        .collection("chapters")
+        .document("rich")
+        .get()
+    )
+    writes.append_to_chapter(
+        db, UID_A, "story-a", "rich", "ok", writes._revision_token(snap.update_time)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2043,30 +2235,38 @@ async def test_chapter_edits_are_audited_with_the_chapter_id():
     assert line["block_count"] == 6
 
 
-async def test_full_edit_cycle_through_the_tools():
-    """Read blocks, edit by index with the revision it gave, read back."""
+async def test_full_edit_cycle_through_the_write_tools():
+    """Edit by index, chain a second edit on the returned revision, verify bytes.
+
+    The block listing and the final read used to come from the read tools. They
+    serve story-data now, whose integer revision cannot satisfy a Firestore
+    precondition, so the cycle stays on the write backend: block indices are
+    computed from the stored content and the result is asserted there. The
+    properties under test are unchanged — revision chaining without a re-read,
+    and byte-identity of blocks nobody touched.
+    """
     db = _rich_db()
     mcp = _tool_server(db, enable_writes=True)
-    with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
-        listing = await _call(
-            mcp,
-            "get_chapter_blocks",
-            {"story_id": "story-a", "chapter_id": "rich"},
-        )
-        assert listing["notice"] == UNTRUSTED_NOTICE
-        target = next(b for b in listing["blocks"] if b["preview"].startswith("She"))
 
+    stored_blocks = blocks_module.split_blocks(_content_of(db))
+    target_index = next(
+        i
+        for i, block in enumerate(stored_blocks)
+        if blocks_module.block_preview(block.html).startswith("She")
+    )
+
+    with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
         edited = await _call(
             mcp,
             "edit_chapter_blocks",
             {
                 "story_id": "story-a",
                 "chapter_id": "rich",
-                "revision": listing["revision"],
+                "revision": _revision_of(db),
                 "ops": [
                     {
                         "action": "replace",
-                        "index": target["index"],
+                        "index": target_index,
                         "text": "She counted the steps twice.",
                     }
                 ],
@@ -2083,17 +2283,14 @@ async def test_full_edit_cycle_through_the_tools():
                 "revision": edited["revision"],
             },
         )
-        final = await _call(
-            mcp, "get_chapter", {"story_id": "story-a", "chapter_id": "rich"}
-        )
 
-    assert "She counted the steps twice." in final["content"]
-    assert final["content"].endswith("<p>Postscript.</p>")
+    final = _content_of(db)
+    assert "She counted the steps twice." in final
+    assert final.endswith("<p>Postscript.</p>")
     # Untouched blocks kept their exact markup through two edits.
-    assert '<ul class="list-disc"><li><p>rope</p></li><li><p>lamp</p></li></ul>' in (
-        final["content"]
+    assert (
+        '<ul class="list-disc"><li><p>rope</p></li><li><p>lamp</p></li></ul>' in final
     )
-    assert final["revision"] == _revision_of(db)
 
 
 # ---------------------------------------------------------------------------
@@ -2102,6 +2299,7 @@ async def test_full_edit_cycle_through_the_tools():
 
 
 def test_revision_token_agrees_across_the_two_real_firestore_types():
+    # Lives in writes.py now: only the Firestore write path still needs it.
     """The fake cannot catch this, and it breaks every chained edit if wrong.
 
     A read gives DocumentSnapshot.update_time (DatetimeWithNanoseconds); a
@@ -2119,7 +2317,7 @@ def test_revision_token_agrees_across_the_two_real_firestore_types():
     from_read = DatetimeWithNanoseconds.from_timestamp_pb(from_write)
 
     assert str(from_write) != str(from_read)  # the trap this guards
-    assert data.revision_token(from_write) == data.revision_token(from_read)
+    assert writes._revision_token(from_write) == writes._revision_token(from_read)
 
 
 def test_revision_token_distinguishes_adjacent_versions():
@@ -2127,7 +2325,7 @@ def test_revision_token_distinguishes_adjacent_versions():
 
     a = timestamp_pb2.Timestamp(seconds=1_785_000_000, nanos=1)
     b = timestamp_pb2.Timestamp(seconds=1_785_000_000, nanos=2)
-    assert data.revision_token(a) != data.revision_token(b)
+    assert writes._revision_token(a) != writes._revision_token(b)
 
 
 def test_block_op_actions_match_the_writes_layer():

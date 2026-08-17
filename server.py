@@ -33,6 +33,10 @@ from agents.storyAgent.llm_provider import (
     _firebase_token,
 )
 from config import Settings
+
+# Safe to import unconditionally: story_data depends only on httpx, not the MCP
+# SDK, so it does not drag the mount in when ENABLE_MCP is false.
+from mcp_server import story_data
 from rate_limit import PerUserRateLimiter
 
 logger = structlog.get_logger(__name__)
@@ -235,6 +239,15 @@ def create_app() -> FastAPI:
         # traffic. Shutdown: release the LLM HTTP client.
         async with AsyncExitStack() as stack:
             await app.state.agent.start()
+            # The MCP read tools serve story content from story-data. Installed
+            # here rather than at import so tests can supply their own.
+            if mcp_bundle is not None and settings.story_data_url.strip():
+                story_data.configure(
+                    story_data.StoryDataClient(
+                        settings.story_data_url.strip(),
+                        settings.story_data_service_token.strip(),
+                    )
+                )
             worker_task = None
             if settings.indexing_worker_enabled:
                 import asyncio
@@ -258,6 +271,7 @@ def create_app() -> FastAPI:
                 except asyncio.CancelledError:
                     pass
         await app.state.agent.aclose()
+        await story_data.aclose()
 
     app = FastAPI(
         title="NovelSync Unified Service",

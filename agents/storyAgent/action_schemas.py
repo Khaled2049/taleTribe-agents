@@ -6,19 +6,12 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 ActionName = Literal[
     "brainstormIdeas",
-    "brainstormCharacter",
-    "brainstormPlot",
     "generateNextLines",
     "chatWithContext",
     "enhanceText",
     "enhanceWizardInput",
     "generateStoryChoices",
     "summarizeChapter",
-    "clearMemory",
-    "indexChapter",
-    "deleteChapterChunks",
-    "indexEntity",
-    "deleteEntityChunks",
 ]
 
 MAX_CONTENT_CHARS = 100_000
@@ -67,22 +60,6 @@ class BrainstormIdeasParams(StrictModel):
     )
     prompt: Optional[str] = Field(default=None, max_length=MAX_PROMPT_CHARS)
     count: int = Field(default=5, ge=1, le=20)
-
-
-class BrainstormCharacterParams(StrictModel):
-    story_id: str = _story_id_field()
-    role: Optional[str] = Field(default=None, max_length=MAX_PROMPT_CHARS)
-    archetype: Optional[str] = Field(default=None, max_length=MAX_PROMPT_CHARS)
-
-
-class BrainstormPlotParams(StrictModel):
-    story_id: str = _story_id_field()
-    plot_type: str = Field(
-        default="conflict",
-        max_length=MAX_PROMPT_CHARS,
-        validation_alias=AliasChoices("plotType", "plot_type"),
-        serialization_alias="plotType",
-    )
 
 
 class GenerateNextLinesParams(StrictModel):
@@ -143,56 +120,6 @@ class SummarizeChapterParams(StrictModel):
     chapter_id: Optional[str] = _chapter_id_field()
 
 
-class ClearMemoryParams(StrictModel):
-    story_id: str = _story_id_field()
-    user_id: str = _user_id_field(default="anonymous")
-
-
-class IndexChapterParams(StrictModel):
-    story_id: str = _story_id_field()
-    chapter_id: str = Field(
-        max_length=MAX_ID_CHARS,
-        validation_alias=AliasChoices("chapterId", "chapter_id"),
-        serialization_alias="chapterId",
-    )
-    title: Optional[str] = Field(default="", max_length=MAX_PROMPT_CHARS)
-    content: str = Field(default="", max_length=MAX_CONTENT_CHARS)
-    chapter_number: Optional[int] = Field(
-        default=None,
-        validation_alias=AliasChoices("chapterNumber", "chapter_number"),
-        serialization_alias="chapterNumber",
-    )
-
-
-class DeleteChapterChunksParams(StrictModel):
-    story_id: str = _story_id_field()
-    chapter_id: str = Field(
-        max_length=MAX_ID_CHARS,
-        validation_alias=AliasChoices("chapterId", "chapter_id"),
-        serialization_alias="chapterId",
-    )
-
-
-class IndexEntityParams(StrictModel):
-    story_id: str = _story_id_field()
-    kind: Literal["character", "place", "plot"]
-    entity_id: str = Field(
-        max_length=MAX_ID_CHARS,
-        validation_alias=AliasChoices("entityId", "entity_id"),
-        serialization_alias="entityId",
-    )
-    data: Dict[str, Any] = Field(default_factory=dict)
-
-
-class DeleteEntityChunksParams(StrictModel):
-    story_id: str = _story_id_field()
-    entity_id: str = Field(
-        max_length=MAX_ID_CHARS,
-        validation_alias=AliasChoices("entityId", "entity_id"),
-        serialization_alias="entityId",
-    )
-
-
 class EnhanceWizardInputParams(StrictModel):
     wizard_type: Literal["premise", "character", "place", "conflict", "blueprint"] = (
         Field(
@@ -206,19 +133,12 @@ class EnhanceWizardInputParams(StrictModel):
 
 _ACTION_SCHEMAS = {
     "brainstormIdeas": BrainstormIdeasParams,
-    "brainstormCharacter": BrainstormCharacterParams,
-    "brainstormPlot": BrainstormPlotParams,
     "generateNextLines": GenerateNextLinesParams,
     "chatWithContext": ChatWithContextParams,
     "enhanceText": EnhanceTextParams,
     "enhanceWizardInput": EnhanceWizardInputParams,
     "generateStoryChoices": GenerateStoryChoicesParams,
     "summarizeChapter": SummarizeChapterParams,
-    "clearMemory": ClearMemoryParams,
-    "indexChapter": IndexChapterParams,
-    "deleteChapterChunks": DeleteChapterChunksParams,
-    "indexEntity": IndexEntityParams,
-    "deleteEntityChunks": DeleteEntityChunksParams,
 }
 
 
