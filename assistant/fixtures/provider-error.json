@@ -1,0 +1,31 @@
+{
+  "name": "provider-error",
+  "description": "Mid-stream provider failure with a safe code.",
+  "protocolVersion": 1,
+  "events": [
+    {
+      "v": 1,
+      "runId": "run-provider-error",
+      "seq": 0,
+      "type": "run.started",
+      "provider": "mock",
+      "model": "mock-1"
+    },
+    {
+      "v": 1,
+      "runId": "run-provider-error",
+      "seq": 1,
+      "type": "text.delta",
+      "text": "The light"
+    },
+    {
+      "v": 1,
+      "runId": "run-provider-error",
+      "seq": 2,
+      "type": "run.failed",
+      "code": "provider_unavailable",
+      "message": "The AI service is unreachable right now. Try again shortly."
+    }
+  ],
+  "sse": "data: {\"v\":1,\"runId\":\"run-provider-error\",\"seq\":0,\"type\":\"run.started\",\"provider\":\"mock\",\"model\":\"mock-1\"}\n\ndata: {\"v\":1,\"runId\":\"run-provider-error\",\"seq\":1,\"type\":\"text.delta\",\"text\":\"The light\"}\n\ndata: {\"v\":1,\"runId\":\"run-provider-error\",\"seq\":2,\"type\":\"run.failed\",\"code\":\"provider_unavailable\",\"message\":\"The AI service is unreachable right now. Try again shortly.\"}\n\n"
+}

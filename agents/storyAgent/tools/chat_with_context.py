@@ -1,6 +1,8 @@
 """Tool for chat with RAG (Retrieval-Augmented Generation) using story context."""
 
 import logging
+import time
+import uuid
 from typing import Any, Dict, List, Optional
 
 from ..llm_provider import LLMProvider, get_llm_provider
@@ -100,10 +102,28 @@ STORY CONTEXT:
         full_prompt += f"User: {message}\n\nAssistant:"
 
         # Generate response using LLM provider
-        logger.info("Full chat prompt story_id=%s:\n%s", story_id, full_prompt)
-        response = await self.llm_provider.generate_content_async(
-            full_prompt, max_output_tokens=1024
+        correlation_id = uuid.uuid4().hex
+        started = time.monotonic()
+        logger.info(
+            "chat_started correlation_id=%s context_chars=%d prompt_chars=%d "
+            "history_count=%d provider=%s",
+            correlation_id,
+            len(context_text),
+            len(full_prompt),
+            min(len(chat_history or []), 10),
+            type(self.llm_provider).__name__,
         )
+        try:
+            response = await self.llm_provider.generate_content_async(
+                full_prompt, max_output_tokens=1024
+            )
+        finally:
+            # Never log exception messages: provider failures may echo inputs/keys.
+            logger.info(
+                "chat_finished correlation_id=%s duration_ms=%d",
+                correlation_id,
+                int((time.monotonic() - started) * 1000),
+            )
 
         # Calculate context usage
         context_used = {

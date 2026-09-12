@@ -37,6 +37,23 @@ class Settings(BaseSettings):
 
     # Feature flags
     enable_local_image_generation: bool = True
+    assistant_api_enabled: bool = False
+    assistant_edit_proposals_enabled: bool = False
+    assistant_research_enabled: bool = False
+    assistant_legacy_fallback_enabled: bool = True
+    assistant_stream_spike_enabled: bool = False
+
+    @model_validator(mode="after")
+    def check_assistant_spike(self) -> "Settings":
+        if self.assistant_stream_spike_enabled and (
+            self.environment not in {"development", "test"}
+            or not self.assistant_api_enabled
+        ):
+            raise ValueError(
+                "ASSISTANT_STREAM_SPIKE_ENABLED requires development/test "
+                "and ASSISTANT_API_ENABLED=true"
+            )
+        return self
 
     # MCP server (OAuth 2.1 authorization server + owner-scoped story tools)
     enable_mcp: bool = True

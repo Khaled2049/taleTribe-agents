@@ -1,0 +1,84 @@
+{
+  "name": "single-tool-round",
+  "description": "One tool call, its result, and a reply.",
+  "protocolVersion": 1,
+  "events": [
+    {
+      "v": 1,
+      "runId": "run-single-tool",
+      "seq": 0,
+      "type": "run.started",
+      "provider": "mock",
+      "model": "mock-1"
+    },
+    {
+      "v": 1,
+      "runId": "run-single-tool",
+      "seq": 1,
+      "type": "tool.started",
+      "toolCallId": "call-1",
+      "name": "get_story_overview"
+    },
+    {
+      "v": 1,
+      "runId": "run-single-tool",
+      "seq": 2,
+      "type": "tool.args.delta",
+      "toolCallId": "call-1",
+      "delta": "{}"
+    },
+    {
+      "v": 1,
+      "runId": "run-single-tool",
+      "seq": 3,
+      "type": "tool.completed",
+      "part": {
+        "type": "tool_call",
+        "toolCallId": "call-1",
+        "name": "get_story_overview",
+        "arguments": {},
+        "result": {
+          "title": "Saltmarsh",
+          "chapter_count": 3
+        }
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-single-tool",
+      "seq": 4,
+      "type": "text.delta",
+      "text": "Saltmarsh has three chapters."
+    },
+    {
+      "v": 1,
+      "runId": "run-single-tool",
+      "seq": 5,
+      "type": "text.done",
+      "part": {
+        "type": "text",
+        "text": "Saltmarsh has three chapters."
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-single-tool",
+      "seq": 6,
+      "type": "usage",
+      "provider": "mock",
+      "model": "mock-1",
+      "promptTokens": 530,
+      "completionTokens": 7,
+      "credits": 6,
+      "billing": "platform"
+    },
+    {
+      "v": 1,
+      "runId": "run-single-tool",
+      "seq": 7,
+      "type": "run.completed",
+      "finishReason": "stop"
+    }
+  ],
+  "sse": "data: {\"v\":1,\"runId\":\"run-single-tool\",\"seq\":0,\"type\":\"run.started\",\"provider\":\"mock\",\"model\":\"mock-1\"}\n\ndata: {\"v\":1,\"runId\":\"run-single-tool\",\"seq\":1,\"type\":\"tool.started\",\"toolCallId\":\"call-1\",\"name\":\"get_story_overview\"}\n\ndata: {\"v\":1,\"runId\":\"run-single-tool\",\"seq\":2,\"type\":\"tool.args.delta\",\"toolCallId\":\"call-1\",\"delta\":\"{}\"}\n\ndata: {\"v\":1,\"runId\":\"run-single-tool\",\"seq\":3,\"type\":\"tool.completed\",\"part\":{\"type\":\"tool_call\",\"toolCallId\":\"call-1\",\"name\":\"get_story_overview\",\"arguments\":{},\"result\":{\"title\":\"Saltmarsh\",\"chapter_count\":3}}}\n\ndata: {\"v\":1,\"runId\":\"run-single-tool\",\"seq\":4,\"type\":\"text.delta\",\"text\":\"Saltmarsh has three chapters.\"}\n\ndata: {\"v\":1,\"runId\":\"run-single-tool\",\"seq\":5,\"type\":\"text.done\",\"part\":{\"type\":\"text\",\"text\":\"Saltmarsh has three chapters.\"}}\n\ndata: {\"v\":1,\"runId\":\"run-single-tool\",\"seq\":6,\"type\":\"usage\",\"provider\":\"mock\",\"model\":\"mock-1\",\"promptTokens\":530,\"completionTokens\":7,\"credits\":6,\"billing\":\"platform\"}\n\ndata: {\"v\":1,\"runId\":\"run-single-tool\",\"seq\":7,\"type\":\"run.completed\",\"finishReason\":\"stop\"}\n\n"
+}

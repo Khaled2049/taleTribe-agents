@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from tenacity import (
-    before_sleep_log,
     retry,
     retry_if_exception_type,
     stop_after_attempt,
@@ -30,6 +29,16 @@ _firebase_token: ContextVar[Optional[str]] = ContextVar("firebase_token", defaul
 # (see tools/*); this default only applies to callers that don't specify one, so
 # an un-updated call site stays cheap rather than reserving the old 8192 ceiling.
 DEFAULT_MAX_OUTPUT_TOKENS = 2048
+
+
+def _log_retry_metadata(state) -> None:
+    # Exception text can contain upstream bodies, manuscript text, or BYOK keys.
+    error = state.outcome.exception() if state.outcome else None
+    logger.warning(
+        "credit_proxy_retry attempt=%d error_type=%s",
+        state.attempt_number,
+        type(error).__name__,
+    )
 
 
 class LLMProviderError(Exception):
@@ -219,7 +228,7 @@ class CreditProxyProvider(LLMProvider):
         stop=stop_after_attempt(3) | stop_after_delay(30),
         wait=wait_exponential_jitter(initial=2, max=10),
         retry=retry_if_exception_type(BackendUnavailableError),
-        before_sleep=before_sleep_log(logger, logging.WARNING),
+        before_sleep=_log_retry_metadata,
         reraise=True,
     )
     async def generate_content_async(

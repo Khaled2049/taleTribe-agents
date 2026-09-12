@@ -32,6 +32,7 @@ from agents.storyAgent.llm_provider import (
     _byok_config,
     _firebase_token,
 )
+from assistant_spike import register_spike
 from config import Settings
 
 # Safe to import unconditionally: story_data depends only on httpx, not the MCP
@@ -321,6 +322,7 @@ def create_app() -> FastAPI:
         project_id=settings.google_cloud_project,
         location=settings.vertex_ai_location,
     )
+    register_spike(app, settings, _verify_internal_token)
 
     image_router = _try_load_image_router(
         current_dir, settings.enable_local_image_generation
@@ -362,6 +364,11 @@ def create_app() -> FastAPI:
         background_tasks: BackgroundTasks,
         _: None = Depends(_verify_internal_token),
     ) -> AgentResponse:
+        if (
+            request.action == "chatWithContext"
+            and not settings.assistant_legacy_fallback_enabled
+        ):
+            raise HTTPException(status_code=404, detail="Legacy assistant is disabled")
         user_id = request.user_id
         if not await raw_request.app.state.rate_limiter.allow(user_id):
             logger.warning("rate_limit_exceeded", user_id=user_id)
@@ -508,7 +515,6 @@ def create_app() -> FastAPI:
                 "billing_commit_failed",
                 action=request.action,
                 error_type=type(exc).__name__,
-                exc_info=True,
             )
             raise HTTPException(
                 status_code=500,
@@ -519,7 +525,7 @@ def create_app() -> FastAPI:
                 },
             ) from exc
         except LLMProviderError as exc:
-            logger.exception(
+            logger.error(
                 "llm_provider_error",
                 action=request.action,
                 error_type=type(exc).__name__,
@@ -533,7 +539,7 @@ def create_app() -> FastAPI:
                 },
             ) from exc
         except Exception as exc:
-            logger.exception(
+            logger.error(
                 "unhandled_error", action=request.action, error_type=type(exc).__name__
             )
             raise HTTPException(

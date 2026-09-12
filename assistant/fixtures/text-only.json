@@ -1,0 +1,59 @@
+{
+  "name": "text-only",
+  "description": "The minimum viable run.",
+  "protocolVersion": 1,
+  "events": [
+    {
+      "v": 1,
+      "runId": "run-text-only",
+      "seq": 0,
+      "type": "run.started",
+      "provider": "mock",
+      "model": "mock-1"
+    },
+    {
+      "v": 1,
+      "runId": "run-text-only",
+      "seq": 1,
+      "type": "text.delta",
+      "text": "The lighthouse "
+    },
+    {
+      "v": 1,
+      "runId": "run-text-only",
+      "seq": 2,
+      "type": "text.delta",
+      "text": "had been dark for a year."
+    },
+    {
+      "v": 1,
+      "runId": "run-text-only",
+      "seq": 3,
+      "type": "text.done",
+      "part": {
+        "type": "text",
+        "text": "The lighthouse had been dark for a year."
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-text-only",
+      "seq": 4,
+      "type": "usage",
+      "provider": "mock",
+      "model": "mock-1",
+      "promptTokens": 412,
+      "completionTokens": 9,
+      "credits": 5,
+      "billing": "mock"
+    },
+    {
+      "v": 1,
+      "runId": "run-text-only",
+      "seq": 5,
+      "type": "run.completed",
+      "finishReason": "stop"
+    }
+  ],
+  "sse": "data: {\"v\":1,\"runId\":\"run-text-only\",\"seq\":0,\"type\":\"run.started\",\"provider\":\"mock\",\"model\":\"mock-1\"}\n\ndata: {\"v\":1,\"runId\":\"run-text-only\",\"seq\":1,\"type\":\"text.delta\",\"text\":\"The lighthouse \"}\n\ndata: {\"v\":1,\"runId\":\"run-text-only\",\"seq\":2,\"type\":\"text.delta\",\"text\":\"had been dark for a year.\"}\n\ndata: {\"v\":1,\"runId\":\"run-text-only\",\"seq\":3,\"type\":\"text.done\",\"part\":{\"type\":\"text\",\"text\":\"The lighthouse had been dark for a year.\"}}\n\ndata: {\"v\":1,\"runId\":\"run-text-only\",\"seq\":4,\"type\":\"usage\",\"provider\":\"mock\",\"model\":\"mock-1\",\"promptTokens\":412,\"completionTokens\":9,\"credits\":5,\"billing\":\"mock\"}\n\ndata: {\"v\":1,\"runId\":\"run-text-only\",\"seq\":5,\"type\":\"run.completed\",\"finishReason\":\"stop\"}\n\n"
+}
