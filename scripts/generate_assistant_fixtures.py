@@ -266,6 +266,56 @@ def research_citations() -> list[Any]:
     ]
 
 
+def max_steps() -> list[Any]:
+    """The loop hit ASSISTANT_MAX_MODEL_CALLS with an answer still unfinished.
+
+    Terminal but successful: the text.done part is a real partial answer, and
+    the two usage events are the two model calls it cost. A client that treats
+    the first usage event as the run total will under-report here, which is
+    exactly why the case is a fixture rather than a comment.
+    """
+    r = RunEvents("run-max-steps")
+    return [
+        r.emit(RunStarted, provider="mock", model="mock-1"),
+        r.emit(ToolStarted, tool_call_id="call-1", name="search_story"),
+        r.emit(ToolArgsDelta, tool_call_id="call-1", delta='{"query":"the keeper"}'),
+        r.emit(
+            ToolCompleted,
+            part=ToolCallPart(
+                type="tool_call",
+                tool_call_id="call-1",
+                name="search_story",
+                arguments={"query": "the keeper", "limit": 8},
+                result=[{"chunk_id": "chunk-3", "score": 0.74}],
+            ),
+        ),
+        r.emit(
+            Usage,
+            provider="mock",
+            model="mock-1",
+            prompt_tokens=610,
+            completion_tokens=12,
+            credits=7,
+            billing="platform",
+        ),
+        r.emit(TextDelta, text="The keeper appears in chapter two"),
+        r.emit(
+            TextDone,
+            part=TextPart(type="text", text="The keeper appears in chapter two"),
+        ),
+        r.emit(
+            Usage,
+            provider="mock",
+            model="mock-1",
+            prompt_tokens=940,
+            completion_tokens=8,
+            credits=10,
+            billing="platform",
+        ),
+        r.emit(RunCompleted, finish_reason="max_steps"),
+    ]
+
+
 def cancellation() -> list[Any]:
     """Stop after a partial delta. No text.done: nothing settled."""
     r = RunEvents("run-cancelled")
@@ -319,6 +369,10 @@ FIXTURES = {
     "research-citations": (
         "Web and story references emitted as parts.",
         research_citations,
+    ),
+    "max-steps": (
+        "The step ceiling ended the run with a partial answer, not a failure.",
+        max_steps,
     ),
     "cancellation": ("Stopped mid-delta; run.cancelled is terminal.", cancellation),
     "provider-error": ("Mid-stream provider failure with a safe code.", provider_error),

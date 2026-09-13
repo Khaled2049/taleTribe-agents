@@ -137,8 +137,18 @@ class Usage(BaseEvent):
 
 
 class RunCompleted(BaseEvent):
+    """Terminal success. ``finishReason`` says *why* the run stopped talking.
+
+    ``max_steps`` is the orchestrator's own ceiling, and it is a success rather
+    than a failure: the user has a real partial answer, so ``run.failed`` would
+    both discard it and render a message about a daily allowance that was never
+    reached. ``stop`` would be a lie in the other direction -- it claims the
+    model was finished -- and Phase 4 needs to tell the two apart to offer
+    "continue".
+    """
+
     type: Literal["run.completed"]
-    finish_reason: Literal["stop", "length", "tool_calls"] = "stop"
+    finish_reason: Literal["stop", "length", "tool_calls", "max_steps"] = "stop"
 
 
 class RunFailed(BaseEvent):

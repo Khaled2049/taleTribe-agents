@@ -24,6 +24,7 @@ FIXTURES = sorted(p for p in FIXTURE_DIR.glob("*.json") if p.name != "MANIFEST.j
 EXPECTED = {
     "approval-pause-resume",
     "cancellation",
+    "max-steps",
     "multi-tool",
     "provider-error",
     "research-citations",

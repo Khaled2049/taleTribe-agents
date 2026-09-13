@@ -84,21 +84,50 @@ class PostgresStoryContext:
             ],
         }
 
-    async def retrieve(
+    async def search_chunks(
         self, story_id: str, embedding: list[float], top_k: int = 4
     ) -> list[dict[str, Any]]:
+        """Nearest chunks with their identity, not just their prose.
+
+        ``retrieve`` flattens a chunk into text for a prompt, which is all the
+        chat tool ever wanted. The assistant needs the row itself: a stable id
+        to cite as a source, the source revision and index time to say whether a
+        hit is stale, and the metadata kept separate so a metadata key can never
+        shadow a column name.
+
+        Scoping is the SQL ``story_id`` predicate, and the caller takes that id
+        from ToolContext -- never from model output.
+        """
         assert self.pool is not None
         vector = _vector(embedding)
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT source_type,metadata,text FROM story_vector_chunks WHERE story_id=$1 ORDER BY embedding <=> $2::vector LIMIT $3",
+                "SELECT id,source_type,source_id,source_revision,chunk_index,metadata,text,created_at FROM story_vector_chunks WHERE story_id=$1 ORDER BY embedding <=> $2::vector LIMIT $3",
                 story_id,
                 vector,
                 top_k,
             )
         return [
-            {"kind": row["source_type"], **dict(row["metadata"]), "text": row["text"]}
+            {
+                "chunk_id": str(row["id"]),
+                "kind": row["source_type"],
+                "source_id": str(row["source_id"]),
+                "source_revision": int(row["source_revision"]),
+                "chunk_index": int(row["chunk_index"]),
+                "indexed_at": row["created_at"],
+                "metadata": _jsonb(row["metadata"]),
+                "text": row["text"],
+            }
             for row in rows
+        ]
+
+    async def retrieve(
+        self, story_id: str, embedding: list[float], top_k: int = 4
+    ) -> list[dict[str, Any]]:
+        """Flattened chunks in the shape ``excerpts.format_excerpts`` renders."""
+        return [
+            {"kind": chunk["kind"], **chunk["metadata"], "text": chunk["text"]}
+            for chunk in await self.search_chunks(story_id, embedding, top_k)
         ]
 
     @staticmethod
@@ -378,6 +407,25 @@ def _camel(data: dict[str, Any]) -> dict[str, Any]:
         "updated_at": "updatedAt",
     }
     return {aliases.get(key, key): value for key, value in data.items()}
+
+
+def _jsonb(value: Any) -> dict[str, Any]:
+    """asyncpg hands back jsonb as text unless a codec is registered, and none is.
+
+    Retrieval used to call ``dict()`` straight on that string, which raises --
+    and the only caller wrapped the whole retrieval in a bare except, so pgvector
+    excerpts had been silently missing from every chat prompt. Decoding here
+    keeps the fix in one place for both readers.
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, (str, bytes, bytearray)):
+        try:
+            decoded = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+    return {}
 
 
 def _vector(values: list[float]) -> str:

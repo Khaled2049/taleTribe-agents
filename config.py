@@ -43,6 +43,13 @@ class Settings(BaseSettings):
     assistant_legacy_fallback_enabled: bool = True
     assistant_stream_spike_enabled: bool = False
 
+    # Ceiling on one tool result before it re-enters the prompt. read_chapter's
+    # schema allows a 20 000-char window, so without this a run that stays
+    # inside its step ceiling can still grow an expensive message list. The
+    # executors clamp the windows their arguments imply against it, rather than
+    # generating the result first and trimming it afterwards.
+    assistant_max_tool_result_chars: int = 8000
+
     @model_validator(mode="after")
     def check_assistant_spike(self) -> "Settings":
         if self.assistant_stream_spike_enabled and (

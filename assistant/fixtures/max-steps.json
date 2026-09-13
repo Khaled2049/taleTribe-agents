@@ -1,0 +1,101 @@
+{
+  "name": "max-steps",
+  "description": "The step ceiling ended the run with a partial answer, not a failure.",
+  "protocolVersion": 1,
+  "events": [
+    {
+      "v": 1,
+      "runId": "run-max-steps",
+      "seq": 0,
+      "type": "run.started",
+      "provider": "mock",
+      "model": "mock-1"
+    },
+    {
+      "v": 1,
+      "runId": "run-max-steps",
+      "seq": 1,
+      "type": "tool.started",
+      "toolCallId": "call-1",
+      "name": "search_story"
+    },
+    {
+      "v": 1,
+      "runId": "run-max-steps",
+      "seq": 2,
+      "type": "tool.args.delta",
+      "toolCallId": "call-1",
+      "delta": "{\"query\":\"the keeper\"}"
+    },
+    {
+      "v": 1,
+      "runId": "run-max-steps",
+      "seq": 3,
+      "type": "tool.completed",
+      "part": {
+        "type": "tool_call",
+        "toolCallId": "call-1",
+        "name": "search_story",
+        "arguments": {
+          "query": "the keeper",
+          "limit": 8
+        },
+        "result": [
+          {
+            "chunk_id": "chunk-3",
+            "score": 0.74
+          }
+        ]
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-max-steps",
+      "seq": 4,
+      "type": "usage",
+      "provider": "mock",
+      "model": "mock-1",
+      "promptTokens": 610,
+      "completionTokens": 12,
+      "credits": 7,
+      "billing": "platform"
+    },
+    {
+      "v": 1,
+      "runId": "run-max-steps",
+      "seq": 5,
+      "type": "text.delta",
+      "text": "The keeper appears in chapter two"
+    },
+    {
+      "v": 1,
+      "runId": "run-max-steps",
+      "seq": 6,
+      "type": "text.done",
+      "part": {
+        "type": "text",
+        "text": "The keeper appears in chapter two"
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-max-steps",
+      "seq": 7,
+      "type": "usage",
+      "provider": "mock",
+      "model": "mock-1",
+      "promptTokens": 940,
+      "completionTokens": 8,
+      "credits": 10,
+      "billing": "platform"
+    },
+    {
+      "v": 1,
+      "runId": "run-max-steps",
+      "seq": 8,
+      "type": "run.completed",
+      "finishReason": "max_steps"
+    }
+  ],
+  "sse": "data: {\"v\":1,\"runId\":\"run-max-steps\",\"seq\":0,\"type\":\"run.started\",\"provider\":\"mock\",\"model\":\"mock-1\"}\n\ndata: {\"v\":1,\"runId\":\"run-max-steps\",\"seq\":1,\"type\":\"tool.started\",\"toolCallId\":\"call-1\",\"name\":\"search_story\"}\n\ndata: {\"v\":1,\"runId\":\"run-max-steps\",\"seq\":2,\"type\":\"tool.args.delta\",\"toolCallId\":\"call-1\",\"delta\":\"{\\\"query\\\":\\\"the keeper\\\"}\"}\n\ndata: {\"v\":1,\"runId\":\"run-max-steps\",\"seq\":3,\"type\":\"tool.completed\",\"part\":{\"type\":\"tool_call\",\"toolCallId\":\"call-1\",\"name\":\"search_story\",\"arguments\":{\"query\":\"the keeper\",\"limit\":8},\"result\":[{\"chunk_id\":\"chunk-3\",\"score\":0.74}]}}\n\ndata: {\"v\":1,\"runId\":\"run-max-steps\",\"seq\":4,\"type\":\"usage\",\"provider\":\"mock\",\"model\":\"mock-1\",\"promptTokens\":610,\"completionTokens\":12,\"credits\":7,\"billing\":\"platform\"}\n\ndata: {\"v\":1,\"runId\":\"run-max-steps\",\"seq\":5,\"type\":\"text.delta\",\"text\":\"The keeper appears in chapter two\"}\n\ndata: {\"v\":1,\"runId\":\"run-max-steps\",\"seq\":6,\"type\":\"text.done\",\"part\":{\"type\":\"text\",\"text\":\"The keeper appears in chapter two\"}}\n\ndata: {\"v\":1,\"runId\":\"run-max-steps\",\"seq\":7,\"type\":\"usage\",\"provider\":\"mock\",\"model\":\"mock-1\",\"promptTokens\":940,\"completionTokens\":8,\"credits\":10,\"billing\":\"platform\"}\n\ndata: {\"v\":1,\"runId\":\"run-max-steps\",\"seq\":8,\"type\":\"run.completed\",\"finishReason\":\"max_steps\"}\n\n"
+}

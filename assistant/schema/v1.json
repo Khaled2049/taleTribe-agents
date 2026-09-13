@@ -641,6 +641,7 @@
         },
         "RunCompleted": {
           "additionalProperties": false,
+          "description": "Terminal success. ``finishReason`` says *why* the run stopped talking.\n\n``max_steps`` is the orchestrator's own ceiling, and it is a success rather\nthan a failure: the user has a real partial answer, so ``run.failed`` would\nboth discard it and render a message about a daily allowance that was never\nreached. ``stop`` would be a lie in the other direction -- it claims the\nmodel was finished -- and Phase 4 needs to tell the two apart to offer\n\"continue\".",
           "properties": {
             "v": {
               "const": 1,
@@ -668,7 +669,8 @@
               "enum": [
                 "stop",
                 "length",
-                "tool_calls"
+                "tool_calls",
+                "max_steps"
               ],
               "title": "Finishreason",
               "type": "string"
