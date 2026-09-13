@@ -18,6 +18,10 @@ from .embedding_text import _chunk_text, compose_entity_text
 
 logger = logging.getLogger(__name__)
 
+MAX_SLIM_CONTEXT_CHARS = 8_000
+MAX_SLIM_DESCRIPTION_CHARS = 2_000
+MAX_SLIM_LABEL_CHARS = 120
+
 
 class PostgresStoryContext:
     def __init__(self, dsn: str | None = None):
@@ -84,6 +88,47 @@ class PostgresStoryContext:
             ],
         }
 
+    async def slim_context(self, story_id: str) -> str:
+        """Fetch only the bounded roster used in an assistant system prompt.
+
+        ``context`` intentionally loads complete chapter and entity prose for
+        legacy generation tools. Doing that merely to render twelve names per
+        collection defeats the point of the slim assistant context, so this
+        projection never transfers manuscript bodies from Postgres.
+        """
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            story = await conn.fetchrow(
+                "SELECT title,description FROM stories WHERE id=$1", story_id
+            )
+            if story is None:
+                raise ValueError(f"Story {story_id} not found")
+            characters = await conn.fetch(
+                "SELECT name FROM characters WHERE story_id=$1 ORDER BY name LIMIT 12",
+                story_id,
+            )
+            places = await conn.fetch(
+                "SELECT name FROM places WHERE story_id=$1 ORDER BY name LIMIT 12",
+                story_id,
+            )
+            plots = await conn.fetch(
+                "SELECT name FROM plot_lines WHERE story_id=$1 ORDER BY created_at LIMIT 12",
+                story_id,
+            )
+            chapters = await conn.fetch(
+                "SELECT title FROM chapters WHERE story_id=$1 ORDER BY position LIMIT 12",
+                story_id,
+            )
+        return self.format_slim_context(
+            {
+                "story": dict(story),
+                "characters": [dict(row) for row in characters],
+                "places": [dict(row) for row in places],
+                "plots": [dict(row) for row in plots],
+                "chapters": [dict(row) for row in chapters],
+            }
+        )
+
     async def search_chunks(
         self, story_id: str, embedding: list[float], top_k: int = 4
     ) -> list[dict[str, Any]]:
@@ -102,7 +147,23 @@ class PostgresStoryContext:
         vector = _vector(embedding)
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT id,source_type,source_id,source_revision,chunk_index,metadata,text,created_at FROM story_vector_chunks WHERE story_id=$1 ORDER BY embedding <=> $2::vector LIMIT $3",
+                """SELECT v.id,v.source_type,v.source_id,v.source_revision,
+                          v.chunk_index,v.metadata,v.text,v.created_at,
+                          CASE v.source_type
+                            WHEN 'chapter' THEN (SELECT revision FROM chapters WHERE id=v.source_id AND story_id=v.story_id)
+                            WHEN 'character' THEN (SELECT revision FROM characters WHERE id=v.source_id AND story_id=v.story_id)
+                            WHEN 'place' THEN (SELECT revision FROM places WHERE id=v.source_id AND story_id=v.story_id)
+                            WHEN 'plot_event' THEN (SELECT e.revision FROM plot_events e JOIN plot_lines l ON l.id=e.plot_line_id WHERE e.id=v.source_id AND l.story_id=v.story_id)
+                          END AS current_revision,
+                          CASE v.source_type
+                            WHEN 'chapter' THEN (SELECT updated_at FROM chapters WHERE id=v.source_id AND story_id=v.story_id)
+                            WHEN 'character' THEN (SELECT updated_at FROM characters WHERE id=v.source_id AND story_id=v.story_id)
+                            WHEN 'place' THEN (SELECT updated_at FROM places WHERE id=v.source_id AND story_id=v.story_id)
+                            WHEN 'plot_event' THEN (SELECT e.updated_at FROM plot_events e JOIN plot_lines l ON l.id=e.plot_line_id WHERE e.id=v.source_id AND l.story_id=v.story_id)
+                          END AS source_updated_at
+                   FROM story_vector_chunks v
+                   WHERE v.story_id=$1
+                   ORDER BY v.embedding <=> $2::vector LIMIT $3""",
                 story_id,
                 vector,
                 top_k,
@@ -115,6 +176,12 @@ class PostgresStoryContext:
                 "source_revision": int(row["source_revision"]),
                 "chunk_index": int(row["chunk_index"]),
                 "indexed_at": row["created_at"],
+                "current_revision": (
+                    int(row["current_revision"])
+                    if row["current_revision"] is not None
+                    else None
+                ),
+                "source_updated_at": row["source_updated_at"],
                 "metadata": _jsonb(row["metadata"]),
                 "text": row["text"],
             }
@@ -135,8 +202,9 @@ class PostgresStoryContext:
         """Small, bounded roster used by chat alongside vector excerpts."""
         story = context["story"]
         lines = [
-            f"Story: {story.get('title', '')}",
-            f"Description: {story.get('description', '')}",
+            f"Story: {_bounded(story.get('title', ''), MAX_SLIM_LABEL_CHARS)}",
+            "Description: "
+            + _bounded(story.get("description", ""), MAX_SLIM_DESCRIPTION_CHARS),
         ]
         for label, items in (
             ("Characters", context["characters"]),
@@ -145,11 +213,14 @@ class PostgresStoryContext:
             ("Chapters", context["chapters"]),
         ):
             names = [
-                str(item.get("name") or item.get("title") or "") for item in items[:12]
+                _bounded(
+                    item.get("name") or item.get("title") or "", MAX_SLIM_LABEL_CHARS
+                )
+                for item in items[:12]
             ]
             if names:
                 lines.append(f"{label}: " + ", ".join(names))
-        return "\n".join(lines)
+        return "\n".join(lines)[:MAX_SLIM_CONTEXT_CHARS]
 
     async def claim(self, worker: str, limit: int = 20) -> list[asyncpg.Record]:
         assert self.pool is not None
@@ -426,6 +497,11 @@ def _jsonb(value: Any) -> dict[str, Any]:
             return {}
         return decoded if isinstance(decoded, dict) else {}
     return {}
+
+
+def _bounded(value: Any, limit: int) -> str:
+    text = str(value or "").strip()
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
 def _vector(values: list[float]) -> str:

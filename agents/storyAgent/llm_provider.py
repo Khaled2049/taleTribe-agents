@@ -5,7 +5,7 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from contextvars import ContextVar
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 import httpx
 from tenacity import (
@@ -192,6 +192,14 @@ class CreditProxyProvider(LLMProvider):
     def _build_payload(
         self, prompt: str, max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
     ) -> Dict[str, Any]:
+        return {
+            **self._request_identity(),
+            "prompt": prompt,
+            "max_output_tokens": max_output_tokens,
+        }
+
+    def _request_identity(self) -> Dict[str, Any]:
+        """Billing identity and optional BYOK fields shared by both APIs."""
         config = _byok_config.get()
         user_id = (
             config.get("user_id", self.platform_user_id)
@@ -209,12 +217,74 @@ class CreditProxyProvider(LLMProvider):
             logger.info("[LLM] platform  user=%s proxy=%s", user_id, self.base_url)
         return {
             "user_id": user_id,
-            "prompt": prompt,
             "byok_provider": provider,
             "byok_api_key": api_key,
             "byok_model": model,
-            "max_output_tokens": max_output_tokens,
         }
+
+    async def chat_stream(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        *,
+        max_output_tokens: int,
+        idempotency_key: str,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Yield normalized CreditProxy chat events from one billed model call.
+
+        This method deliberately has no retry decorator. Once a stream has
+        emitted a byte, retrying it could replay visible output and charge a
+        second reservation for work the caller already received.
+        """
+        payload = {
+            **self._request_identity(),
+            "version": 1,
+            "messages": messages,
+            "tools": tools,
+            "tool_choice": {"mode": "auto"},
+            "max_output_tokens": max_output_tokens,
+            "stream": True,
+            "idempotency_key": idempotency_key,
+        }
+        headers = await self._auth_headers(_firebase_token.get())
+        try:
+            async with self._client.stream(
+                "POST",
+                f"{self.base_url}/v1/chat",
+                json=payload,
+                headers=headers,
+            ) as response:
+                if response.status_code >= 400:
+                    await response.aread()
+                    raise _classify_http_error(
+                        response.status_code, response.text, _byok_config.get()
+                    )
+                content_type = response.headers.get("content-type", "")
+                if not content_type.startswith("text/event-stream"):
+                    raise BackendUnavailableError(
+                        "creditProxy returned an unexpected chat stream"
+                    )
+                async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    raw = line.removeprefix("data:").strip()
+                    if not raw or raw == "[DONE]":
+                        continue
+                    try:
+                        event = json.loads(raw)
+                    except ValueError as exc:
+                        raise BackendUnavailableError(
+                            "creditProxy returned an invalid chat event"
+                        ) from exc
+                    if not isinstance(event, dict):
+                        raise BackendUnavailableError(
+                            "creditProxy returned an invalid chat event"
+                        )
+                    yield event
+        except httpx.TimeoutException as exc:
+            raise LLMTimeoutError(str(exc)) from exc
+        except httpx.RequestError as exc:
+            raise BackendUnavailableError(f"creditProxy unreachable: {exc}") from exc
 
     # Only BackendUnavailableError (network failure, or a creditProxy 5xx) is
     # retried — every other typed error is either not the caller's fault to

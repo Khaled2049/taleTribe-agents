@@ -76,8 +76,10 @@ def chunk(chunk_id="chunk-1", text="The lamp room smelled of brass polish."):
         "kind": "chapter",
         "source_id": "chapter-1",
         "source_revision": 3,
+        "current_revision": 3,
         "chunk_index": 0,
         "indexed_at": None,
+        "source_updated_at": None,
         "metadata": {"title": "The Lamp Room", "chapterNumber": 1},
         "text": text,
     }
@@ -208,9 +210,21 @@ async def test_search_story_scopes_to_the_context_story(fake):
     assert hit["chunk_id"] == "chunk-1"
     assert hit["title"] == "The Lamp Room"
     assert hit["source_revision"] == 3
+    assert hit["stale"] is False
     (reference,) = result.references
     assert reference.source_id == "chunk-1"
     assert reference.kind == "story"
+
+
+async def test_search_story_marks_an_outdated_chunk_stale(fake):
+    old = chunk()
+    old["current_revision"] = 4
+    result = await run(
+        "search_story",
+        {"query": "brass polish"},
+        runtime(postgres=FakePostgres([old]), embedder=FakeEmbedder()),
+    )
+    assert result.result["results"][0]["stale"] is True
 
 
 async def test_search_story_without_retrieval_fails_rather_than_reporting_nothing(

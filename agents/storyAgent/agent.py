@@ -97,6 +97,11 @@ class StoryAgent:
         """The shared CreditProxyProvider — also used for credit balance/top-up."""
         return self._llm_provider
 
+    @property
+    def embedding_provider(self):
+        """The process-wide embedder used by indexing and assistant retrieval."""
+        return self._embedder
+
     async def aclose(self) -> None:
         """Release process-lifetime resources (e.g. the LLM + embedding HTTP clients)."""
         for provider in (self._llm_provider, self._embedder):

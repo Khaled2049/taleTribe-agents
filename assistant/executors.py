@@ -399,10 +399,9 @@ async def search_story(args: SearchStoryArgs, runtime: ToolRuntime) -> ToolResul
     invites the model to state that the story does not mention something it
     plainly does.
 
-    Every hit carries ``sourceRevision`` and ``indexedAt`` because indexing runs
-    off an outbox, so a chapter edited a moment ago is legitimately not in the
-    index yet. Phase 3 reports those two facts; comparing them against the
-    source's current revision to mark a hit stale is P3-T4.
+    Every hit carries its indexed and current revisions and timestamps because
+    indexing runs off an outbox. A chapter edited a moment ago may legitimately
+    still have an older chunk, so that lag is returned explicitly as ``stale``.
     """
     if runtime.postgres is None or runtime.embedder is None:
         raise ToolExecutionError(ErrorCode.INTERNAL_ERROR)
@@ -432,7 +431,10 @@ async def search_story(args: SearchStoryArgs, runtime: ToolRuntime) -> ToolResul
                 "title": label,
                 "chapter_number": metadata.get("chapterNumber"),
                 "source_revision": chunk["source_revision"],
+                "current_revision": chunk.get("current_revision"),
                 "indexed_at": _isoformat(chunk.get("indexed_at")),
+                "source_updated_at": _isoformat(chunk.get("source_updated_at")),
+                "stale": _stale_chunk(chunk),
                 "text": text,
             }
         )
@@ -497,6 +499,29 @@ def _isoformat(value: Any) -> Optional[str]:
         return None
     isoformat = getattr(value, "isoformat", None)
     return isoformat() if callable(isoformat) else str(value)
+
+
+def _stale_chunk(chunk: dict[str, Any]) -> bool:
+    """Whether an indexed chunk predates its canonical source."""
+    current_revision = chunk.get("current_revision")
+    if current_revision is None:
+        return True
+    try:
+        if int(chunk["source_revision"]) != int(current_revision):
+            return True
+    except (KeyError, TypeError, ValueError):
+        return True
+
+    indexed_at = chunk.get("indexed_at")
+    source_updated_at = chunk.get("source_updated_at")
+    if indexed_at is not None and source_updated_at is not None:
+        try:
+            return bool(indexed_at < source_updated_at)
+        except TypeError:
+            # Revision is the authoritative fallback when a fake or older driver
+            # supplies timestamps in incomparable representations.
+            return False
+    return False
 
 
 Executor = Callable[[Any, ToolRuntime], Awaitable[ToolResult]]
