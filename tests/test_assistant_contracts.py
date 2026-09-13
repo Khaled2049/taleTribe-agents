@@ -22,7 +22,9 @@ from scripts.export_assistant_schema import build as build_schema
 FIXTURE_DIR = Path(__file__).resolve().parent.parent / "assistant" / "fixtures"
 FIXTURES = sorted(p for p in FIXTURE_DIR.glob("*.json") if p.name != "MANIFEST.json")
 EXPECTED = {
+    "approval-applied",
     "approval-pause-resume",
+    "approval-rejected",
     "cancellation",
     "max-steps",
     "multi-tool",

@@ -161,7 +161,7 @@ def multi_tool() -> list[Any]:
 
 
 def approval_pause_resume() -> list[Any]:
-    """Reserved until Phase 5. Schema-validated now so Phase 5 adds no version."""
+    """A proposal stream ends with a real, resultless approval gate."""
     r = RunEvents("run-approval")
     return [
         r.emit(RunStarted, provider="mock", model="mock-1"),
@@ -190,25 +190,49 @@ def approval_pause_resume() -> list[Any]:
                 result={"proposalId": "proposal-1"},
             ),
         ),
+        r.emit(ToolStarted, tool_call_id="call-2", name="apply_editor_edit"),
+        r.emit(
+            ToolArgsDelta,
+            tool_call_id="call-2",
+            delta='{"proposalId":"proposal-1"}',
+        ),
         r.emit(
             ApprovalRequested,
             approval_id="approval-1",
             tool_call_id="call-2",
             summary="Apply 1 replacement to chapter 2?",
         ),
+        r.emit(RunCompleted, finish_reason="tool_calls"),
+    ]
+
+
+def approval_applied() -> list[Any]:
+    r = RunEvents("run-approval-applied")
+    return [
+        r.emit(RunStarted, provider="mock", model="mock-1"),
         r.emit(ApprovalResolved, approval_id="approval-1", approved=True),
-        r.emit(ToolStarted, tool_call_id="call-2", name="apply_editor_edit"),
         r.emit(
-            ToolCompleted,
-            part=ToolCallPart(
-                type="tool_call",
-                tool_call_id="call-2",
-                name="apply_editor_edit",
-                arguments={"proposalId": "proposal-1"},
-                result={"applied": True, "operations": 1},
+            TextDone,
+            part=TextPart(
+                type="text", text="Applied and saved in the current chapter."
             ),
         ),
-        r.emit(TextDone, part=TextPart(type="text", text="Applied.")),
+        r.emit(RunCompleted, finish_reason="stop"),
+    ]
+
+
+def approval_rejected() -> list[Any]:
+    r = RunEvents("run-approval-rejected")
+    return [
+        r.emit(RunStarted, provider="mock", model="mock-1"),
+        r.emit(ApprovalResolved, approval_id="approval-1", approved=False),
+        r.emit(
+            TextDone,
+            part=TextPart(
+                type="text",
+                text="Kept the suggestion without changing the chapter.",
+            ),
+        ),
         r.emit(RunCompleted, finish_reason="stop"),
     ]
 
@@ -363,8 +387,16 @@ FIXTURES = {
     "single-tool-round": ("One tool call, its result, and a reply.", single_tool_round),
     "multi-tool": ("Two tool rounds interleaved with text.", multi_tool),
     "approval-pause-resume": (
-        "Proposal, approval request, resolution, then application.",
+        "Proposal stream paused at a resultless editor approval.",
         approval_pause_resume,
+    ),
+    "approval-applied": (
+        "A separate continuation confirms an applied editor proposal.",
+        approval_applied,
+    ),
+    "approval-rejected": (
+        "A separate continuation confirms a rejected editor proposal.",
+        approval_rejected,
     ),
     "research-citations": (
         "Web and story references emitted as parts.",

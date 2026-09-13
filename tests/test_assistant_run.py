@@ -114,17 +114,20 @@ FINAL_ROUND = [
 ]
 
 
-async def collect(provider, *, limits=None):
-    request = AgentRunRequest.model_validate({**BODY, "userId": "uid-1"})
+async def collect(
+    provider, *, limits=None, body=None, edits_enabled=False, run_id="run-1"
+):
+    request = AgentRunRequest.model_validate({**(body or BODY), "userId": "uid-1"})
     return [
         event
         async for event in run_assistant(
             request,
-            run_id="run-1",
+            run_id=run_id,
             provider=provider,
             postgres=FakePostgres(),
             embedder=None,
             limits=limits or RunLimits(),
+            edits_enabled=edits_enabled,
         )
     ]
 
@@ -268,3 +271,130 @@ async def test_platform_credit_refusal_is_a_safe_quota_failure(owned_story):
     assert events[-1].type == "run.failed"
     assert events[-1].code.value == "quota_exceeded"
     assert "sensitive" not in events[-1].message
+
+
+def editor_body(*, dirty=False):
+    return {
+        **BODY,
+        "editorContext": {
+            "chapterId": "chapter-1",
+            "persistedRevision": 3,
+            "documentVersion": 8,
+            "selection": {"from": 1, "to": 14, "text": "Brass polish."},
+            "buffer": {"text": "Brass polish.", "truncated": False},
+            "dirty": dirty,
+        },
+    }
+
+
+def proposal_arguments():
+    return {
+        "chapterId": "chapter-1",
+        "baseRevision": 3,
+        "baseDocumentVersion": 8,
+        "summary": "Make the image more tactile.",
+        "operations": [
+            {
+                "type": "replace",
+                "from": 1,
+                "to": 14,
+                "originalText": "Brass polish.",
+                "replacementText": "Sharp brass polish.",
+            }
+        ],
+    }
+
+
+async def test_edit_proposal_pauses_at_a_resultless_apply_tool(owned_story):
+    provider = FakeProvider(
+        tool_round("propose_editor_edit", json.dumps(proposal_arguments()))
+    )
+    events = await collect(provider, body=editor_body(), edits_enabled=True)
+    types = [event.type for event in events]
+    assert types[-5:] == [
+        "tool.completed",
+        "tool.started",
+        "tool.args.delta",
+        "approval.requested",
+        "run.completed",
+    ]
+    assert events[-1].finish_reason == "tool_calls"
+    proposal = next(event for event in events if event.type == "tool.completed")
+    proposal_id = proposal.part.result["proposalId"]
+    apply_started = [
+        event
+        for event in events
+        if event.type == "tool.started" and event.name == "apply_editor_edit"
+    ][0]
+    approval = next(event for event in events if event.type == "approval.requested")
+    assert (
+        apply_started.tool_call_id == f"apply-{proposal_id.removeprefix('proposal-')}"
+    )
+    assert approval.tool_call_id == apply_started.tool_call_id
+    assert len(provider.requests) == 1
+    offered = {tool["name"] for tool in provider.requests[0]["tools"]}
+    assert "propose_editor_edit" in offered
+    assert "apply_editor_edit" not in offered
+
+
+async def test_applied_continuation_is_deterministic_and_unbilled(owned_story):
+    first_provider = FakeProvider(
+        tool_round("propose_editor_edit", json.dumps(proposal_arguments()))
+    )
+    first = await collect(
+        first_provider, body=editor_body(), edits_enabled=True, run_id="run-1"
+    )
+    proposal_id = next(
+        event.part.result["proposalId"]
+        for event in first
+        if event.type == "tool.completed"
+    )
+    apply_call_id = f"apply-{proposal_id.removeprefix('proposal-')}"
+    approval_id = f"approval-{proposal_id.removeprefix('proposal-')}"
+    body = {
+        **editor_body(),
+        "editorContext": {
+            **editor_body()["editorContext"],
+            "persistedRevision": 4,
+            "documentVersion": 9,
+            "selection": None,
+        },
+        "continuation": {
+            "kind": "editor_approval",
+            "previousRunId": "run-1",
+            "approvalId": approval_id,
+            "toolCallId": apply_call_id,
+            "proposalId": proposal_id,
+            "decision": "applied",
+            "proposal": proposal_arguments(),
+            "result": {
+                "status": "saved",
+                "chapterId": "chapter-1",
+                "documentVersion": 9,
+                "persistedRevision": 4,
+            },
+        },
+    }
+    provider = FakeProvider(FINAL_ROUND)
+    events = await collect(
+        provider,
+        body=body,
+        edits_enabled=True,
+        run_id="run-continuation",
+    )
+    assert [event.type for event in events] == [
+        "run.started",
+        "approval.resolved",
+        "text.done",
+        "run.completed",
+    ]
+    assert events[1].approved is True
+    assert "saved" in events[2].part.text
+    assert provider.requests == []
+
+
+async def test_dirty_editor_does_not_expose_proposal_tool(owned_story):
+    provider = FakeProvider(FINAL_ROUND)
+    await collect(provider, body=editor_body(dirty=True), edits_enabled=True)
+    offered = {tool["name"] for tool in provider.requests[0]["tools"]}
+    assert "propose_editor_edit" not in offered

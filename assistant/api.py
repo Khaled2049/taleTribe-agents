@@ -88,6 +88,7 @@ def register_assistant(
                     postgres=agent.postgres_context,
                     embedder=agent.embedding_provider,
                     limits=limits,
+                    edits_enabled=settings.assistant_edit_proposals_enabled,
                 ):
                     yield encode_sse(event)
             finally:

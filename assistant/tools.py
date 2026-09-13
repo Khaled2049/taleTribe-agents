@@ -22,21 +22,19 @@ result sizes these arguments imply are also capped.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal, Union
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from assistant.protocol import (
     MAX_ID_CHARS,
-    MAX_SELECTION_CHARS,
-    MAX_SUMMARY_CHARS,
+    ProposeEditorEditArgs,
     StrictModel,
 )
 
 MAX_QUERY_CHARS = 500
 MAX_TOOL_RESULTS = 20
 MAX_CHAPTER_WINDOW_CHARS = 20_000
-MAX_EDIT_OPERATIONS = 20
 MAX_RESEARCH_RESULTS = 5
 
 EntityKind = Literal["character", "place", "plot"]
@@ -105,47 +103,6 @@ class ReadCurrentEditorArgs(StrictModel):
     selection_only: bool = True
 
 
-class ReplaceOperation(StrictModel):
-    """Deletion is a replace with empty ``replacementText``, labeled in the diff."""
-
-    type: Literal["replace"] = "replace"
-    from_: int = Field(ge=0, alias="from")
-    to: int = Field(ge=0)
-    original_text: str = Field(min_length=1, max_length=MAX_SELECTION_CHARS)
-    replacement_text: str = Field(
-        default="", min_length=0, max_length=MAX_SELECTION_CHARS
-    )
-
-
-class InsertOperation(StrictModel):
-    type: Literal["insert"] = "insert"
-    at: int = Field(ge=0)
-    text: str = Field(min_length=1, max_length=MAX_SELECTION_CHARS)
-
-
-EditOperation = Annotated[
-    Union[ReplaceOperation, InsertOperation],
-    Field(discriminator="type"),
-]
-
-
-class ProposeEditorEditArgs(StrictModel):
-    """A proposal is only ever a proposal; applying it is a separate, approved tool.
-
-    ``baseRevision`` and ``baseDocumentVersion`` are what make a stale proposal
-    detectable. The frontend refuses a stale one rather than rebasing it, since
-    the model reasoned about text that no longer exists.
-    """
-
-    chapter_id: str = Field(min_length=1, max_length=MAX_ID_CHARS)
-    base_revision: int = Field(ge=0)
-    base_document_version: int = Field(ge=0)
-    summary: str = Field(min_length=1, max_length=MAX_SUMMARY_CHARS)
-    operations: list[EditOperation] = Field(
-        min_length=1, max_length=MAX_EDIT_OPERATIONS
-    )
-
-
 class ApplyEditorEditArgs(StrictModel):
     proposal_id: str = Field(min_length=1, max_length=MAX_ID_CHARS)
 
@@ -170,6 +127,12 @@ READ_TOOLS: dict[str, type[BaseModel]] = {
 EDIT_TOOLS: dict[str, type[BaseModel]] = {
     "propose_editor_edit": ProposeEditorEditArgs,
     "apply_editor_edit": ApplyEditorEditArgs,
+}
+
+# Only proposals are provider-facing in Phase 5. The apply schema is retained
+# for the synthesized browser approval part and continuation validation.
+MODEL_EDIT_TOOLS: dict[str, type[BaseModel]] = {
+    "propose_editor_edit": ProposeEditorEditArgs,
 }
 
 RESEARCH_TOOLS: dict[str, type[BaseModel]] = {
@@ -197,7 +160,7 @@ def available_tools(
     """The allowlist for one run. Server-owned; a model cannot widen it."""
     tools = dict(READ_TOOLS)
     if edits_enabled:
-        tools.update(EDIT_TOOLS)
+        tools.update(MODEL_EDIT_TOOLS)
     if research_enabled:
         tools.update(RESEARCH_TOOLS)
     return tools

@@ -42,12 +42,52 @@ def test_editor_context_from_alias_survives_round_trip():
             "persistedRevision": 7,
             "documentVersion": 42,
             "selection": {"from": 840, "to": 1062, "text": "selected"},
+            "buffer": {"text": "bounded editor text", "truncated": False},
             "dirty": True,
         },
     }
     request = RunRequest.model_validate(body)
     assert request.editor_context.selection.from_ == 840
     assert request.model_dump(by_alias=True, exclude_none=True) == body
+
+
+def test_editor_continuation_is_strict_and_bounded():
+    body = {
+        **BROWSER_BODY,
+        "continuation": {
+            "kind": "editor_approval",
+            "previousRunId": "run-1",
+            "approvalId": "approval-1",
+            "toolCallId": "apply-1",
+            "proposalId": "proposal-1",
+            "decision": "rejected",
+            "proposal": {
+                "chapterId": "chapter-2",
+                "baseRevision": 7,
+                "baseDocumentVersion": 42,
+                "summary": "Tighten this.",
+                "operations": [
+                    {
+                        "type": "replace",
+                        "from": 5,
+                        "to": 13,
+                        "originalText": "selected",
+                        "replacementText": "revised",
+                    }
+                ],
+            },
+        },
+    }
+    request = RunRequest.model_validate(body)
+    assert request.continuation.proposal.operations[0].from_ == 5
+    assert request.model_dump(by_alias=True, exclude_none=True) == body
+    with pytest.raises(ValidationError):
+        RunRequest.model_validate(
+            {
+                **body,
+                "continuation": {**body["continuation"], "userId": "other"},
+            }
+        )
 
 
 @pytest.mark.parametrize("version", [0, 2, 99])

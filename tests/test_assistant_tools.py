@@ -5,8 +5,8 @@ from pydantic import ValidationError
 
 from assistant.tools import (
     APPROVAL_REQUIRED,
-    EDIT_TOOLS,
     IDENTITY_FIELD_NAMES,
+    MODEL_EDIT_TOOLS,
     READ_TOOLS,
     RESEARCH_TOOLS,
     TOOL_SCHEMAS,
@@ -52,10 +52,11 @@ def test_read_tools_are_always_available_and_others_are_gated():
         READ_TOOLS
     )
     both = available_tools(edits_enabled=True, research_enabled=True)
-    assert set(both) == set(TOOL_SCHEMAS)
+    assert set(both) == set(READ_TOOLS) | set(MODEL_EDIT_TOOLS) | set(RESEARCH_TOOLS)
+    assert "apply_editor_edit" not in both
     assert set(available_tools(edits_enabled=True, research_enabled=False)) == set(
         READ_TOOLS
-    ) | set(EDIT_TOOLS)
+    ) | set(MODEL_EDIT_TOOLS)
     assert set(available_tools(edits_enabled=False, research_enabled=True)) == set(
         READ_TOOLS
     ) | set(RESEARCH_TOOLS)

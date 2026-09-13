@@ -456,21 +456,25 @@ async def search_story(args: SearchStoryArgs, runtime: ToolRuntime) -> ToolResul
 async def read_current_editor(
     args: ReadCurrentEditorArgs, runtime: ToolRuntime
 ) -> ToolResult:
-    """The buffer the browser sent, which in Phase 3 is usually nothing.
-
-    Registered before it can do much on purpose: a tool that appears in Phase 5
-    changes how the model behaves partway through the project, in ways that are
-    hard to attribute to the change that caused them. ``editorContext`` is
-    optional and carries a selection, not a manuscript -- so even when it is
-    present, ``selectionOnly=false`` cannot conjure the rest of the document.
-    Persisted text is what ``read_chapter`` is for.
-    """
+    """Return the bounded send-time snapshot supplied by the active editor."""
     editor = runtime.editor_context
     if editor is None:
         return ToolResult({"available": False, "reason": "no active editor"})
+
+    # Browser context is not an ownership assertion. Re-establish that the
+    # chapter belongs to the already-authorized story before reflecting it to
+    # the model. The returned canonical text is intentionally discarded.
+    if editor.chapter_id:
+        await data.get_chapter(
+            runtime.ctx.story_id,
+            editor.chapter_id,
+            runtime.ctx.user_id,
+            0,
+            1,
+        )
+
     selection = editor.selection
-    # A selection is bounded at MAX_SELECTION_CHARS (10 000), which is above the
-    # result ceiling, so this one goes through _fit like any other result.
+    buffer = editor.buffer if not args.selection_only else None
     payload, truncated = _fit(
         {
             "available": True,
@@ -487,7 +491,12 @@ async def read_current_editor(
                     "text": selection.text,
                 }
             ),
-            "full_document_available": False,
+            "buffer": (
+                None
+                if buffer is None
+                else {"text": buffer.text, "truncated": buffer.truncated}
+            ),
+            "full_document_available": buffer is not None,
         },
         runtime.max_result_chars,
     )

@@ -21,6 +21,8 @@ from assistant.errors import ErrorCode
 from assistant.events import TERMINAL_EVENT_TYPES, AssistantEvent
 from assistant.protocol import (
     MAX_CONTENT_CHARS,
+    MAX_EDIT_OPERATIONS,
+    MAX_EDITOR_WINDOW_CHARS,
     MAX_ID_CHARS,
     MAX_MESSAGE_CHARS,
     MAX_PARTS_PER_MESSAGE,
@@ -34,7 +36,6 @@ from assistant.protocol import (
 from assistant.tools import (
     APPROVAL_REQUIRED,
     MAX_CHAPTER_WINDOW_CHARS,
-    MAX_EDIT_OPERATIONS,
     MAX_QUERY_CHARS,
     MAX_RESEARCH_RESULTS,
     MAX_TOOL_RESULTS,
@@ -62,6 +63,7 @@ def build() -> dict[str, Any]:
             "messageChars": MAX_MESSAGE_CHARS,
             "partsPerMessage": MAX_PARTS_PER_MESSAGE,
             "selectionChars": MAX_SELECTION_CHARS,
+            "editorWindowChars": MAX_EDITOR_WINDOW_CHARS,
             "summaryChars": MAX_SUMMARY_CHARS,
             "toolNameChars": MAX_TOOL_NAME_CHARS,
             "urlChars": MAX_URL_CHARS,

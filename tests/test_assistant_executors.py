@@ -21,7 +21,7 @@ from assistant.executors import (
     _fit,
     execute_tool,
 )
-from assistant.protocol import EditorContext, Selection
+from assistant.protocol import EditorContext, EditorTextWindow, Selection
 from assistant.tools import (
     ToolContext,
     UnknownToolError,
@@ -257,6 +257,7 @@ async def test_read_current_editor_returns_what_the_browser_sent(fake):
         persisted_revision=4,
         document_version=11,
         selection=Selection(**{"from": 10, "to": 20, "text": "brass polish"}),
+        buffer=EditorTextWindow(text="The lamp room smelled of brass polish."),
         dirty=True,
     )
     result = await run("read_current_editor", {}, runtime(editor_context=editor))
@@ -267,8 +268,19 @@ async def test_read_current_editor_returns_what_the_browser_sent(fake):
         "to": 20,
         "text": "brass polish",
     }
-    # v1 never ships the whole buffer; read_chapter is what reads persisted text.
+    # The default stays selection-only even when a bounded window was supplied.
     assert result.result["full_document_available"] is False
+
+    window = await run(
+        "read_current_editor",
+        {"selectionOnly": False},
+        runtime(editor_context=editor),
+    )
+    assert window.result["buffer"] == {
+        "text": "The lamp room smelled of brass polish.",
+        "truncated": False,
+    }
+    assert window.result["full_document_available"] is True
 
 
 async def test_a_non_owner_is_refused_by_the_gate_the_tools_inherit(fake):

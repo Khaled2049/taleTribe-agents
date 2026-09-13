@@ -37,10 +37,12 @@ from assistant.version import ASSISTANT_PROTOCOL_VERSION
 # existing actions cannot drift into two different ideas of "too long".
 MAX_MESSAGE_CHARS = MAX_PROMPT_CHARS
 MAX_SELECTION_CHARS = MAX_PROMPT_CHARS
+MAX_EDITOR_WINDOW_CHARS = 8_000
 MAX_PARTS_PER_MESSAGE = 16
 MAX_TOOL_NAME_CHARS = 64
 MAX_SUMMARY_CHARS = 500
 MAX_URL_CHARS = 2048
+MAX_EDIT_OPERATIONS = 20
 
 
 class StrictModel(BaseModel):
@@ -113,6 +115,83 @@ class Selection(StrictModel):
     text: str = Field(min_length=0, max_length=MAX_SELECTION_CHARS)
 
 
+class EditorTextWindow(StrictModel):
+    """A bounded plain-text view of the live editor, never HTML or TipTap JSON."""
+
+    text: str = Field(min_length=0, max_length=MAX_EDITOR_WINDOW_CHARS)
+    truncated: bool = False
+
+
+class ReplaceOperation(StrictModel):
+    """The Phase 5 editor operation. An empty replacement is a deletion."""
+
+    type: Literal["replace"] = "replace"
+    from_: int = Field(ge=0, alias="from")
+    to: int = Field(ge=0)
+    original_text: str = Field(min_length=1, max_length=MAX_SELECTION_CHARS)
+    replacement_text: str = Field(
+        default="", min_length=0, max_length=MAX_SELECTION_CHARS
+    )
+
+
+class InsertOperation(StrictModel):
+    """Reserved for a later editor phase; Phase 5 rejects it at execution."""
+
+    type: Literal["insert"] = "insert"
+    at: int = Field(ge=0)
+    text: str = Field(min_length=1, max_length=MAX_SELECTION_CHARS)
+
+
+EditOperation = Annotated[
+    Union[ReplaceOperation, InsertOperation],
+    Field(discriminator="type"),
+]
+
+
+class ProposeEditorEditArgs(StrictModel):
+    chapter_id: str = Field(min_length=1, max_length=MAX_ID_CHARS)
+    base_revision: int = Field(ge=0)
+    base_document_version: int = Field(ge=0)
+    summary: str = Field(min_length=1, max_length=MAX_SUMMARY_CHARS)
+    operations: list[EditOperation] = Field(
+        min_length=1, max_length=MAX_EDIT_OPERATIONS
+    )
+
+
+EditorApplyStatus = Literal[
+    "saved",
+    "applied_local_save_failed",
+    "applied_local_save_conflict",
+    "stale",
+    "invalid",
+]
+
+
+class EditorApplyResult(StrictModel):
+    """Bounded browser report. It never authorizes or performs a server write."""
+
+    status: EditorApplyStatus
+    chapter_id: str = Field(min_length=1, max_length=MAX_ID_CHARS)
+    document_version: int = Field(ge=0)
+    persisted_revision: Optional[int] = Field(default=None, ge=0)
+
+
+class EditorContinuation(StrictModel):
+    """Stateless second request after a browser-owned approval decision."""
+
+    kind: Literal["editor_approval"] = "editor_approval"
+    previous_run_id: str = Field(min_length=1, max_length=MAX_ID_CHARS)
+    approval_id: str = Field(min_length=1, max_length=MAX_ID_CHARS)
+    tool_call_id: str = Field(min_length=1, max_length=MAX_ID_CHARS)
+    proposal_id: str = Field(min_length=1, max_length=MAX_ID_CHARS)
+    decision: Literal["applied", "rejected", "revision_requested", "apply_failed"]
+    proposal: ProposeEditorEditArgs
+    result: Optional[EditorApplyResult] = None
+    feedback: Optional[str] = Field(
+        default=None, min_length=1, max_length=MAX_SUMMARY_CHARS
+    )
+
+
 class EditorContext(StrictModel):
     """Freshness for the active buffer. Optional, and unused until Phase 5.
 
@@ -127,6 +206,7 @@ class EditorContext(StrictModel):
     persisted_revision: Optional[int] = Field(default=None, ge=0)
     document_version: Optional[int] = Field(default=None, ge=0)
     selection: Optional[Selection] = None
+    buffer: Optional[EditorTextWindow] = None
     dirty: bool = False
 
 
@@ -148,6 +228,7 @@ class RunRequest(StrictModel):
     client_message_id: str = Field(min_length=1, max_length=MAX_ID_CHARS)
     message: UserMessage
     editor_context: Optional[EditorContext] = None
+    continuation: Optional[EditorContinuation] = None
 
 
 class AgentRunRequest(RunRequest):
