@@ -34,7 +34,7 @@ class BrainstormingTool:
         Generate brainstorming ideas.
 
         Args:
-            story_id: Firestore story document ID
+            story_id: story-data (PostgreSQL) story ID
             idea_type: Type of idea (characters/plots/places/themes)
             prompt: Optional specific prompt or requirement
             count: Number of ideas to generate (default 5)

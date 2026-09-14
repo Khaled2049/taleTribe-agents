@@ -40,7 +40,6 @@ class Settings(BaseSettings):
     assistant_api_enabled: bool = False
     assistant_edit_proposals_enabled: bool = False
     assistant_research_enabled: bool = False
-    assistant_legacy_fallback_enabled: bool = True
 
     # Independent ceilings for one streamed run. They are deliberately settings,
     # not prompt suggestions: the process must remain bounded when a provider

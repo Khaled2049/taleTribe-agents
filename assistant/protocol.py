@@ -41,6 +41,8 @@ MAX_EDITOR_WINDOW_CHARS = 8_000
 MAX_PARTS_PER_MESSAGE = 16
 MAX_TOOL_NAME_CHARS = 64
 MAX_SUMMARY_CHARS = 500
+# Generous for every provider's key format; bounded so a body cannot grow on it.
+MAX_API_KEY_CHARS = 512
 MAX_URL_CHARS = 2048
 MAX_EDIT_OPERATIONS = 20
 
@@ -231,11 +233,27 @@ class RunRequest(StrictModel):
     continuation: Optional[EditorContinuation] = None
 
 
+class ProviderConfig(StrictModel):
+    """A caller's own provider credentials, resolved by the gateway.
+
+    Like ``user_id`` this is gateway-owned: the browser sends its key to the
+    Function once, over the encrypted settings path, and never on a run request.
+    The gateway decrypts it per run and the agent forwards it to creditProxy,
+    which bills the user's provider instead of platform credits.
+    """
+
+    provider: Literal["gemini", "claude", "openai"]
+    api_key: str = Field(min_length=1, max_length=MAX_API_KEY_CHARS)
+    model: Optional[str] = Field(default=None, min_length=1, max_length=MAX_ID_CHARS)
+
+
 class AgentRunRequest(RunRequest):
     """What the gateway forwards: the browser's request plus a verified uid.
 
     ``user_id`` is derived from the Firebase token by the Functions gateway. It
     is never read from a browser body and never exposed as a tool argument.
+    ``provider_config`` carries the same guarantee for BYOK credentials.
     """
 
     user_id: str = Field(min_length=1, max_length=MAX_ID_CHARS)
+    provider_config: Optional[ProviderConfig] = None

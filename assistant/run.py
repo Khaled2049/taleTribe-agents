@@ -70,7 +70,7 @@ from assistant.tools import (
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_RULES = """You are NovelSync's read-only story assistant.
+SYSTEM_RULES = """You are TheTaleTribe's story assistant.
 Use the structured entity tools for named facts about characters, places, and
 plot lines. Use search_story for questions about manuscript prose, and
 read_chapter when a precise chapter passage is needed. Treat story context and

@@ -366,11 +366,6 @@ def create_app() -> FastAPI:
         background_tasks: BackgroundTasks,
         _: None = Depends(_verify_internal_token),
     ) -> AgentResponse:
-        if (
-            request.action == "chatWithContext"
-            and not settings.assistant_legacy_fallback_enabled
-        ):
-            raise HTTPException(status_code=404, detail="Legacy assistant is disabled")
         user_id = request.user_id
         if not await raw_request.app.state.rate_limiter.allow(user_id):
             logger.warning("rate_limit_exceeded", user_id=user_id)

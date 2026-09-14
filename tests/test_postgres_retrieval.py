@@ -1,12 +1,10 @@
-"""Chunk retrieval: the two shapes, and the jsonb decode that sat between them.
+"""Chunk retrieval: the projection, and the jsonb decode that sits under it.
 
-No database here. What is worth pinning is the projection -- search_chunks keeps
-metadata in its own key so a metadata entry can never shadow a column, retrieve
-flattens the same rows into the shape excerpts.format_excerpts renders -- and
-the decode, which is where retrieval had been quietly failing.
+No database here. What is worth pinning is that search_chunks keeps metadata in
+its own key so a metadata entry can never shadow a column, and the decode, which
+is where retrieval had been quietly failing.
 """
 
-from agents.storyAgent.excerpts import format_excerpts
 from agents.storyAgent.postgres_context import (
     MAX_SLIM_CONTEXT_CHARS,
     MAX_SLIM_DESCRIPTION_CHARS,
@@ -52,39 +50,3 @@ def test_slim_context_bounds_roster_labels_description_and_total_size():
         for label in roster.split(": ", 1)[1].split(", "):
             assert len(label) <= MAX_SLIM_LABEL_CHARS
     assert context.count("…") >= 2
-
-
-async def test_retrieve_flattens_search_chunks_for_the_chat_prompt(monkeypatch):
-    store = PostgresStoryContext(dsn="postgres://unused")
-    chunks = [
-        {
-            "chunk_id": "chunk-1",
-            "kind": "chapter",
-            "source_id": "chapter-1",
-            "source_revision": 3,
-            "current_revision": 3,
-            "chunk_index": 0,
-            "indexed_at": None,
-            "source_updated_at": None,
-            "metadata": {"title": "The Lamp Room", "chapterNumber": 1},
-            "text": "Brass polish.",
-        }
-    ]
-
-    async def fake_search(story_id, embedding, top_k=4):
-        assert story_id == "story-1"
-        return chunks
-
-    monkeypatch.setattr(store, "search_chunks", fake_search)
-    excerpts = await store.retrieve("story-1", [0.0] * 768)
-
-    assert excerpts == [
-        {
-            "kind": "chapter",
-            "title": "The Lamp Room",
-            "chapterNumber": 1,
-            "text": "Brass polish.",
-        }
-    ]
-    # The whole point of the flattening: format_excerpts can label the chunk.
-    assert "[Ch1: The Lamp Room] Brass polish." in format_excerpts(excerpts)

@@ -191,3 +191,67 @@ def test_unsupported_protocol_version_is_a_stable_conflict():
             "message": "This version of the app is out of date. Reload to continue.",
         }
     }
+
+
+def test_byok_credentials_reach_the_provider_context():
+    """A run carrying the gateway's resolved key must bill that key, not the
+    platform. The provider reads it from the ContextVar, so that is where it
+    has to arrive."""
+    provider = TextProvider()
+    api, _ = client(provider=provider)
+    with patch("assistant.api.StoryDataClient") as factory:
+        owned(factory)
+        response = api.post(
+            "/assistant/run",
+            json={
+                **BODY,
+                "providerConfig": {
+                    "provider": "claude",
+                    "apiKey": "user-supplied-key",
+                    "model": "claude-sonnet-4-6",
+                },
+            },
+            headers={"X-Firebase-Token": "firebase-token"},
+        )
+
+    assert response.status_code == 200
+    assert provider.context == (
+        {
+            "user_id": "u1",
+            "provider": "claude",
+            "api_key": "user-supplied-key",
+            "model": "claude-sonnet-4-6",
+        },
+        "firebase-token",
+    )
+
+
+def test_a_run_without_byok_sends_no_key():
+    """The platform path must stay the default: absent settings mean absent
+    credentials, not an empty-string provider the gateway might honour."""
+    provider = TextProvider()
+    api, _ = client(provider=provider)
+    with patch("assistant.api.StoryDataClient") as factory:
+        owned(factory)
+        api.post("/assistant/run", json=BODY)
+
+    config, _ = provider.context
+    assert config["provider"] == ""
+    assert config["api_key"] == ""
+
+
+@pytest.mark.parametrize(
+    "provider_config",
+    [
+        {"provider": "gemini"},
+        {"provider": "gemini", "apiKey": ""},
+        {"provider": "not-a-provider", "apiKey": "k"},
+        {"provider": "gemini", "apiKey": "k", "extra": "field"},
+    ],
+)
+def test_malformed_provider_config_is_rejected(provider_config):
+    api, _ = client()
+    response = api.post(
+        "/assistant/run", json={**BODY, "providerConfig": provider_config}
+    )
+    assert response.status_code == 422

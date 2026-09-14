@@ -8,12 +8,10 @@ from typing import Any, Dict, Optional
 
 # Handle imports for both direct execution and module import
 try:
-    from .excerpts import format_excerpts
     from .llm_provider import get_llm_provider
     from .postgres_context import PostgresIndexWorker, PostgresStoryContext
     from .tools import (
         BrainstormingTool,
-        ChatWithContextTool,
         EnhanceTextTool,
         EnhanceWizardInputTool,
         NextLineGenerationTool,
@@ -25,7 +23,6 @@ except ImportError:
     parent_dir = current_dir.parent.parent
     if str(parent_dir) not in sys.path:
         sys.path.insert(0, str(parent_dir))
-    from agents.storyAgent.excerpts import format_excerpts
     from agents.storyAgent.llm_provider import get_llm_provider
     from agents.storyAgent.postgres_context import (
         PostgresIndexWorker,
@@ -33,7 +30,6 @@ except ImportError:
     )
     from agents.storyAgent.tools import (
         BrainstormingTool,
-        ChatWithContextTool,
         EnhanceTextTool,
         EnhanceWizardInputTool,
         NextLineGenerationTool,
@@ -65,20 +61,16 @@ class StoryAgent:
         # Shared providers — loaded once per process
         self._llm_provider = get_llm_provider(self.project_id, self.location)
         self._embedder = _load_embedder()
-        self._db = _get_firestore_client(self.project_id)
 
         # Initialize tools
         self.brainstorm_tool = BrainstormingTool(
             self.project_id, self.location, llm_provider=self._llm_provider
         )
         self.next_line_tool = NextLineGenerationTool(
-            self.project_id, self.location, llm_provider=self._llm_provider, db=self._db
-        )
-        self.chat_tool = ChatWithContextTool(
             self.project_id, self.location, llm_provider=self._llm_provider
         )
         self.enhance_text_tool = EnhanceTextTool(
-            self.project_id, self.location, llm_provider=self._llm_provider, db=self._db
+            self.project_id, self.location, llm_provider=self._llm_provider
         )
         self.enhance_wizard_tool = EnhanceWizardInputTool(
             self.project_id, self.location, llm_provider=self._llm_provider
@@ -121,7 +113,7 @@ class StoryAgent:
         Generate 3 next line suggestions based on chapter content and cursor position.
 
         Args:
-            story_id: Firestore story document ID
+            story_id: story-data (PostgreSQL) story ID
             content: Current content of the chapter being edited
             cursorPosition: Character index where the new line should be inserted
             chapter_id: Optional chapter document ID for better context and validation
@@ -145,7 +137,7 @@ class StoryAgent:
         Generate brainstorming ideas.
 
         Args:
-            story_id: Firestore story document ID
+            story_id: story-data (PostgreSQL) story ID
             idea_type: Type of idea (characters/plots/places/themes)
             prompt: Optional specific prompt
             count: Number of ideas to generate
@@ -156,61 +148,6 @@ class StoryAgent:
         context = await self.postgres_context.context(story_id)
         return await self.brainstorm_tool.execute(
             story_id, idea_type, prompt, count, context
-        )
-
-    async def chat_with_context(
-        self,
-        story_id: str,
-        message: str,
-        chat_history: Optional[list] = None,
-        user_id: str = "anonymous",
-        background_tasks=None,
-    ) -> Dict[str, Any]:
-        """
-        Generate a chat response from story context and retrieved excerpts.
-
-        Args:
-            story_id: Firestore story document ID
-            message: User's message
-            chat_history: Optional list of previous messages for conversational context
-            user_id: User identifier for procedural memory scoping
-            background_tasks: FastAPI BackgroundTasks for async reflection
-
-        Returns:
-            Dictionary containing response and context usage
-        """
-        chapter_excerpts = None
-        context = await self.postgres_context.context(story_id)
-
-        if self._embedder is not None:
-            log = logging.getLogger(__name__)
-            try:
-                query_vec = await self._embedder.embed(message)
-            except Exception:
-                query_vec = None
-                log.warning(
-                    "query embedding failed for story_id=%s; retrieval degraded",
-                    story_id,
-                )
-            if query_vec is not None:
-                try:
-                    excerpts = await self.postgres_context.retrieve(
-                        story_id, query_vec, top_k=4
-                    )
-                    chapter_excerpts = format_excerpts(excerpts) or None
-                except Exception:
-                    log.warning(
-                        "vector retrieval failed for story_id=%s, continuing "
-                        "without excerpts",
-                        story_id,
-                    )
-
-        return await self.chat_tool.execute(
-            story_id,
-            message,
-            chat_history,
-            chapter_excerpts=chapter_excerpts,
-            context_override=context,
         )
 
     async def enhance_text(
@@ -224,7 +161,7 @@ class StoryAgent:
         Enhance selected text based on action type.
 
         Args:
-            story_id: Firestore story document ID
+            story_id: story-data (PostgreSQL) story ID
             action: Action type (expand, dialogue, rewrite)
             selected_text: The text to enhance
             chapter_id: Optional chapter document ID for better context
@@ -280,7 +217,7 @@ class StoryAgent:
         Generate interactive story choices for the co-write feature.
 
         Args:
-            story_id: Firestore story document ID
+            story_id: story-data (PostgreSQL) story ID
             mode: "opening", "continuation", or "ending"
             current_content: HTML already in the editor (empty string for opening)
             chapter_id: Optional chapter document ID for chapter-specific context
@@ -364,14 +301,6 @@ class StoryAgent:
                 self._param(parameters, "cursorPosition", "cursor_position"),
                 self._param(parameters, "chapterId", "chapter_id"),
             )
-        if action == "chatWithContext":
-            return await self.chat_with_context(
-                self._param(parameters, "storyId", "story_id"),
-                self._param(parameters, "message"),
-                self._param(parameters, "chatHistory", "chat_history"),
-                user_id=effective_user_id,
-                background_tasks=background_tasks,
-            )
         if action == "enhanceText":
             return await self.enhance_text(
                 self._param(parameters, "storyId", "story_id"),
@@ -426,10 +355,3 @@ def _load_embedder():
     # rather than silently lose recall later (mixed-dim vectors score 0.0).
     verify_embedding_dimension(embedder)
     return embedder
-
-
-def _get_firestore_client(project_id: str):
-    """Get a shared Firestore client."""
-    from google.cloud import firestore as _fs
-
-    return _fs.Client(project=project_id)

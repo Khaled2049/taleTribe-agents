@@ -865,6 +865,47 @@
           "title": "ProposeEditorEditArgs",
           "type": "object"
         },
+        "ProviderConfig": {
+          "additionalProperties": false,
+          "description": "A caller's own provider credentials, resolved by the gateway.\n\nLike ``user_id`` this is gateway-owned: the browser sends its key to the\nFunction once, over the encrypted settings path, and never on a run request.\nThe gateway decrypts it per run and the agent forwards it to creditProxy,\nwhich bills the user's provider instead of platform credits.",
+          "properties": {
+            "provider": {
+              "enum": [
+                "gemini",
+                "claude",
+                "openai"
+              ],
+              "title": "Provider",
+              "type": "string"
+            },
+            "apiKey": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Apikey",
+              "type": "string"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model"
+            }
+          },
+          "required": [
+            "provider",
+            "apiKey"
+          ],
+          "title": "ProviderConfig",
+          "type": "object"
+        },
         "ReplaceOperation": {
           "additionalProperties": false,
           "description": "The Phase 5 editor operation. An empty replacement is a deletion.",
@@ -986,7 +1027,7 @@
         }
       },
       "additionalProperties": false,
-      "description": "What the gateway forwards: the browser's request plus a verified uid.\n\n``user_id`` is derived from the Firebase token by the Functions gateway. It\nis never read from a browser body and never exposed as a tool argument.",
+      "description": "What the gateway forwards: the browser's request plus a verified uid.\n\n``user_id`` is derived from the Firebase token by the Functions gateway. It\nis never read from a browser body and never exposed as a tool argument.\n``provider_config`` carries the same guarantee for BYOK credentials.",
       "properties": {
         "v": {
           "const": 1,
@@ -1049,6 +1090,17 @@
           "minLength": 1,
           "title": "Userid",
           "type": "string"
+        },
+        "providerConfig": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [

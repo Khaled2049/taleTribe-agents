@@ -70,12 +70,13 @@ def register_assistant(
             # ContextVars are installed inside the streaming task, not the route
             # task. Starlette may consume StreamingResponse in a child task whose
             # context was copied before the route returns.
+            byok = body.provider_config
             byok_context = _byok_config.set(
                 {
                     "user_id": body.user_id,
-                    "provider": "",
-                    "api_key": "",
-                    "model": "",
+                    "provider": byok.provider if byok else "",
+                    "api_key": byok.api_key if byok else "",
+                    "model": (byok.model or "") if byok else "",
                 }
             )
             firebase_context = _firebase_token.set(firebase_token)

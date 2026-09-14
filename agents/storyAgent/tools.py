@@ -6,7 +6,6 @@ The tools have been refactored into separate modules in the tools/ subdirectory 
 
 try:
     from .tools.brainstorming import BrainstormingTool
-    from .tools.chat_with_context import ChatWithContextTool
     from .tools.enhance_text import EnhanceTextTool
 except ImportError:
     # Handle direct execution case
@@ -19,11 +18,9 @@ except ImportError:
         sys.path.insert(0, str(parent_dir))
 
     from agents.storyAgent.tools.brainstorming import BrainstormingTool
-    from agents.storyAgent.tools.chat_with_context import ChatWithContextTool
     from agents.storyAgent.tools.enhance_text import EnhanceTextTool
 
 __all__ = [
     "BrainstormingTool",
-    "ChatWithContextTool",
     "EnhanceTextTool",
 ]

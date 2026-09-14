@@ -40,5 +40,8 @@ google_ai_studio_model = "gemini-2.5-flash"
 # Enable public access — keep false in production; Firebase Functions authenticates via OIDC tokens
 enable_public_access = false
 
+# Story assistant endpoint. Set false for an immediate server-side rollback.
+assistant_api_enabled = true
+
 # Service account email used by Firebase Functions (gen 2) to invoke the Cloud Run agent
 firebase_functions_service_account = "793308156964-compute@developer.gserviceaccount.com"

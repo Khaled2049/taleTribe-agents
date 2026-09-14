@@ -188,18 +188,12 @@ class PostgresStoryContext:
             for row in rows
         ]
 
-    async def retrieve(
-        self, story_id: str, embedding: list[float], top_k: int = 4
-    ) -> list[dict[str, Any]]:
-        """Flattened chunks in the shape ``excerpts.format_excerpts`` renders."""
-        return [
-            {"kind": chunk["kind"], **chunk["metadata"], "text": chunk["text"]}
-            for chunk in await self.search_chunks(story_id, embedding, top_k)
-        ]
-
     @staticmethod
     def format_slim_context(context: dict[str, Any]) -> str:
-        """Small, bounded roster used by chat alongside vector excerpts."""
+        """Small, bounded roster the assistant run seeds its prompt with.
+
+        Pairs with the ``search_story`` tool: the roster names what exists, the
+        tool fetches the text on demand."""
         story = context["story"]
         lines = [
             f"Story: {_bounded(story.get('title', ''), MAX_SLIM_LABEL_CHARS)}",
