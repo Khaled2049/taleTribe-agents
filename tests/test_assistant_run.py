@@ -29,13 +29,22 @@ class FakeProvider:
         self.scripts = list(calls)
         self.requests = []
 
-    async def chat_stream(self, messages, tools, *, max_output_tokens, idempotency_key):
+    async def chat_stream(
+        self,
+        messages,
+        tools,
+        *,
+        max_output_tokens,
+        idempotency_key,
+        required_tool=None,
+    ):
         self.requests.append(
             {
                 "messages": messages,
                 "tools": tools,
                 "max_output_tokens": max_output_tokens,
                 "idempotency_key": idempotency_key,
+                "required_tool": required_tool,
             }
         )
         script = self.scripts[min(len(self.requests) - 1, len(self.scripts) - 1)]
@@ -305,9 +314,16 @@ def proposal_arguments():
     }
 
 
+def proposal_draft_arguments():
+    return {
+        "summary": "Make the image more tactile.",
+        "replacementText": "Sharp brass polish.",
+    }
+
+
 async def test_edit_proposal_pauses_at_a_resultless_apply_tool(owned_story):
     provider = FakeProvider(
-        tool_round("propose_editor_edit", json.dumps(proposal_arguments()))
+        tool_round("propose_editor_edit", json.dumps(proposal_draft_arguments()))
     )
     events = await collect(provider, body=editor_body(), edits_enabled=True)
     types = [event.type for event in events]
@@ -337,9 +353,66 @@ async def test_edit_proposal_pauses_at_a_resultless_apply_tool(owned_story):
     assert "apply_editor_edit" not in offered
 
 
+async def test_reading_an_editor_selection_requires_the_followup_proposal_tool(
+    owned_story,
+):
+    provider = FakeProvider(
+        tool_round("read_current_editor"),
+        tool_round(
+            "propose_editor_edit",
+            json.dumps(proposal_draft_arguments()),
+            call_id="call-2",
+        ),
+    )
+
+    events = await collect(provider, body=editor_body(), edits_enabled=True)
+
+    assert provider.requests[0]["required_tool"] is None
+    assert provider.requests[1]["required_tool"] == "propose_editor_edit"
+    assert {tool["name"] for tool in provider.requests[1]["tools"]} == {
+        "propose_editor_edit"
+    }
+    assert any(event.type == "approval.requested" for event in events)
+
+
+async def test_explicit_selection_edit_requires_a_direct_proposal_tool(owned_story):
+    provider = FakeProvider(
+        tool_round(
+            "propose_editor_edit",
+            json.dumps(proposal_draft_arguments()),
+        )
+    )
+    body = editor_body()
+    body["message"] = {
+        "role": "user",
+        "parts": [
+            {
+                "type": "text",
+                "text": (
+                    "Suggest a tighter revision for the text I selected in "
+                    "the editor."
+                ),
+            }
+        ],
+    }
+
+    events = await collect(provider, body=body, edits_enabled=True)
+
+    assert len(provider.requests) == 1
+    assert provider.requests[0]["required_tool"] == "propose_editor_edit"
+    assert {tool["name"] for tool in provider.requests[0]["tools"]} == {
+        "propose_editor_edit"
+    }
+    prompt_text = "".join(
+        part["text"] for part in provider.requests[0]["messages"][1]["parts"]
+    )
+    assert "Brass polish." in prompt_text
+    assert any(event.type == "approval.requested" for event in events)
+
+
 async def test_applied_continuation_is_deterministic_and_unbilled(owned_story):
     first_provider = FakeProvider(
-        tool_round("propose_editor_edit", json.dumps(proposal_arguments()))
+        tool_round("propose_editor_edit", json.dumps(proposal_draft_arguments()))
     )
     first = await collect(
         first_provider, body=editor_body(), edits_enabled=True, run_id="run-1"

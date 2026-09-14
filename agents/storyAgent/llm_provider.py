@@ -229,6 +229,7 @@ class CreditProxyProvider(LLMProvider):
         *,
         max_output_tokens: int,
         idempotency_key: str,
+        required_tool: Optional[str] = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Yield normalized CreditProxy chat events from one billed model call.
 
@@ -241,7 +242,11 @@ class CreditProxyProvider(LLMProvider):
             "version": 1,
             "messages": messages,
             "tools": tools,
-            "tool_choice": {"mode": "auto"},
+            "tool_choice": (
+                {"mode": "required", "name": required_tool}
+                if required_tool
+                else {"mode": "auto"}
+            ),
             "max_output_tokens": max_output_tokens,
             "stream": True,
             "idempotency_key": idempotency_key,

@@ -68,6 +68,24 @@ def test_applying_an_edit_requires_approval_but_proposing_does_not():
     assert APPROVAL_REQUIRED <= set(TOOL_SCHEMAS)
 
 
+def test_model_edit_draft_cannot_supply_editor_coordinates():
+    schema = MODEL_EDIT_TOOLS["propose_editor_edit"]
+    assert (
+        schema.model_validate(
+            {"summary": "Tighten it.", "replacementText": "Sharper."}
+        ).replacement_text
+        == "Sharper."
+    )
+    with pytest.raises(ValidationError):
+        schema.model_validate(
+            {
+                "summary": "Tighten it.",
+                "replacementText": "Sharper.",
+                "chapterId": "model-controlled-chapter",
+            }
+        )
+
+
 def test_unknown_tool_is_refused():
     with pytest.raises(UnknownToolError):
         validate_tool_arguments("run_sql", {})

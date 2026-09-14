@@ -459,6 +459,38 @@ async def test_chat_stream_forwards_contract_and_parses_sse():
 
 
 @pytest.mark.asyncio
+async def test_chat_stream_can_require_one_named_tool():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            text='data: {"type":"done","finish_reason":"tool_calls"}\n\n',
+        )
+
+    provider = _provider_with_transport(handler)
+    events = [
+        event
+        async for event in provider.chat_stream(
+            [{"role": "user", "parts": [{"type": "text", "text": "Rewrite"}]}],
+            [{"name": "propose_editor_edit", "parameters": {"type": "object"}}],
+            max_output_tokens=512,
+            idempotency_key="run-1:1",
+            required_tool="propose_editor_edit",
+        )
+    ]
+    await provider.aclose()
+
+    assert [event["type"] for event in events] == ["done"]
+    assert captured["tool_choice"] == {
+        "mode": "required",
+        "name": "propose_editor_edit",
+    }
+
+
+@pytest.mark.asyncio
 async def test_chat_stream_does_not_retry_a_failed_request():
     calls = 0
 

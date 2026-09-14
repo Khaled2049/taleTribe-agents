@@ -28,6 +28,8 @@ from pydantic import BaseModel, Field
 
 from assistant.protocol import (
     MAX_ID_CHARS,
+    MAX_SELECTION_CHARS,
+    MAX_SUMMARY_CHARS,
     ProposeEditorEditArgs,
     StrictModel,
 )
@@ -107,6 +109,15 @@ class ApplyEditorEditArgs(StrictModel):
     proposal_id: str = Field(min_length=1, max_length=MAX_ID_CHARS)
 
 
+class ProposeEditorEditDraft(StrictModel):
+    """Model-authored content; the server supplies every editor coordinate."""
+
+    summary: str = Field(min_length=1, max_length=MAX_SUMMARY_CHARS)
+    replacement_text: str = Field(
+        default="", min_length=0, max_length=MAX_SELECTION_CHARS
+    )
+
+
 class ResearchWebArgs(StrictModel):
     query: str = Field(min_length=1, max_length=MAX_QUERY_CHARS)
     max_results: int = Field(default=3, ge=1, le=MAX_RESEARCH_RESULTS)
@@ -132,7 +143,7 @@ EDIT_TOOLS: dict[str, type[BaseModel]] = {
 # Only proposals are provider-facing in Phase 5. The apply schema is retained
 # for the synthesized browser approval part and continuation validation.
 MODEL_EDIT_TOOLS: dict[str, type[BaseModel]] = {
-    "propose_editor_edit": ProposeEditorEditArgs,
+    "propose_editor_edit": ProposeEditorEditDraft,
 }
 
 RESEARCH_TOOLS: dict[str, type[BaseModel]] = {
