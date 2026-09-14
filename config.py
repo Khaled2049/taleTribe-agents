@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     # Feature flags
     enable_local_image_generation: bool = True
     assistant_api_enabled: bool = False
-    assistant_edit_proposals_enabled: bool = False
+    assistant_edit_proposals_enabled: bool = True
     assistant_research_enabled: bool = False
 
     # Independent ceilings for one streamed run. They are deliberately settings,

@@ -109,6 +109,12 @@ variable "assistant_api_enabled" {
   default     = true
 }
 
+variable "assistant_edit_proposals_enabled" {
+  description = "Allow the assistant to propose browser-approved editor changes. On by default; set false for an immediate server-side rollback."
+  type        = bool
+  default     = true
+}
+
 variable "firebase_functions_service_account" {
   description = "Service account email used by Firebase Functions to invoke the agent (e.g. story-6f89f@appspot.gserviceaccount.com). Granted roles/run.invoker on the Cloud Run service."
   type        = string
