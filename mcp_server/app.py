@@ -4,7 +4,9 @@ build_mcp_bundle() is the single entry point server.py uses. The returned
 bundle carries everything the host FastAPI app needs to mount: the FastMCP
 instance (whose streamable_http_app serves /mcp, /authorize, /token,
 /register, /revoke and both /.well-known documents), the OAuth provider
-(needed by the consent-handoff routes), and the shared Firestore client.
+(needed by the consent-handoff routes), and the Firestore client that backs
+OAuth, the access allowlist and write idempotency. Story content — read and
+written — goes through story-data over HTTP.
 """
 
 from __future__ import annotations

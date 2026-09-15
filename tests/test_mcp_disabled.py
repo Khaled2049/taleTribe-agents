@@ -8,7 +8,9 @@ os.environ["USE_MOCK"] = "true"
 os.environ["ENABLE_MCP"] = "false"
 os.environ.setdefault("FIRESTORE_EMULATOR_HOST", "localhost:9999")
 
+import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+from pydantic import ValidationError  # noqa: E402
 
 from config import Settings  # noqa: E402
 from server import create_app  # noqa: E402
@@ -52,9 +54,22 @@ def test_writes_require_mcp_enabled(monkeypatch):
     """A write flag left on must not resurrect writes when MCP itself is off."""
     monkeypatch.setenv("ENABLE_MCP", "false")
     monkeypatch.setenv("ENABLE_MCP_WRITES", "true")
+    # No backend is needed: with its host disabled, the write flag registers
+    # nothing and must not make this otherwise valid configuration fail.
+    monkeypatch.setenv("STORY_DATA_URL", "")
     settings = Settings()
     assert settings.enable_mcp_writes is True
     assert settings.resolved_mcp_writes_enabled is False
+
+
+def test_writes_require_story_data_url(monkeypatch):
+    """Writes go to story-data, so the flag alone would register four tools
+    that fail on their first call — which the model reports as an outage."""
+    monkeypatch.setenv("ENABLE_MCP", "true")
+    monkeypatch.setenv("ENABLE_MCP_WRITES", "true")
+    monkeypatch.setenv("STORY_DATA_URL", "")
+    with pytest.raises(ValidationError, match="ENABLE_MCP_WRITES requires"):
+        Settings()
 
 
 def test_write_rate_limit_clamps_garbage(monkeypatch):

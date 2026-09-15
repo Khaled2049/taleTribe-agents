@@ -57,14 +57,13 @@ class Settings(BaseSettings):
     mcp_issuer_url: str = ""  # defaults to agent_service_url / localhost (see property)
     mcp_consent_url: str = ""  # frontend consent page (required in production)
     mcp_max_requests_per_minute_per_user: int = 60
-    # Story/chapter creation over MCP. Off by default: it is the only path in
-    # this service that mutates user content, and the Admin SDK bypasses every
-    # limit in firestore.rules, so mcp_server/writes.py re-implements them.
+    # Story/chapter mutation over MCP. The deployment enables this after the
+    # story-data cutover; the class fallback stays false so an ad-hoc process
+    # without STORY_DATA_URL cannot accidentally advertise unusable tools.
     enable_mcp_writes: bool = False
     # Second, much tighter bucket applied only to the write tools, on top of
-    # mcp_max_requests_per_minute_per_user. Also what keeps the soft story cap
-    # honest: the frontend's storyCountTrigger is eventually consistent, so a
-    # burst faster than this could overshoot MAX_STORIES_PER_USER.
+    # mcp_max_requests_per_minute_per_user. story-data owns the durable limits;
+    # this bounds model-driven bursts before they reach it.
     mcp_max_writes_per_minute_per_user: int = 6
     # Owner-controlled rollout allowlist: only users with
     # mcpAccess/{uid}.status == "granted" may connect or call tools. ON by
@@ -190,20 +189,16 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def check_mcp_write_backend(self) -> "Settings":
-        """Refuse the split-brain configuration.
+        """Writes go to story-data, so they cannot be enabled without it.
 
-        The MCP read tools go through story-data; the write tools still write
-        Firestore. Enabling writes while reads come from PostgreSQL would let a
-        client create a chapter and then be told it does not exist, so the
-        combination is rejected outright rather than left as a footgun. Lifted
-        when the write tools are ported.
+        Reads and writes share one backend now. Enabling writes with no
+        STORY_DATA_URL would register four tools that fail on their first call,
+        which the model would report to the user as a platform outage.
         """
-        if self.enable_mcp_writes and self.story_data_url.strip():
+        if self.resolved_mcp_writes_enabled and not self.story_data_url.strip():
             raise ValueError(
-                "ENABLE_MCP_WRITES cannot be enabled yet: the MCP read tools "
-                "read story-data (STORY_DATA_URL) while the write tools still "
-                "write Firestore, so writes would be invisible to reads. Port "
-                "the write tools first, or unset ENABLE_MCP_WRITES."
+                "ENABLE_MCP_WRITES requires STORY_DATA_URL: the MCP write "
+                "tools create and edit chapters through story-data."
             )
         return self
 

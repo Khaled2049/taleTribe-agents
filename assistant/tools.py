@@ -150,6 +150,10 @@ RESEARCH_TOOLS: dict[str, type[BaseModel]] = {
     "research_web": ResearchWebArgs,
 }
 
+# Adding a tool here also requires a ``Capability`` in ``assistant/help.py``:
+# the browser renders /help from that catalog without asking the model, and
+# ``tests/test_assistant_help.py`` asserts the catalog partitions this map, so
+# an undescribed tool fails rather than going quietly unmentioned.
 TOOL_SCHEMAS: dict[str, type[BaseModel]] = {
     **READ_TOOLS,
     **EDIT_TOOLS,

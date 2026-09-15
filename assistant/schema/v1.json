@@ -37,6 +37,104 @@
     "editOperations": 20,
     "researchResults": 5
   },
+  "capabilities": {
+    "preamble": "I read this story and answer questions about it. Here is what I can do.",
+    "boundaries": [
+      "I only see the story you have open, and only your own stories.",
+      "This conversation is saved with this story and restored when you reopen the panel.",
+      "I have no web access, and I never change your manuscript on my own."
+    ],
+    "items": [
+      {
+        "id": "story_overview",
+        "tools": [
+          "get_story_overview"
+        ],
+        "gate": "always",
+        "title": "Survey the story",
+        "summary": "Read the story's details and its chapters in order, so I can talk about structure and pacing.",
+        "example": "Give me an overview of this story and its chapters.",
+        "limits": "Titles and metadata only -- not the prose of every chapter."
+      },
+      {
+        "id": "list_entities",
+        "tools": [
+          "list_story_entities"
+        ],
+        "gate": "always",
+        "title": "List your cast, places and plot lines",
+        "summary": "Pull the roster of characters, places or plot threads you have recorded for this story.",
+        "example": "List the characters in this story.",
+        "limits": "Up to 20 at a time; I tell you when a roster is cut short."
+      },
+      {
+        "id": "entity_detail",
+        "tools": [
+          "get_story_entity"
+        ],
+        "gate": "always",
+        "title": "Look up one character, place or plot line",
+        "summary": "Read everything you have written on a single entity, and cite it so you can jump to it.",
+        "example": "Tell me everything recorded about the protagonist."
+      },
+      {
+        "id": "search_story",
+        "tools": [
+          "search_story"
+        ],
+        "gate": "always",
+        "title": "Search the manuscript",
+        "summary": "Search your prose by meaning rather than exact words, and show the passages I found.",
+        "example": "Search the story for the protagonist's central conflict.",
+        "limits": "Search runs on the indexed copy, so a passage written moments ago may be flagged as out of date."
+      },
+      {
+        "id": "read_chapter",
+        "tools": [
+          "read_chapter"
+        ],
+        "gate": "always",
+        "title": "Read a chapter closely",
+        "summary": "Read a chapter's actual text when a pr\u00e9cis is not enough, a window at a time.",
+        "example": "Read the opening chapter and tell me where the tension drops.",
+        "limits": "A bounded window per read, not the whole manuscript at once."
+      },
+      {
+        "id": "read_current_editor",
+        "tools": [
+          "read_current_editor"
+        ],
+        "gate": "always",
+        "title": "See what you have open",
+        "summary": "Look at the chapter you are editing and the text you have selected, as it stands right now.",
+        "example": "What is wrong with the paragraph I have selected?",
+        "limits": "Only while the editor is open, and only a bounded window of it."
+      },
+      {
+        "id": "propose_edit",
+        "tools": [
+          "propose_editor_edit",
+          "apply_editor_edit"
+        ],
+        "gate": "edits",
+        "title": "Suggest a revision you approve",
+        "summary": "Draft a replacement for the text you have selected. You see it first and nothing changes until you accept it.",
+        "example": "Suggest a tighter revision for the text I selected in the editor.",
+        "limits": "One selection at a time, as plain text in a single paragraph."
+      },
+      {
+        "id": "research_web",
+        "tools": [
+          "research_web"
+        ],
+        "gate": "research",
+        "title": "Look something up on the web",
+        "summary": "Check an outside source and cite where the answer came from.",
+        "example": "Look up how long a letter took to cross the Atlantic in 1890.",
+        "limits": "Not available yet."
+      }
+    ]
+  },
   "definitions": {
     "RunRequest": {
       "$defs": {

@@ -21,6 +21,9 @@ os.environ["MCP_OAUTH_REQUESTS_PER_MINUTE_PER_IP"] = "1000"
 os.environ["ENABLE_MCP"] = "true"
 # Writes on, so this module can exercise the stories:write grant end to end.
 os.environ["ENABLE_MCP_WRITES"] = "true"
+# Writes go through story-data, and config refuses the flag without it. Nothing
+# in this module reaches the service — the OAuth grant is what is under test.
+os.environ["STORY_DATA_URL"] = "http://story-data.test"
 os.environ["MCP_CONSENT_URL"] = "https://consent.example/mcp-connect"
 # RFC 8414 requires HTTPS issuers; the SDK carves out localhost for testing.
 os.environ["MCP_ISSUER_URL"] = "http://localhost:8000"

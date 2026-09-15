@@ -30,10 +30,9 @@ def require_production_env(monkeypatch):
     """
     monkeypatch.setenv("MCP_CONSENT_URL", "https://consent.example/mcp-connect")
     monkeypatch.setenv("STORY_DATA_URL", "http://story-data.internal:8084")
-    # Set to "false" rather than deleted: create_app() calls load_dotenv, which
-    # fills in anything absent from os.environ, and the developer .env in this
-    # repo turns writes on. With STORY_DATA_URL set that is a rejected
-    # combination, and it is not what these tests exercise.
+    # Pinned rather than inherited: create_app() calls load_dotenv, so whatever
+    # the developer's .env says about writes would otherwise leak in. These
+    # tests are not about the write flag either way.
     monkeypatch.setenv("ENABLE_MCP_WRITES", "false")
 
 
