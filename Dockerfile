@@ -27,6 +27,11 @@ COPY agents/ /app/agents/
 # COPY ships a silently degraded image — keep it explicit.
 COPY mcp_server/ /app/mcp_server/
 
+# Copy the assistant package (POST /assistant/run and its tool executors).
+# server.py imports this unconditionally at module load, so a missing COPY
+# here crashes the container on startup rather than degrading silently.
+COPY assistant/ /app/assistant/
+
 # Copy the unified server and its root-level modules (imported by server.py)
 COPY server.py config.py rate_limit.py /app/
 
