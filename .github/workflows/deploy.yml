@@ -222,6 +222,8 @@ jobs:
           terraform plan \
             -var="image=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/app:${{ github.sha }}" \
             -var="firebase_functions_service_account=${{ env.FIREBASE_FUNCTIONS_SA }}" \
+            -var="assistant_api_enabled=${{ vars.ASSISTANT_API_ENABLED || 'true' }}" \
+            -var="assistant_edit_proposals_enabled=${{ vars.ASSISTANT_EDIT_PROPOSALS_ENABLED || 'true' }}" \
             -out=tfplan
 
       - name: Terraform Apply

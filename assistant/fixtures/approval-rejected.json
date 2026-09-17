@@ -1,0 +1,41 @@
+{
+  "name": "approval-rejected",
+  "description": "A separate continuation confirms a rejected editor proposal.",
+  "protocolVersion": 1,
+  "events": [
+    {
+      "v": 1,
+      "runId": "run-approval-rejected",
+      "seq": 0,
+      "type": "run.started",
+      "provider": "mock",
+      "model": "mock-1"
+    },
+    {
+      "v": 1,
+      "runId": "run-approval-rejected",
+      "seq": 1,
+      "type": "approval.resolved",
+      "approvalId": "approval-1",
+      "approved": false
+    },
+    {
+      "v": 1,
+      "runId": "run-approval-rejected",
+      "seq": 2,
+      "type": "text.done",
+      "part": {
+        "type": "text",
+        "text": "Kept the suggestion without changing the chapter."
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-approval-rejected",
+      "seq": 3,
+      "type": "run.completed",
+      "finishReason": "stop"
+    }
+  ],
+  "sse": "data: {\"v\":1,\"runId\":\"run-approval-rejected\",\"seq\":0,\"type\":\"run.started\",\"provider\":\"mock\",\"model\":\"mock-1\"}\n\ndata: {\"v\":1,\"runId\":\"run-approval-rejected\",\"seq\":1,\"type\":\"approval.resolved\",\"approvalId\":\"approval-1\",\"approved\":false}\n\ndata: {\"v\":1,\"runId\":\"run-approval-rejected\",\"seq\":2,\"type\":\"text.done\",\"part\":{\"type\":\"text\",\"text\":\"Kept the suggestion without changing the chapter.\"}}\n\ndata: {\"v\":1,\"runId\":\"run-approval-rejected\",\"seq\":3,\"type\":\"run.completed\",\"finishReason\":\"stop\"}\n\n"
+}

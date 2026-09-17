@@ -1,13 +1,12 @@
 """Validation schemas for StoryAgent actions."""
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 ActionName = Literal[
     "brainstormIdeas",
     "generateNextLines",
-    "chatWithContext",
     "enhanceText",
     "enhanceWizardInput",
     "generateStoryChoices",
@@ -73,18 +72,6 @@ class GenerateNextLinesParams(StrictModel):
     chapter_id: Optional[str] = _chapter_id_field()
 
 
-class ChatWithContextParams(StrictModel):
-    story_id: str = _story_id_field()
-    message: str = Field(max_length=MAX_CONTENT_CHARS)
-    context: Optional[Dict[str, Any]] = None
-    chat_history: Optional[List[Dict[str, str]]] = Field(
-        default=None,
-        validation_alias=AliasChoices("chatHistory", "chat_history"),
-        serialization_alias="chatHistory",
-    )
-    user_id: Optional[str] = _user_id_field()
-
-
 class EnhanceTextParams(StrictModel):
     story_id: str = _story_id_field()
     action: Literal["expand", "dialogue", "rewrite"]
@@ -134,7 +121,6 @@ class EnhanceWizardInputParams(StrictModel):
 _ACTION_SCHEMAS = {
     "brainstormIdeas": BrainstormIdeasParams,
     "generateNextLines": GenerateNextLinesParams,
-    "chatWithContext": ChatWithContextParams,
     "enhanceText": EnhanceTextParams,
     "enhanceWizardInput": EnhanceWizardInputParams,
     "generateStoryChoices": GenerateStoryChoicesParams,

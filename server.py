@@ -32,6 +32,7 @@ from agents.storyAgent.llm_provider import (
     _byok_config,
     _firebase_token,
 )
+from assistant.api import register_assistant
 from config import Settings
 
 # Safe to import unconditionally: story_data depends only on httpx, not the MCP
@@ -241,7 +242,9 @@ def create_app() -> FastAPI:
             await app.state.agent.start()
             # The MCP read tools serve story content from story-data. Installed
             # here rather than at import so tests can supply their own.
-            if mcp_bundle is not None and settings.story_data_url.strip():
+            if (
+                mcp_bundle is not None or settings.assistant_api_enabled
+            ) and settings.story_data_url.strip():
                 story_data.configure(
                     story_data.StoryDataClient(
                         settings.story_data_url.strip(),
@@ -321,6 +324,7 @@ def create_app() -> FastAPI:
         project_id=settings.google_cloud_project,
         location=settings.vertex_ai_location,
     )
+    register_assistant(app, settings, _verify_internal_token)
 
     image_router = _try_load_image_router(
         current_dir, settings.enable_local_image_generation
@@ -508,7 +512,6 @@ def create_app() -> FastAPI:
                 "billing_commit_failed",
                 action=request.action,
                 error_type=type(exc).__name__,
-                exc_info=True,
             )
             raise HTTPException(
                 status_code=500,
@@ -519,7 +522,7 @@ def create_app() -> FastAPI:
                 },
             ) from exc
         except LLMProviderError as exc:
-            logger.exception(
+            logger.error(
                 "llm_provider_error",
                 action=request.action,
                 error_type=type(exc).__name__,
@@ -533,7 +536,7 @@ def create_app() -> FastAPI:
                 },
             ) from exc
         except Exception as exc:
-            logger.exception(
+            logger.error(
                 "unhandled_error", action=request.action, error_type=type(exc).__name__
             )
             raise HTTPException(

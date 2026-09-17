@@ -35,14 +35,6 @@ def test_generate_next_lines_accepts_content_at_limit():
     assert len(result["content"]) == MAX_CONTENT_CHARS
 
 
-def test_chat_rejects_oversized_message():
-    with pytest.raises(ValidationError):
-        validate_action_parameters(
-            "chatWithContext",
-            {"storyId": "s1", "message": "m" * (MAX_CONTENT_CHARS + 1)},
-        )
-
-
 def test_enhance_text_rejects_oversized_selected_text():
     with pytest.raises(ValidationError):
         validate_action_parameters(

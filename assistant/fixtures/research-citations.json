@@ -1,0 +1,98 @@
+{
+  "name": "research-citations",
+  "description": "Web and story references emitted as parts.",
+  "protocolVersion": 1,
+  "events": [
+    {
+      "v": 1,
+      "runId": "run-research",
+      "seq": 0,
+      "type": "run.started",
+      "provider": "mock",
+      "model": "mock-1"
+    },
+    {
+      "v": 1,
+      "runId": "run-research",
+      "seq": 1,
+      "type": "tool.started",
+      "toolCallId": "call-1",
+      "name": "research_web"
+    },
+    {
+      "v": 1,
+      "runId": "run-research",
+      "seq": 2,
+      "type": "tool.completed",
+      "part": {
+        "type": "tool_call",
+        "toolCallId": "call-1",
+        "name": "research_web",
+        "arguments": {
+          "query": "Fresnel lens maintenance",
+          "maxResults": 3
+        },
+        "result": {
+          "results": 2
+        }
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-research",
+      "seq": 3,
+      "type": "reference.emitted",
+      "part": {
+        "type": "source",
+        "sourceId": "src-1",
+        "kind": "web",
+        "title": "Fresnel lens",
+        "url": "https://example.org/fresnel",
+        "snippet": "A Fresnel lens is a compact lens design."
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-research",
+      "seq": 4,
+      "type": "reference.emitted",
+      "part": {
+        "type": "source",
+        "sourceId": "chunk-9",
+        "kind": "story",
+        "title": "Chapter 2",
+        "snippet": "The lamp room smelled of brass polish."
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-research",
+      "seq": 5,
+      "type": "text.done",
+      "part": {
+        "type": "text",
+        "text": "Keepers polished the lens nightly."
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-research",
+      "seq": 6,
+      "type": "usage",
+      "provider": "mock",
+      "model": "mock-1",
+      "promptTokens": 1220,
+      "completionTokens": 11,
+      "credits": 13,
+      "billing": "byok"
+    },
+    {
+      "v": 1,
+      "runId": "run-research",
+      "seq": 7,
+      "type": "run.completed",
+      "finishReason": "stop"
+    }
+  ],
+  "sse": "data: {\"v\":1,\"runId\":\"run-research\",\"seq\":0,\"type\":\"run.started\",\"provider\":\"mock\",\"model\":\"mock-1\"}\n\ndata: {\"v\":1,\"runId\":\"run-research\",\"seq\":1,\"type\":\"tool.started\",\"toolCallId\":\"call-1\",\"name\":\"research_web\"}\n\ndata: {\"v\":1,\"runId\":\"run-research\",\"seq\":2,\"type\":\"tool.completed\",\"part\":{\"type\":\"tool_call\",\"toolCallId\":\"call-1\",\"name\":\"research_web\",\"arguments\":{\"query\":\"Fresnel lens maintenance\",\"maxResults\":3},\"result\":{\"results\":2}}}\n\ndata: {\"v\":1,\"runId\":\"run-research\",\"seq\":3,\"type\":\"reference.emitted\",\"part\":{\"type\":\"source\",\"sourceId\":\"src-1\",\"kind\":\"web\",\"title\":\"Fresnel lens\",\"url\":\"https://example.org/fresnel\",\"snippet\":\"A Fresnel lens is a compact lens design.\"}}\n\ndata: {\"v\":1,\"runId\":\"run-research\",\"seq\":4,\"type\":\"reference.emitted\",\"part\":{\"type\":\"source\",\"sourceId\":\"chunk-9\",\"kind\":\"story\",\"title\":\"Chapter 2\",\"snippet\":\"The lamp room smelled of brass polish.\"}}\n\ndata: {\"v\":1,\"runId\":\"run-research\",\"seq\":5,\"type\":\"text.done\",\"part\":{\"type\":\"text\",\"text\":\"Keepers polished the lens nightly.\"}}\n\ndata: {\"v\":1,\"runId\":\"run-research\",\"seq\":6,\"type\":\"usage\",\"provider\":\"mock\",\"model\":\"mock-1\",\"promptTokens\":1220,\"completionTokens\":11,\"credits\":13,\"billing\":\"byok\"}\n\ndata: {\"v\":1,\"runId\":\"run-research\",\"seq\":7,\"type\":\"run.completed\",\"finishReason\":\"stop\"}\n\n"
+}

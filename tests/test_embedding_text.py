@@ -1,4 +1,4 @@
-"""Unit tests for chapter RAG helpers (pure functions, no Firestore)."""
+"""Unit tests for the embedding/chunking helpers (pure functions, no database)."""
 
 import pytest
 
@@ -8,7 +8,6 @@ from agents.storyAgent.embedding_text import (
     _chunk_text,
     compose_entity_text,
 )
-from agents.storyAgent.excerpts import format_excerpts
 
 pytestmark = pytest.mark.unit
 
@@ -39,37 +38,6 @@ def test_chunk_long_text_overlaps_and_covers_all_words():
     assert first_words[step:] == second_words[:CHUNK_OVERLAP_WORDS]
     # All original words are present across chunks (no data dropped).
     assert words[-1] in chunks[-1].split()
-
-
-def test_format_excerpts_empty():
-    assert format_excerpts([]) == ""
-
-
-def test_format_excerpts_renders_chapter_and_entity_labels():
-    out = format_excerpts(
-        [
-            {
-                "kind": "chapter",
-                "chapterNumber": 3,
-                "title": "The Storm",
-                "text": "Rain fell.",
-            },
-            {"kind": "character", "name": "Mara", "text": "A jaded smuggler."},
-            {"kind": "place", "name": "Dockside", "text": "Foggy harbor."},
-            {"kind": "plot", "name": "The Heist", "text": "Steal the relic."},
-        ]
-    )
-    assert "RELEVANT STORY DETAILS" in out
-    assert "[Ch3: The Storm] Rain fell." in out
-    assert "[Character: Mara] A jaded smuggler." in out
-    assert "[Place: Dockside] Foggy harbor." in out
-    assert "[Plot: The Heist] Steal the relic." in out
-
-
-def test_format_excerpts_defaults_unknown_kind_to_chapter():
-    # legacy chunks written before `kind` existed have no kind field
-    out = format_excerpts([{"chapterNumber": 1, "title": "Intro", "text": "Hi."}])
-    assert "[Ch1: Intro] Hi." in out
 
 
 def test_compose_entity_text_character():

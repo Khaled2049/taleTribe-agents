@@ -179,7 +179,7 @@ class StoryChoicesTool:
         Generate story choices for opening, continuation, or ending mode.
 
         Args:
-            story_id: Firestore story document ID
+            story_id: story-data (PostgreSQL) story ID
             mode: "opening", "continuation", or "ending"
             current_content: HTML content already in the editor (empty for opening)
             chapter_id: Optional chapter document ID (reserved for future chapter-scoped context)

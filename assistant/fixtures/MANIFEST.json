@@ -1,0 +1,13 @@
+{
+  "approval-applied.json": "c6688944bc9ad9f3a4776dad0198746bfbf7b24121d936e5046faeea6f8c7181",
+  "approval-pause-resume.json": "a5afd892d3c205b6e873f24443472c82c1c5fe83b8cede17fb021d58023465d0",
+  "approval-rejected.json": "71639f2e52c2412b22c16a9b27cf24ad6df231415dbc953044925de08b549f17",
+  "cancellation.json": "ce7b18e91835ecf635b9a0220e9cc29a35bd2db80883522d748c4eb94693de3e",
+  "max-steps.json": "ab00f3f969fe0ad75e6a360a38d2d1de1c9aa85590c7bb9903e09f5fe4c6c295",
+  "multi-tool.json": "9e8c71ed4e076def0fefd14f21b069e546b3f13308e7a2a4d3ace57ceb6d7bf0",
+  "provider-error.json": "fdcc9d6f7eda880a5a4eb1f9502b24004a59a09d1b6c8523b8a6a6339d19421b",
+  "research-citations.json": "26ac1ee393a90d91dffe91f5c9843c9fe65af93b62e3008240d0c6379856e3c1",
+  "single-tool-round.json": "ee6db214be61f75797ef4056cc46e446d5fb910678b357e5dac79eaecd328d76",
+  "stale-edit.json": "5d9fba6ec369f9d4ec1247c7130e3dd601f77cb3cc3d498abd91c99da599c2ff",
+  "text-only.json": "06fdd6c590c39408455f60f68d40f5ce1faed2edad4d74c54c282e5e3e7679ce"
+}

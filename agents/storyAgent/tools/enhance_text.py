@@ -18,7 +18,6 @@ class EnhanceTextTool:
         project_id: str,
         location: str = "us-central1",
         llm_provider: Optional[LLMProvider] = None,
-        db=None,
     ):
         """Initialize the enhance text tool."""
         self.project_id = project_id
@@ -26,26 +25,6 @@ class EnhanceTextTool:
         self.llm_provider: LLMProvider = llm_provider or get_llm_provider(
             project_id, location
         )
-        self._db = db
-
-    def _get_chapter(self, story_id: str, chapter_id: str) -> Optional[Dict[str, Any]]:
-        """Fetch a specific chapter from Firestore using the shared client."""
-        if self._db is None:
-            logger.warning("No Firestore client injected; skipping chapter fetch")
-            return None
-        try:
-            chapter_ref = (
-                self._db.collection("stories")
-                .document(story_id)
-                .collection("chapters")
-                .document(chapter_id)
-            )
-            chapter_doc = chapter_ref.get()
-            if chapter_doc.exists:
-                return {"id": chapter_doc.id, **chapter_doc.to_dict()}
-        except Exception as e:
-            logger.warning("Could not fetch chapter %s: %s", chapter_id, e)
-        return None
 
     def _build_action_prompt(self, action: str) -> str:
         """Build action-specific system prompts."""
@@ -97,7 +76,7 @@ class EnhanceTextTool:
         Enhance selected text based on action type.
 
         Args:
-            story_id: Firestore story document ID
+            story_id: story-data (PostgreSQL) story ID
             action: Action type (expand, dialogue, rewrite)
             selected_text: The text to enhance
             chapter_id: Optional chapter document ID for better context
@@ -120,17 +99,13 @@ class EnhanceTextTool:
         story_data = context.get("story", {})
 
         if chapter_id:
-            chapter = (
-                next(
-                    (
-                        item
-                        for item in context.get("chapters", [])
-                        if item.get("id") == chapter_id
-                    ),
-                    None,
-                )
-                if context_override
-                else self._get_chapter(story_id, chapter_id)
+            chapter = next(
+                (
+                    item
+                    for item in context.get("chapters", [])
+                    if item.get("id") == chapter_id
+                ),
+                None,
             )
             if chapter and chapter.get("title"):
                 story_data["current_chapter"] = chapter.get("title")

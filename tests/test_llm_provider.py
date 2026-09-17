@@ -7,6 +7,7 @@ retrying non-idempotent / non-retryable failures forever.
 """
 
 import asyncio
+import json
 import os
 
 import httpx
@@ -28,7 +29,9 @@ from agents.storyAgent.llm_provider import (  # noqa: E402
     ProviderAuthError,
     ProviderNotFoundError,
     RateLimitedError,
+    _byok_config,
     _classify_http_error,
+    _firebase_token,
 )
 
 # --- _classify_http_error ----------------------------------------------------
@@ -392,3 +395,134 @@ async def test_structured_content_forwards_max_output_tokens():
         "sys", "user", {"type": "array"}, max_output_tokens=512
     )
     assert captured["max_output_tokens"] == 512
+
+
+# --- streaming chat ----------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_forwards_contract_and_parses_sse():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        captured["firebase"] = request.headers.get("X-Firebase-Token")
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            text=(
+                'data: {"type":"text_delta","text":"Hello"}\n\n'
+                'data: {"type":"done","finish_reason":"stop"}\n\n'
+            ),
+        )
+
+    provider = _provider_with_transport(handler)
+    byok = _byok_config.set(
+        {
+            "user_id": "uid-1",
+            "provider": "gemini",
+            "api_key": "secret",
+            "model": "gemini-test",
+        }
+    )
+    firebase = _firebase_token.set("firebase-token")
+    try:
+        events = [
+            event
+            async for event in provider.chat_stream(
+                [{"role": "user", "parts": [{"type": "text", "text": "Hi"}]}],
+                [{"name": "get_story_overview", "parameters": {"type": "object"}}],
+                max_output_tokens=512,
+                idempotency_key="run-1:0",
+            )
+        ]
+    finally:
+        _firebase_token.reset(firebase)
+        _byok_config.reset(byok)
+        await provider.aclose()
+
+    assert [event["type"] for event in events] == ["text_delta", "done"]
+    assert captured == {
+        "user_id": "uid-1",
+        "byok_provider": "gemini",
+        "byok_api_key": "secret",
+        "byok_model": "gemini-test",
+        "version": 1,
+        "messages": [{"role": "user", "parts": [{"type": "text", "text": "Hi"}]}],
+        "tools": [{"name": "get_story_overview", "parameters": {"type": "object"}}],
+        "tool_choice": {"mode": "auto"},
+        "max_output_tokens": 512,
+        "stream": True,
+        "idempotency_key": "run-1:0",
+        "firebase": "firebase-token",
+    }
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_can_require_one_named_tool():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            text='data: {"type":"done","finish_reason":"tool_calls"}\n\n',
+        )
+
+    provider = _provider_with_transport(handler)
+    events = [
+        event
+        async for event in provider.chat_stream(
+            [{"role": "user", "parts": [{"type": "text", "text": "Rewrite"}]}],
+            [{"name": "propose_editor_edit", "parameters": {"type": "object"}}],
+            max_output_tokens=512,
+            idempotency_key="run-1:1",
+            required_tool="propose_editor_edit",
+        )
+    ]
+    await provider.aclose()
+
+    assert [event["type"] for event in events] == ["done"]
+    assert captured["tool_choice"] == {
+        "mode": "required",
+        "name": "propose_editor_edit",
+    }
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_does_not_retry_a_failed_request():
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(503, text="unavailable")
+
+    provider = _provider_with_transport(handler)
+    with pytest.raises(BackendUnavailableError):
+        async for _ in provider.chat_stream(
+            [{"role": "user", "parts": [{"type": "text", "text": "Hi"}]}],
+            [],
+            max_output_tokens=512,
+            idempotency_key="run-1:0",
+        ):
+            pass
+    await provider.aclose()
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_rejects_non_sse_success():
+    provider = _provider_with_transport(
+        lambda _request: httpx.Response(200, json={"not": "a stream"})
+    )
+    with pytest.raises(BackendUnavailableError):
+        async for _ in provider.chat_stream(
+            [{"role": "user", "parts": [{"type": "text", "text": "Hi"}]}],
+            [],
+            max_output_tokens=512,
+            idempotency_key="run-1:0",
+        ):
+            pass
+    await provider.aclose()

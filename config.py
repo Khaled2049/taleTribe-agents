@@ -8,7 +8,7 @@ import json
 import logging
 from typing import Optional
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 logger = logging.getLogger(__name__)
@@ -37,6 +37,18 @@ class Settings(BaseSettings):
 
     # Feature flags
     enable_local_image_generation: bool = True
+    assistant_api_enabled: bool = False
+    assistant_edit_proposals_enabled: bool = True
+    assistant_research_enabled: bool = False
+
+    # Independent ceilings for one streamed run. They are deliberately settings,
+    # not prompt suggestions: the process must remain bounded when a provider
+    # repeatedly asks for tools or never reaches a final answer.
+    assistant_max_model_calls: int = Field(default=4, ge=1, le=16)
+    assistant_max_tool_calls: int = Field(default=10, ge=1, le=100)
+    assistant_max_output_tokens: int = Field(default=2048, ge=1, le=8192)
+    assistant_run_timeout_seconds: float = Field(default=120, gt=0, le=300)
+    assistant_max_tool_result_chars: int = Field(default=8000, ge=256)
 
     # MCP server (OAuth 2.1 authorization server + owner-scoped story tools)
     enable_mcp: bool = True
@@ -164,11 +176,13 @@ class Settings(BaseSettings):
                     "ENABLE_MCP=true (the frontend consent page the OAuth "
                     "authorization flow redirects to)"
                 )
-            if self.enable_mcp and not self.story_data_url.strip():
+            if (
+                self.enable_mcp or self.assistant_api_enabled
+            ) and not self.story_data_url.strip():
                 raise ValueError(
                     "STORY_DATA_URL must be set when ENVIRONMENT=production and "
-                    "ENABLE_MCP=true (the MCP read tools serve story content "
-                    "from story-data; without it every read fails)"
+                    "ENABLE_MCP=true or ASSISTANT_API_ENABLED=true (read tools "
+                    "serve canonical content from story-data)"
                 )
         return self
 

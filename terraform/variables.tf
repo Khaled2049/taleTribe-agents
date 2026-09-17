@@ -103,6 +103,18 @@ variable "enable_public_access" {
   default     = true
 }
 
+variable "assistant_api_enabled" {
+  description = "Serve POST /assistant/run. On by default now that the legacy chat has been retired; set false for an immediate server-side rollback."
+  type        = bool
+  default     = true
+}
+
+variable "assistant_edit_proposals_enabled" {
+  description = "Allow the assistant to propose browser-approved editor changes. On by default; set false for an immediate server-side rollback."
+  type        = bool
+  default     = true
+}
+
 variable "firebase_functions_service_account" {
   description = "Service account email used by Firebase Functions to invoke the agent (e.g. story-6f89f@appspot.gserviceaccount.com). Granted roles/run.invoker on the Cloud Run service."
   type        = string

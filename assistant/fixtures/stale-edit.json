@@ -1,0 +1,50 @@
+{
+  "name": "stale-edit",
+  "description": "An edit refused because the document moved on.",
+  "protocolVersion": 1,
+  "events": [
+    {
+      "v": 1,
+      "runId": "run-stale-edit",
+      "seq": 0,
+      "type": "run.started",
+      "provider": "mock",
+      "model": "mock-1"
+    },
+    {
+      "v": 1,
+      "runId": "run-stale-edit",
+      "seq": 1,
+      "type": "tool.started",
+      "toolCallId": "call-1",
+      "name": "apply_editor_edit"
+    },
+    {
+      "v": 1,
+      "runId": "run-stale-edit",
+      "seq": 2,
+      "type": "tool.failed",
+      "toolCallId": "call-1",
+      "code": "stale_proposal",
+      "message": "The document changed since this suggestion was made. Ask again for an up-to-date version."
+    },
+    {
+      "v": 1,
+      "runId": "run-stale-edit",
+      "seq": 3,
+      "type": "text.done",
+      "part": {
+        "type": "text",
+        "text": "The chapter changed. Ask me again for a fresh edit."
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-stale-edit",
+      "seq": 4,
+      "type": "run.completed",
+      "finishReason": "stop"
+    }
+  ],
+  "sse": "data: {\"v\":1,\"runId\":\"run-stale-edit\",\"seq\":0,\"type\":\"run.started\",\"provider\":\"mock\",\"model\":\"mock-1\"}\n\ndata: {\"v\":1,\"runId\":\"run-stale-edit\",\"seq\":1,\"type\":\"tool.started\",\"toolCallId\":\"call-1\",\"name\":\"apply_editor_edit\"}\n\ndata: {\"v\":1,\"runId\":\"run-stale-edit\",\"seq\":2,\"type\":\"tool.failed\",\"toolCallId\":\"call-1\",\"code\":\"stale_proposal\",\"message\":\"The document changed since this suggestion was made. Ask again for an up-to-date version.\"}\n\ndata: {\"v\":1,\"runId\":\"run-stale-edit\",\"seq\":3,\"type\":\"text.done\",\"part\":{\"type\":\"text\",\"text\":\"The chapter changed. Ask me again for a fresh edit.\"}}\n\ndata: {\"v\":1,\"runId\":\"run-stale-edit\",\"seq\":4,\"type\":\"run.completed\",\"finishReason\":\"stop\"}\n\n"
+}

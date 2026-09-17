@@ -20,7 +20,6 @@ class NextLineGenerationTool:
         project_id: str,
         location: str = "us-central1",
         llm_provider: Optional[LLMProvider] = None,
-        db=None,
     ):
         """Initialize the next line generation tool."""
         self.project_id = project_id
@@ -28,7 +27,6 @@ class NextLineGenerationTool:
         self.llm_provider: LLMProvider = llm_provider or get_llm_provider(
             project_id, location
         )
-        self._db = db
 
     def _slice_content(self, content: str, cursor_pos: int) -> Tuple[str, str]:
         """Slices the chapter content into a prefix and suffix based on cursor position."""
@@ -42,25 +40,6 @@ class NextLineGenerationTool:
         suffix = content[cursor_pos:suffix_end]
 
         return prefix, suffix
-
-    def _get_chapter(self, story_id: str, chapter_id: str) -> Optional[Dict[str, Any]]:
-        """Fetch a specific chapter from Firestore using the shared client."""
-        if self._db is None:
-            logger.warning("No Firestore client injected; skipping chapter fetch")
-            return None
-        try:
-            chapter_ref = (
-                self._db.collection("stories")
-                .document(story_id)
-                .collection("chapters")
-                .document(chapter_id)
-            )
-            chapter_doc = chapter_ref.get()
-            if chapter_doc.exists:
-                return {"id": chapter_doc.id, **chapter_doc.to_dict()}
-        except Exception as e:
-            logger.warning("Could not fetch chapter %s: %s", chapter_id, e)
-        return None
 
     def _get_previous_chapters_context(
         self, chapters: List[Dict[str, Any]], current_chapter_number: Optional[int]
@@ -172,7 +151,7 @@ Respond ONLY with the JSON array containing the {NUMBER_OF_SUGGESTIONS} generate
         Generates 3 next line suggestions based on story context and cursor position.
 
         Args:
-            story_id: Firestore story document ID
+            story_id: story-data (PostgreSQL) story ID
             content: Current content of the chapter
             cursorPosition: Character index where the new line should be inserted
             chapter_id: Optional chapter document ID for better context and validation
@@ -199,17 +178,13 @@ Respond ONLY with the JSON array containing the {NUMBER_OF_SUGGESTIONS} generate
         current_chapter_number = None
         previous_chapters_text = ""
         if chapter_id:
-            current_chapter = (
-                next(
-                    (
-                        chapter
-                        for chapter in context.get("chapters", [])
-                        if chapter.get("id") == chapter_id
-                    ),
-                    None,
-                )
-                if context_override
-                else self._get_chapter(story_id, chapter_id)
+            current_chapter = next(
+                (
+                    chapter
+                    for chapter in context.get("chapters", [])
+                    if chapter.get("id") == chapter_id
+                ),
+                None,
             )
             if current_chapter:
                 current_chapter_number = current_chapter.get(

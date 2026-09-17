@@ -1,0 +1,2303 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NovelSync assistant protocol",
+  "protocolVersion": 1,
+  "terminalEventTypes": [
+    "run.cancelled",
+    "run.completed",
+    "run.failed"
+  ],
+  "errorCodes": [
+    "unsupported_protocol_version",
+    "story_access_denied",
+    "quota_exceeded",
+    "rate_limited",
+    "provider_unavailable",
+    "provider_error",
+    "run_cancelled",
+    "stale_proposal",
+    "internal_error"
+  ],
+  "approvalRequiredTools": [
+    "apply_editor_edit"
+  ],
+  "limits": {
+    "contentChars": 100000,
+    "idChars": 128,
+    "messageChars": 10000,
+    "partsPerMessage": 16,
+    "selectionChars": 10000,
+    "editorWindowChars": 8000,
+    "summaryChars": 500,
+    "toolNameChars": 64,
+    "urlChars": 2048,
+    "queryChars": 500,
+    "toolResults": 20,
+    "chapterWindowChars": 20000,
+    "editOperations": 20,
+    "researchResults": 5
+  },
+  "definitions": {
+    "RunRequest": {
+      "$defs": {
+        "EditorApplyResult": {
+          "additionalProperties": false,
+          "description": "Bounded browser report. It never authorizes or performs a server write.",
+          "properties": {
+            "status": {
+              "enum": [
+                "saved",
+                "applied_local_save_failed",
+                "applied_local_save_conflict",
+                "stale",
+                "invalid"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "chapterId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Chapterid",
+              "type": "string"
+            },
+            "documentVersion": {
+              "minimum": 0,
+              "title": "Documentversion",
+              "type": "integer"
+            },
+            "persistedRevision": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Persistedrevision"
+            }
+          },
+          "required": [
+            "status",
+            "chapterId",
+            "documentVersion"
+          ],
+          "title": "EditorApplyResult",
+          "type": "object"
+        },
+        "EditorContext": {
+          "additionalProperties": false,
+          "description": "Freshness for the active buffer. Optional, and unused until Phase 5.\n\nSpecified now so Phase 5 does not need a protocol change. Deliberately not a\nplace to put the manuscript: send the selection and the minimum context\nneeded for freshness, and let the server retrieve persisted story text.",
+          "properties": {
+            "chapterId": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Chapterid"
+            },
+            "persistedRevision": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Persistedrevision"
+            },
+            "documentVersion": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Documentversion"
+            },
+            "selection": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Selection"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "buffer": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EditorTextWindow"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "dirty": {
+              "default": false,
+              "title": "Dirty",
+              "type": "boolean"
+            }
+          },
+          "title": "EditorContext",
+          "type": "object"
+        },
+        "EditorContinuation": {
+          "additionalProperties": false,
+          "description": "Stateless second request after a browser-owned approval decision.",
+          "properties": {
+            "kind": {
+              "const": "editor_approval",
+              "default": "editor_approval",
+              "title": "Kind",
+              "type": "string"
+            },
+            "previousRunId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Previousrunid",
+              "type": "string"
+            },
+            "approvalId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Approvalid",
+              "type": "string"
+            },
+            "toolCallId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Toolcallid",
+              "type": "string"
+            },
+            "proposalId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Proposalid",
+              "type": "string"
+            },
+            "decision": {
+              "enum": [
+                "applied",
+                "rejected",
+                "revision_requested",
+                "apply_failed"
+              ],
+              "title": "Decision",
+              "type": "string"
+            },
+            "proposal": {
+              "$ref": "#/$defs/ProposeEditorEditArgs"
+            },
+            "result": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EditorApplyResult"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "feedback": {
+              "anyOf": [
+                {
+                  "maxLength": 500,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Feedback"
+            }
+          },
+          "required": [
+            "previousRunId",
+            "approvalId",
+            "toolCallId",
+            "proposalId",
+            "decision",
+            "proposal"
+          ],
+          "title": "EditorContinuation",
+          "type": "object"
+        },
+        "EditorTextWindow": {
+          "additionalProperties": false,
+          "description": "A bounded plain-text view of the live editor, never HTML or TipTap JSON.",
+          "properties": {
+            "text": {
+              "maxLength": 8000,
+              "minLength": 0,
+              "title": "Text",
+              "type": "string"
+            },
+            "truncated": {
+              "default": false,
+              "title": "Truncated",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "title": "EditorTextWindow",
+          "type": "object"
+        },
+        "InsertOperation": {
+          "additionalProperties": false,
+          "description": "Reserved for a later editor phase; Phase 5 rejects it at execution.",
+          "properties": {
+            "type": {
+              "const": "insert",
+              "default": "insert",
+              "title": "Type",
+              "type": "string"
+            },
+            "at": {
+              "minimum": 0,
+              "title": "At",
+              "type": "integer"
+            },
+            "text": {
+              "maxLength": 10000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "text"
+          ],
+          "title": "InsertOperation",
+          "type": "object"
+        },
+        "ProposeEditorEditArgs": {
+          "additionalProperties": false,
+          "properties": {
+            "chapterId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Chapterid",
+              "type": "string"
+            },
+            "baseRevision": {
+              "minimum": 0,
+              "title": "Baserevision",
+              "type": "integer"
+            },
+            "baseDocumentVersion": {
+              "minimum": 0,
+              "title": "Basedocumentversion",
+              "type": "integer"
+            },
+            "summary": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Summary",
+              "type": "string"
+            },
+            "operations": {
+              "items": {
+                "discriminator": {
+                  "mapping": {
+                    "insert": "#/$defs/InsertOperation",
+                    "replace": "#/$defs/ReplaceOperation"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/ReplaceOperation"
+                  },
+                  {
+                    "$ref": "#/$defs/InsertOperation"
+                  }
+                ]
+              },
+              "maxItems": 20,
+              "minItems": 1,
+              "title": "Operations",
+              "type": "array"
+            }
+          },
+          "required": [
+            "chapterId",
+            "baseRevision",
+            "baseDocumentVersion",
+            "summary",
+            "operations"
+          ],
+          "title": "ProposeEditorEditArgs",
+          "type": "object"
+        },
+        "ReplaceOperation": {
+          "additionalProperties": false,
+          "description": "The Phase 5 editor operation. An empty replacement is a deletion.",
+          "properties": {
+            "type": {
+              "const": "replace",
+              "default": "replace",
+              "title": "Type",
+              "type": "string"
+            },
+            "from": {
+              "minimum": 0,
+              "title": "From",
+              "type": "integer"
+            },
+            "to": {
+              "minimum": 0,
+              "title": "To",
+              "type": "integer"
+            },
+            "originalText": {
+              "maxLength": 10000,
+              "minLength": 1,
+              "title": "Originaltext",
+              "type": "string"
+            },
+            "replacementText": {
+              "default": "",
+              "maxLength": 10000,
+              "minLength": 0,
+              "title": "Replacementtext",
+              "type": "string"
+            }
+          },
+          "required": [
+            "from",
+            "to",
+            "originalText"
+          ],
+          "title": "ReplaceOperation",
+          "type": "object"
+        },
+        "Selection": {
+          "additionalProperties": false,
+          "properties": {
+            "from": {
+              "minimum": 0,
+              "title": "From",
+              "type": "integer"
+            },
+            "to": {
+              "minimum": 0,
+              "title": "To",
+              "type": "integer"
+            },
+            "text": {
+              "maxLength": 10000,
+              "minLength": 0,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "from",
+            "to",
+            "text"
+          ],
+          "title": "Selection",
+          "type": "object"
+        },
+        "UserMessage": {
+          "additionalProperties": false,
+          "description": "v1 user input is text-only; the list is for forward room, not features.",
+          "properties": {
+            "role": {
+              "const": "user",
+              "title": "Role",
+              "type": "string"
+            },
+            "parts": {
+              "items": {
+                "$ref": "#/$defs/UserTextPart"
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "title": "Parts",
+              "type": "array"
+            }
+          },
+          "required": [
+            "role",
+            "parts"
+          ],
+          "title": "UserMessage",
+          "type": "object"
+        },
+        "UserTextPart": {
+          "additionalProperties": false,
+          "description": "The same wire shape, bounded far tighter.\n\nInput crosses a trust boundary and costs prompt tokens, so it is capped at\n``MAX_MESSAGE_CHARS`` rather than the ``MAX_CONTENT_CHARS`` an assistant\nreply may reach. Same ``type`` tag, because to a renderer it is the same\nthing.",
+          "properties": {
+            "type": {
+              "const": "text",
+              "title": "Type",
+              "type": "string"
+            },
+            "text": {
+              "maxLength": 10000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "title": "UserTextPart",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "What the browser sends. Carries no identity -- see the module docstring.",
+      "properties": {
+        "v": {
+          "const": 1,
+          "title": "V",
+          "type": "integer"
+        },
+        "storyId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Storyid",
+          "type": "string"
+        },
+        "threadId": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Threadid"
+        },
+        "clientMessageId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Clientmessageid",
+          "type": "string"
+        },
+        "message": {
+          "$ref": "#/$defs/UserMessage"
+        },
+        "editorContext": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EditorContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "continuation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EditorContinuation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "v",
+        "storyId",
+        "clientMessageId",
+        "message"
+      ],
+      "title": "RunRequest",
+      "type": "object"
+    },
+    "AgentRunRequest": {
+      "$defs": {
+        "EditorApplyResult": {
+          "additionalProperties": false,
+          "description": "Bounded browser report. It never authorizes or performs a server write.",
+          "properties": {
+            "status": {
+              "enum": [
+                "saved",
+                "applied_local_save_failed",
+                "applied_local_save_conflict",
+                "stale",
+                "invalid"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "chapterId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Chapterid",
+              "type": "string"
+            },
+            "documentVersion": {
+              "minimum": 0,
+              "title": "Documentversion",
+              "type": "integer"
+            },
+            "persistedRevision": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Persistedrevision"
+            }
+          },
+          "required": [
+            "status",
+            "chapterId",
+            "documentVersion"
+          ],
+          "title": "EditorApplyResult",
+          "type": "object"
+        },
+        "EditorContext": {
+          "additionalProperties": false,
+          "description": "Freshness for the active buffer. Optional, and unused until Phase 5.\n\nSpecified now so Phase 5 does not need a protocol change. Deliberately not a\nplace to put the manuscript: send the selection and the minimum context\nneeded for freshness, and let the server retrieve persisted story text.",
+          "properties": {
+            "chapterId": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Chapterid"
+            },
+            "persistedRevision": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Persistedrevision"
+            },
+            "documentVersion": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Documentversion"
+            },
+            "selection": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Selection"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "buffer": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EditorTextWindow"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "dirty": {
+              "default": false,
+              "title": "Dirty",
+              "type": "boolean"
+            }
+          },
+          "title": "EditorContext",
+          "type": "object"
+        },
+        "EditorContinuation": {
+          "additionalProperties": false,
+          "description": "Stateless second request after a browser-owned approval decision.",
+          "properties": {
+            "kind": {
+              "const": "editor_approval",
+              "default": "editor_approval",
+              "title": "Kind",
+              "type": "string"
+            },
+            "previousRunId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Previousrunid",
+              "type": "string"
+            },
+            "approvalId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Approvalid",
+              "type": "string"
+            },
+            "toolCallId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Toolcallid",
+              "type": "string"
+            },
+            "proposalId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Proposalid",
+              "type": "string"
+            },
+            "decision": {
+              "enum": [
+                "applied",
+                "rejected",
+                "revision_requested",
+                "apply_failed"
+              ],
+              "title": "Decision",
+              "type": "string"
+            },
+            "proposal": {
+              "$ref": "#/$defs/ProposeEditorEditArgs"
+            },
+            "result": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EditorApplyResult"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "feedback": {
+              "anyOf": [
+                {
+                  "maxLength": 500,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Feedback"
+            }
+          },
+          "required": [
+            "previousRunId",
+            "approvalId",
+            "toolCallId",
+            "proposalId",
+            "decision",
+            "proposal"
+          ],
+          "title": "EditorContinuation",
+          "type": "object"
+        },
+        "EditorTextWindow": {
+          "additionalProperties": false,
+          "description": "A bounded plain-text view of the live editor, never HTML or TipTap JSON.",
+          "properties": {
+            "text": {
+              "maxLength": 8000,
+              "minLength": 0,
+              "title": "Text",
+              "type": "string"
+            },
+            "truncated": {
+              "default": false,
+              "title": "Truncated",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "title": "EditorTextWindow",
+          "type": "object"
+        },
+        "InsertOperation": {
+          "additionalProperties": false,
+          "description": "Reserved for a later editor phase; Phase 5 rejects it at execution.",
+          "properties": {
+            "type": {
+              "const": "insert",
+              "default": "insert",
+              "title": "Type",
+              "type": "string"
+            },
+            "at": {
+              "minimum": 0,
+              "title": "At",
+              "type": "integer"
+            },
+            "text": {
+              "maxLength": 10000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "text"
+          ],
+          "title": "InsertOperation",
+          "type": "object"
+        },
+        "ProposeEditorEditArgs": {
+          "additionalProperties": false,
+          "properties": {
+            "chapterId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Chapterid",
+              "type": "string"
+            },
+            "baseRevision": {
+              "minimum": 0,
+              "title": "Baserevision",
+              "type": "integer"
+            },
+            "baseDocumentVersion": {
+              "minimum": 0,
+              "title": "Basedocumentversion",
+              "type": "integer"
+            },
+            "summary": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Summary",
+              "type": "string"
+            },
+            "operations": {
+              "items": {
+                "discriminator": {
+                  "mapping": {
+                    "insert": "#/$defs/InsertOperation",
+                    "replace": "#/$defs/ReplaceOperation"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/ReplaceOperation"
+                  },
+                  {
+                    "$ref": "#/$defs/InsertOperation"
+                  }
+                ]
+              },
+              "maxItems": 20,
+              "minItems": 1,
+              "title": "Operations",
+              "type": "array"
+            }
+          },
+          "required": [
+            "chapterId",
+            "baseRevision",
+            "baseDocumentVersion",
+            "summary",
+            "operations"
+          ],
+          "title": "ProposeEditorEditArgs",
+          "type": "object"
+        },
+        "ProviderConfig": {
+          "additionalProperties": false,
+          "description": "A caller's own provider credentials, resolved by the gateway.\n\nLike ``user_id`` this is gateway-owned: the browser sends its key to the\nFunction once, over the encrypted settings path, and never on a run request.\nThe gateway decrypts it per run and the agent forwards it to creditProxy,\nwhich bills the user's provider instead of platform credits.",
+          "properties": {
+            "provider": {
+              "enum": [
+                "gemini",
+                "claude",
+                "openai"
+              ],
+              "title": "Provider",
+              "type": "string"
+            },
+            "apiKey": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Apikey",
+              "type": "string"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model"
+            }
+          },
+          "required": [
+            "provider",
+            "apiKey"
+          ],
+          "title": "ProviderConfig",
+          "type": "object"
+        },
+        "ReplaceOperation": {
+          "additionalProperties": false,
+          "description": "The Phase 5 editor operation. An empty replacement is a deletion.",
+          "properties": {
+            "type": {
+              "const": "replace",
+              "default": "replace",
+              "title": "Type",
+              "type": "string"
+            },
+            "from": {
+              "minimum": 0,
+              "title": "From",
+              "type": "integer"
+            },
+            "to": {
+              "minimum": 0,
+              "title": "To",
+              "type": "integer"
+            },
+            "originalText": {
+              "maxLength": 10000,
+              "minLength": 1,
+              "title": "Originaltext",
+              "type": "string"
+            },
+            "replacementText": {
+              "default": "",
+              "maxLength": 10000,
+              "minLength": 0,
+              "title": "Replacementtext",
+              "type": "string"
+            }
+          },
+          "required": [
+            "from",
+            "to",
+            "originalText"
+          ],
+          "title": "ReplaceOperation",
+          "type": "object"
+        },
+        "Selection": {
+          "additionalProperties": false,
+          "properties": {
+            "from": {
+              "minimum": 0,
+              "title": "From",
+              "type": "integer"
+            },
+            "to": {
+              "minimum": 0,
+              "title": "To",
+              "type": "integer"
+            },
+            "text": {
+              "maxLength": 10000,
+              "minLength": 0,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "from",
+            "to",
+            "text"
+          ],
+          "title": "Selection",
+          "type": "object"
+        },
+        "UserMessage": {
+          "additionalProperties": false,
+          "description": "v1 user input is text-only; the list is for forward room, not features.",
+          "properties": {
+            "role": {
+              "const": "user",
+              "title": "Role",
+              "type": "string"
+            },
+            "parts": {
+              "items": {
+                "$ref": "#/$defs/UserTextPart"
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "title": "Parts",
+              "type": "array"
+            }
+          },
+          "required": [
+            "role",
+            "parts"
+          ],
+          "title": "UserMessage",
+          "type": "object"
+        },
+        "UserTextPart": {
+          "additionalProperties": false,
+          "description": "The same wire shape, bounded far tighter.\n\nInput crosses a trust boundary and costs prompt tokens, so it is capped at\n``MAX_MESSAGE_CHARS`` rather than the ``MAX_CONTENT_CHARS`` an assistant\nreply may reach. Same ``type`` tag, because to a renderer it is the same\nthing.",
+          "properties": {
+            "type": {
+              "const": "text",
+              "title": "Type",
+              "type": "string"
+            },
+            "text": {
+              "maxLength": 10000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "title": "UserTextPart",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "What the gateway forwards: the browser's request plus a verified uid.\n\n``user_id`` is derived from the Firebase token by the Functions gateway. It\nis never read from a browser body and never exposed as a tool argument.\n``provider_config`` carries the same guarantee for BYOK credentials.",
+      "properties": {
+        "v": {
+          "const": 1,
+          "title": "V",
+          "type": "integer"
+        },
+        "storyId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Storyid",
+          "type": "string"
+        },
+        "threadId": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Threadid"
+        },
+        "clientMessageId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Clientmessageid",
+          "type": "string"
+        },
+        "message": {
+          "$ref": "#/$defs/UserMessage"
+        },
+        "editorContext": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EditorContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "continuation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EditorContinuation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "userId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Userid",
+          "type": "string"
+        },
+        "providerConfig": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "v",
+        "storyId",
+        "clientMessageId",
+        "message",
+        "userId"
+      ],
+      "title": "AgentRunRequest",
+      "type": "object"
+    },
+    "AssistantEvent": {
+      "$defs": {
+        "ApprovalRequested": {
+          "additionalProperties": false,
+          "description": "Reserved. No v1 tool requires approval until Phase 5 adds editor writes.",
+          "properties": {
+            "v": {
+              "const": 1,
+              "title": "V",
+              "type": "integer"
+            },
+            "runId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Runid",
+              "type": "string"
+            },
+            "seq": {
+              "minimum": 0,
+              "title": "Seq",
+              "type": "integer"
+            },
+            "type": {
+              "const": "approval.requested",
+              "title": "Type",
+              "type": "string"
+            },
+            "approvalId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Approvalid",
+              "type": "string"
+            },
+            "toolCallId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Toolcallid",
+              "type": "string"
+            },
+            "summary": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Summary",
+              "type": "string"
+            }
+          },
+          "required": [
+            "v",
+            "runId",
+            "seq",
+            "type",
+            "approvalId",
+            "toolCallId",
+            "summary"
+          ],
+          "title": "ApprovalRequested",
+          "type": "object"
+        },
+        "ApprovalResolved": {
+          "additionalProperties": false,
+          "properties": {
+            "v": {
+              "const": 1,
+              "title": "V",
+              "type": "integer"
+            },
+            "runId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Runid",
+              "type": "string"
+            },
+            "seq": {
+              "minimum": 0,
+              "title": "Seq",
+              "type": "integer"
+            },
+            "type": {
+              "const": "approval.resolved",
+              "title": "Type",
+              "type": "string"
+            },
+            "approvalId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Approvalid",
+              "type": "string"
+            },
+            "approved": {
+              "title": "Approved",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "v",
+            "runId",
+            "seq",
+            "type",
+            "approvalId",
+            "approved"
+          ],
+          "title": "ApprovalResolved",
+          "type": "object"
+        },
+        "ErrorCode": {
+          "enum": [
+            "unsupported_protocol_version",
+            "story_access_denied",
+            "quota_exceeded",
+            "rate_limited",
+            "provider_unavailable",
+            "provider_error",
+            "run_cancelled",
+            "stale_proposal",
+            "internal_error"
+          ],
+          "title": "ErrorCode",
+          "type": "string"
+        },
+        "ReferenceEmitted": {
+          "additionalProperties": false,
+          "properties": {
+            "v": {
+              "const": 1,
+              "title": "V",
+              "type": "integer"
+            },
+            "runId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Runid",
+              "type": "string"
+            },
+            "seq": {
+              "minimum": 0,
+              "title": "Seq",
+              "type": "integer"
+            },
+            "type": {
+              "const": "reference.emitted",
+              "title": "Type",
+              "type": "string"
+            },
+            "part": {
+              "$ref": "#/$defs/SourcePart"
+            }
+          },
+          "required": [
+            "v",
+            "runId",
+            "seq",
+            "type",
+            "part"
+          ],
+          "title": "ReferenceEmitted",
+          "type": "object"
+        },
+        "RunCancelled": {
+          "additionalProperties": false,
+          "properties": {
+            "v": {
+              "const": 1,
+              "title": "V",
+              "type": "integer"
+            },
+            "runId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Runid",
+              "type": "string"
+            },
+            "seq": {
+              "minimum": 0,
+              "title": "Seq",
+              "type": "integer"
+            },
+            "type": {
+              "const": "run.cancelled",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "v",
+            "runId",
+            "seq",
+            "type"
+          ],
+          "title": "RunCancelled",
+          "type": "object"
+        },
+        "RunCompleted": {
+          "additionalProperties": false,
+          "description": "Terminal success. ``finishReason`` says *why* the run stopped talking.\n\n``max_steps`` is the orchestrator's own ceiling, and it is a success rather\nthan a failure: the user has a real partial answer, so ``run.failed`` would\nboth discard it and render a message about a daily allowance that was never\nreached. ``stop`` would be a lie in the other direction -- it claims the\nmodel was finished -- and Phase 4 needs to tell the two apart to offer\n\"continue\".",
+          "properties": {
+            "v": {
+              "const": 1,
+              "title": "V",
+              "type": "integer"
+            },
+            "runId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Runid",
+              "type": "string"
+            },
+            "seq": {
+              "minimum": 0,
+              "title": "Seq",
+              "type": "integer"
+            },
+            "type": {
+              "const": "run.completed",
+              "title": "Type",
+              "type": "string"
+            },
+            "finishReason": {
+              "default": "stop",
+              "enum": [
+                "stop",
+                "length",
+                "tool_calls",
+                "max_steps"
+              ],
+              "title": "Finishreason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "v",
+            "runId",
+            "seq",
+            "type"
+          ],
+          "title": "RunCompleted",
+          "type": "object"
+        },
+        "RunFailed": {
+          "additionalProperties": false,
+          "properties": {
+            "v": {
+              "const": 1,
+              "title": "V",
+              "type": "integer"
+            },
+            "runId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Runid",
+              "type": "string"
+            },
+            "seq": {
+              "minimum": 0,
+              "title": "Seq",
+              "type": "integer"
+            },
+            "type": {
+              "const": "run.failed",
+              "title": "Type",
+              "type": "string"
+            },
+            "code": {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            "message": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Message",
+              "type": "string"
+            }
+          },
+          "required": [
+            "v",
+            "runId",
+            "seq",
+            "type",
+            "code",
+            "message"
+          ],
+          "title": "RunFailed",
+          "type": "object"
+        },
+        "RunStarted": {
+          "additionalProperties": false,
+          "properties": {
+            "v": {
+              "const": 1,
+              "title": "V",
+              "type": "integer"
+            },
+            "runId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Runid",
+              "type": "string"
+            },
+            "seq": {
+              "minimum": 0,
+              "title": "Seq",
+              "type": "integer"
+            },
+            "type": {
+              "const": "run.started",
+              "title": "Type",
+              "type": "string"
+            },
+            "provider": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Provider"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model"
+            }
+          },
+          "required": [
+            "v",
+            "runId",
+            "seq",
+            "type"
+          ],
+          "title": "RunStarted",
+          "type": "object"
+        },
+        "SourcePart": {
+          "additionalProperties": false,
+          "description": "A story or web reference. ``url`` is absent for story-internal sources.",
+          "properties": {
+            "type": {
+              "const": "source",
+              "title": "Type",
+              "type": "string"
+            },
+            "sourceId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Sourceid",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "story",
+                "web"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "title": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            },
+            "url": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Url"
+            },
+            "snippet": {
+              "anyOf": [
+                {
+                  "maxLength": 10000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Snippet"
+            }
+          },
+          "required": [
+            "type",
+            "sourceId",
+            "kind",
+            "title"
+          ],
+          "title": "SourcePart",
+          "type": "object"
+        },
+        "TextDelta": {
+          "additionalProperties": false,
+          "description": "Incremental. The frontend accumulates; deltas are not cumulative.",
+          "properties": {
+            "v": {
+              "const": 1,
+              "title": "V",
+              "type": "integer"
+            },
+            "runId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Runid",
+              "type": "string"
+            },
+            "seq": {
+              "minimum": 0,
+              "title": "Seq",
+              "type": "integer"
+            },
+            "type": {
+              "const": "text.delta",
+              "title": "Type",
+              "type": "string"
+            },
+            "text": {
+              "maxLength": 100000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "v",
+            "runId",
+            "seq",
+            "type",
+            "text"
+          ],
+          "title": "TextDelta",
+          "type": "object"
+        },
+        "TextDone": {
+          "additionalProperties": false,
+          "description": "The settled text part, so a reload never depends on replaying deltas.",
+          "properties": {
+            "v": {
+              "const": 1,
+              "title": "V",
+              "type": "integer"
+            },
+            "runId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Runid",
+              "type": "string"
+            },
+            "seq": {
+              "minimum": 0,
+              "title": "Seq",
+              "type": "integer"
+            },
+            "type": {
+              "const": "text.done",
+              "title": "Type",
+              "type": "string"
+            },
+            "part": {
+              "$ref": "#/$defs/TextPart"
+            }
+          },
+          "required": [
+            "v",
+            "runId",
+            "seq",
+            "type",
+            "part"
+          ],
+          "title": "TextDone",
+          "type": "object"
+        },
+        "TextPart": {
+          "additionalProperties": false,
+          "description": "Assistant-produced text, and the persisted form of a settled reply.",
+          "properties": {
+            "type": {
+              "const": "text",
+              "title": "Type",
+              "type": "string"
+            },
+            "text": {
+              "maxLength": 100000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "title": "TextPart",
+          "type": "object"
+        },
+        "ToolArgsDelta": {
+          "additionalProperties": false,
+          "properties": {
+            "v": {
+              "const": 1,
+              "title": "V",
+              "type": "integer"
+            },
+            "runId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Runid",
+              "type": "string"
+            },
+            "seq": {
+              "minimum": 0,
+              "title": "Seq",
+              "type": "integer"
+            },
+            "type": {
+              "const": "tool.args.delta",
+              "title": "Type",
+              "type": "string"
+            },
+            "toolCallId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Toolcallid",
+              "type": "string"
+            },
+            "delta": {
+              "maxLength": 100000,
+              "minLength": 1,
+              "title": "Delta",
+              "type": "string"
+            }
+          },
+          "required": [
+            "v",
+            "runId",
+            "seq",
+            "type",
+            "toolCallId",
+            "delta"
+          ],
+          "title": "ToolArgsDelta",
+          "type": "object"
+        },
+        "ToolCallPart": {
+          "additionalProperties": false,
+          "description": "A completed tool round, in the shape the UI reloads it from.",
+          "properties": {
+            "type": {
+              "const": "tool_call",
+              "title": "Type",
+              "type": "string"
+            },
+            "toolCallId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Toolcallid",
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "arguments": {
+              "additionalProperties": true,
+              "title": "Arguments",
+              "type": "object"
+            },
+            "result": {
+              "anyOf": [
+                {},
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Result"
+            }
+          },
+          "required": [
+            "type",
+            "toolCallId",
+            "name"
+          ],
+          "title": "ToolCallPart",
+          "type": "object"
+        },
+        "ToolCompleted": {
+          "additionalProperties": false,
+          "properties": {
+            "v": {
+              "const": 1,
+              "title": "V",
+              "type": "integer"
+            },
+            "runId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Runid",
+              "type": "string"
+            },
+            "seq": {
+              "minimum": 0,
+              "title": "Seq",
+              "type": "integer"
+            },
+            "type": {
+              "const": "tool.completed",
+              "title": "Type",
+              "type": "string"
+            },
+            "part": {
+              "$ref": "#/$defs/ToolCallPart"
+            }
+          },
+          "required": [
+            "v",
+            "runId",
+            "seq",
+            "type",
+            "part"
+          ],
+          "title": "ToolCompleted",
+          "type": "object"
+        },
+        "ToolFailed": {
+          "additionalProperties": false,
+          "properties": {
+            "v": {
+              "const": 1,
+              "title": "V",
+              "type": "integer"
+            },
+            "runId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Runid",
+              "type": "string"
+            },
+            "seq": {
+              "minimum": 0,
+              "title": "Seq",
+              "type": "integer"
+            },
+            "type": {
+              "const": "tool.failed",
+              "title": "Type",
+              "type": "string"
+            },
+            "toolCallId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Toolcallid",
+              "type": "string"
+            },
+            "code": {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            "message": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Message",
+              "type": "string"
+            }
+          },
+          "required": [
+            "v",
+            "runId",
+            "seq",
+            "type",
+            "toolCallId",
+            "code",
+            "message"
+          ],
+          "title": "ToolFailed",
+          "type": "object"
+        },
+        "ToolStarted": {
+          "additionalProperties": false,
+          "properties": {
+            "v": {
+              "const": 1,
+              "title": "V",
+              "type": "integer"
+            },
+            "runId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Runid",
+              "type": "string"
+            },
+            "seq": {
+              "minimum": 0,
+              "title": "Seq",
+              "type": "integer"
+            },
+            "type": {
+              "const": "tool.started",
+              "title": "Type",
+              "type": "string"
+            },
+            "toolCallId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Toolcallid",
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "v",
+            "runId",
+            "seq",
+            "type",
+            "toolCallId",
+            "name"
+          ],
+          "title": "ToolStarted",
+          "type": "object"
+        },
+        "Usage": {
+          "additionalProperties": false,
+          "properties": {
+            "v": {
+              "const": 1,
+              "title": "V",
+              "type": "integer"
+            },
+            "runId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Runid",
+              "type": "string"
+            },
+            "seq": {
+              "minimum": 0,
+              "title": "Seq",
+              "type": "integer"
+            },
+            "type": {
+              "const": "usage",
+              "title": "Type",
+              "type": "string"
+            },
+            "provider": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Provider",
+              "type": "string"
+            },
+            "model": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Model",
+              "type": "string"
+            },
+            "promptTokens": {
+              "minimum": 0,
+              "title": "Prompttokens",
+              "type": "integer"
+            },
+            "completionTokens": {
+              "minimum": 0,
+              "title": "Completiontokens",
+              "type": "integer"
+            },
+            "credits": {
+              "minimum": 0,
+              "title": "Credits",
+              "type": "integer"
+            },
+            "billing": {
+              "enum": [
+                "platform",
+                "byok",
+                "local",
+                "mock"
+              ],
+              "title": "Billing",
+              "type": "string"
+            }
+          },
+          "required": [
+            "v",
+            "runId",
+            "seq",
+            "type",
+            "provider",
+            "model",
+            "promptTokens",
+            "completionTokens",
+            "credits",
+            "billing"
+          ],
+          "title": "Usage",
+          "type": "object"
+        }
+      },
+      "discriminator": {
+        "mapping": {
+          "approval.requested": "#/$defs/ApprovalRequested",
+          "approval.resolved": "#/$defs/ApprovalResolved",
+          "reference.emitted": "#/$defs/ReferenceEmitted",
+          "run.cancelled": "#/$defs/RunCancelled",
+          "run.completed": "#/$defs/RunCompleted",
+          "run.failed": "#/$defs/RunFailed",
+          "run.started": "#/$defs/RunStarted",
+          "text.delta": "#/$defs/TextDelta",
+          "text.done": "#/$defs/TextDone",
+          "tool.args.delta": "#/$defs/ToolArgsDelta",
+          "tool.completed": "#/$defs/ToolCompleted",
+          "tool.failed": "#/$defs/ToolFailed",
+          "tool.started": "#/$defs/ToolStarted",
+          "usage": "#/$defs/Usage"
+        },
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/RunStarted"
+        },
+        {
+          "$ref": "#/$defs/TextDelta"
+        },
+        {
+          "$ref": "#/$defs/TextDone"
+        },
+        {
+          "$ref": "#/$defs/ToolStarted"
+        },
+        {
+          "$ref": "#/$defs/ToolArgsDelta"
+        },
+        {
+          "$ref": "#/$defs/ToolCompleted"
+        },
+        {
+          "$ref": "#/$defs/ToolFailed"
+        },
+        {
+          "$ref": "#/$defs/ApprovalRequested"
+        },
+        {
+          "$ref": "#/$defs/ApprovalResolved"
+        },
+        {
+          "$ref": "#/$defs/ReferenceEmitted"
+        },
+        {
+          "$ref": "#/$defs/Usage"
+        },
+        {
+          "$ref": "#/$defs/RunCompleted"
+        },
+        {
+          "$ref": "#/$defs/RunFailed"
+        },
+        {
+          "$ref": "#/$defs/RunCancelled"
+        }
+      ]
+    },
+    "tools": {
+      "apply_editor_edit": {
+        "additionalProperties": false,
+        "properties": {
+          "proposalId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Proposalid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "proposalId"
+        ],
+        "title": "ApplyEditorEditArgs",
+        "type": "object"
+      },
+      "get_story_entity": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "character",
+              "place",
+              "plot"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "entityId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Entityid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "entityId"
+        ],
+        "title": "GetStoryEntityArgs",
+        "type": "object"
+      },
+      "get_story_overview": {
+        "additionalProperties": false,
+        "description": "Metadata and ordered chapter titles. Scope comes entirely from context.",
+        "properties": {},
+        "title": "GetStoryOverviewArgs",
+        "type": "object"
+      },
+      "list_story_entities": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "character",
+              "place",
+              "plot"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "limit": {
+            "default": 20,
+            "maximum": 20,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "ListStoryEntitiesArgs",
+        "type": "object"
+      },
+      "propose_editor_edit": {
+        "$defs": {
+          "InsertOperation": {
+            "additionalProperties": false,
+            "description": "Reserved for a later editor phase; Phase 5 rejects it at execution.",
+            "properties": {
+              "type": {
+                "const": "insert",
+                "default": "insert",
+                "title": "Type",
+                "type": "string"
+              },
+              "at": {
+                "minimum": 0,
+                "title": "At",
+                "type": "integer"
+              },
+              "text": {
+                "maxLength": 10000,
+                "minLength": 1,
+                "title": "Text",
+                "type": "string"
+              }
+            },
+            "required": [
+              "at",
+              "text"
+            ],
+            "title": "InsertOperation",
+            "type": "object"
+          },
+          "ReplaceOperation": {
+            "additionalProperties": false,
+            "description": "The Phase 5 editor operation. An empty replacement is a deletion.",
+            "properties": {
+              "type": {
+                "const": "replace",
+                "default": "replace",
+                "title": "Type",
+                "type": "string"
+              },
+              "from": {
+                "minimum": 0,
+                "title": "From",
+                "type": "integer"
+              },
+              "to": {
+                "minimum": 0,
+                "title": "To",
+                "type": "integer"
+              },
+              "originalText": {
+                "maxLength": 10000,
+                "minLength": 1,
+                "title": "Originaltext",
+                "type": "string"
+              },
+              "replacementText": {
+                "default": "",
+                "maxLength": 10000,
+                "minLength": 0,
+                "title": "Replacementtext",
+                "type": "string"
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "originalText"
+            ],
+            "title": "ReplaceOperation",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "chapterId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Chapterid",
+            "type": "string"
+          },
+          "baseRevision": {
+            "minimum": 0,
+            "title": "Baserevision",
+            "type": "integer"
+          },
+          "baseDocumentVersion": {
+            "minimum": 0,
+            "title": "Basedocumentversion",
+            "type": "integer"
+          },
+          "summary": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Summary",
+            "type": "string"
+          },
+          "operations": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "insert": "#/$defs/InsertOperation",
+                  "replace": "#/$defs/ReplaceOperation"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/ReplaceOperation"
+                },
+                {
+                  "$ref": "#/$defs/InsertOperation"
+                }
+              ]
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Operations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "chapterId",
+          "baseRevision",
+          "baseDocumentVersion",
+          "summary",
+          "operations"
+        ],
+        "title": "ProposeEditorEditArgs",
+        "type": "object"
+      },
+      "read_chapter": {
+        "additionalProperties": false,
+        "description": "A bounded window, so a read cannot pull a whole manuscript into a prompt.",
+        "properties": {
+          "chapterId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Chapterid",
+            "type": "string"
+          },
+          "offset": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "limit": {
+            "default": 8000,
+            "maximum": 20000,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "chapterId"
+        ],
+        "title": "ReadChapterArgs",
+        "type": "object"
+      },
+      "read_current_editor": {
+        "additionalProperties": false,
+        "description": "The live buffer the browser supplied on the run request, not a fresh read.",
+        "properties": {
+          "selectionOnly": {
+            "default": true,
+            "title": "Selectiononly",
+            "type": "boolean"
+          }
+        },
+        "title": "ReadCurrentEditorArgs",
+        "type": "object"
+      },
+      "research_web": {
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "maxResults": {
+            "default": 3,
+            "maximum": 5,
+            "minimum": 1,
+            "title": "Maxresults",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "ResearchWebArgs",
+        "type": "object"
+      },
+      "search_story": {
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "limit": {
+            "default": 8,
+            "maximum": 20,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "SearchStoryArgs",
+        "type": "object"
+      }
+    }
+  }
+}

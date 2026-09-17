@@ -1,0 +1,85 @@
+{
+  "name": "approval-pause-resume",
+  "description": "Proposal stream paused at a resultless editor approval.",
+  "protocolVersion": 1,
+  "events": [
+    {
+      "v": 1,
+      "runId": "run-approval",
+      "seq": 0,
+      "type": "run.started",
+      "provider": "mock",
+      "model": "mock-1"
+    },
+    {
+      "v": 1,
+      "runId": "run-approval",
+      "seq": 1,
+      "type": "tool.started",
+      "toolCallId": "call-1",
+      "name": "propose_editor_edit"
+    },
+    {
+      "v": 1,
+      "runId": "run-approval",
+      "seq": 2,
+      "type": "tool.completed",
+      "part": {
+        "type": "tool_call",
+        "toolCallId": "call-1",
+        "name": "propose_editor_edit",
+        "arguments": {
+          "chapterId": "chapter-2",
+          "baseRevision": 7,
+          "baseDocumentVersion": 42,
+          "summary": "Tighten the exchange and make Mina sound guarded.",
+          "operations": [
+            {
+              "type": "replace",
+              "from": 840,
+              "to": 1062,
+              "originalText": "original selected text",
+              "replacementText": "proposed replacement"
+            }
+          ]
+        },
+        "result": {
+          "proposalId": "proposal-1"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-approval",
+      "seq": 3,
+      "type": "tool.started",
+      "toolCallId": "call-2",
+      "name": "apply_editor_edit"
+    },
+    {
+      "v": 1,
+      "runId": "run-approval",
+      "seq": 4,
+      "type": "tool.args.delta",
+      "toolCallId": "call-2",
+      "delta": "{\"proposalId\":\"proposal-1\"}"
+    },
+    {
+      "v": 1,
+      "runId": "run-approval",
+      "seq": 5,
+      "type": "approval.requested",
+      "approvalId": "approval-1",
+      "toolCallId": "call-2",
+      "summary": "Apply 1 replacement to chapter 2?"
+    },
+    {
+      "v": 1,
+      "runId": "run-approval",
+      "seq": 6,
+      "type": "run.completed",
+      "finishReason": "tool_calls"
+    }
+  ],
+  "sse": "data: {\"v\":1,\"runId\":\"run-approval\",\"seq\":0,\"type\":\"run.started\",\"provider\":\"mock\",\"model\":\"mock-1\"}\n\ndata: {\"v\":1,\"runId\":\"run-approval\",\"seq\":1,\"type\":\"tool.started\",\"toolCallId\":\"call-1\",\"name\":\"propose_editor_edit\"}\n\ndata: {\"v\":1,\"runId\":\"run-approval\",\"seq\":2,\"type\":\"tool.completed\",\"part\":{\"type\":\"tool_call\",\"toolCallId\":\"call-1\",\"name\":\"propose_editor_edit\",\"arguments\":{\"chapterId\":\"chapter-2\",\"baseRevision\":7,\"baseDocumentVersion\":42,\"summary\":\"Tighten the exchange and make Mina sound guarded.\",\"operations\":[{\"type\":\"replace\",\"from\":840,\"to\":1062,\"originalText\":\"original selected text\",\"replacementText\":\"proposed replacement\"}]},\"result\":{\"proposalId\":\"proposal-1\"}}}\n\ndata: {\"v\":1,\"runId\":\"run-approval\",\"seq\":3,\"type\":\"tool.started\",\"toolCallId\":\"call-2\",\"name\":\"apply_editor_edit\"}\n\ndata: {\"v\":1,\"runId\":\"run-approval\",\"seq\":4,\"type\":\"tool.args.delta\",\"toolCallId\":\"call-2\",\"delta\":\"{\\\"proposalId\\\":\\\"proposal-1\\\"}\"}\n\ndata: {\"v\":1,\"runId\":\"run-approval\",\"seq\":5,\"type\":\"approval.requested\",\"approvalId\":\"approval-1\",\"toolCallId\":\"call-2\",\"summary\":\"Apply 1 replacement to chapter 2?\"}\n\ndata: {\"v\":1,\"runId\":\"run-approval\",\"seq\":6,\"type\":\"run.completed\",\"finishReason\":\"tool_calls\"}\n\n"
+}

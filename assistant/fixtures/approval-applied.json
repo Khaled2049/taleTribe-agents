@@ -1,0 +1,41 @@
+{
+  "name": "approval-applied",
+  "description": "A separate continuation confirms an applied editor proposal.",
+  "protocolVersion": 1,
+  "events": [
+    {
+      "v": 1,
+      "runId": "run-approval-applied",
+      "seq": 0,
+      "type": "run.started",
+      "provider": "mock",
+      "model": "mock-1"
+    },
+    {
+      "v": 1,
+      "runId": "run-approval-applied",
+      "seq": 1,
+      "type": "approval.resolved",
+      "approvalId": "approval-1",
+      "approved": true
+    },
+    {
+      "v": 1,
+      "runId": "run-approval-applied",
+      "seq": 2,
+      "type": "text.done",
+      "part": {
+        "type": "text",
+        "text": "Applied and saved in the current chapter."
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-approval-applied",
+      "seq": 3,
+      "type": "run.completed",
+      "finishReason": "stop"
+    }
+  ],
+  "sse": "data: {\"v\":1,\"runId\":\"run-approval-applied\",\"seq\":0,\"type\":\"run.started\",\"provider\":\"mock\",\"model\":\"mock-1\"}\n\ndata: {\"v\":1,\"runId\":\"run-approval-applied\",\"seq\":1,\"type\":\"approval.resolved\",\"approvalId\":\"approval-1\",\"approved\":true}\n\ndata: {\"v\":1,\"runId\":\"run-approval-applied\",\"seq\":2,\"type\":\"text.done\",\"part\":{\"type\":\"text\",\"text\":\"Applied and saved in the current chapter.\"}}\n\ndata: {\"v\":1,\"runId\":\"run-approval-applied\",\"seq\":3,\"type\":\"run.completed\",\"finishReason\":\"stop\"}\n\n"
+}

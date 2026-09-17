@@ -1,0 +1,132 @@
+{
+  "name": "multi-tool",
+  "description": "Two tool rounds interleaved with text.",
+  "protocolVersion": 1,
+  "events": [
+    {
+      "v": 1,
+      "runId": "run-multi-tool",
+      "seq": 0,
+      "type": "run.started",
+      "provider": "mock",
+      "model": "mock-1"
+    },
+    {
+      "v": 1,
+      "runId": "run-multi-tool",
+      "seq": 1,
+      "type": "tool.started",
+      "toolCallId": "call-1",
+      "name": "list_story_entities"
+    },
+    {
+      "v": 1,
+      "runId": "run-multi-tool",
+      "seq": 2,
+      "type": "tool.args.delta",
+      "toolCallId": "call-1",
+      "delta": "{\"kind\":\"character\"}"
+    },
+    {
+      "v": 1,
+      "runId": "run-multi-tool",
+      "seq": 3,
+      "type": "tool.completed",
+      "part": {
+        "type": "tool_call",
+        "toolCallId": "call-1",
+        "name": "list_story_entities",
+        "arguments": {
+          "kind": "character"
+        },
+        "result": [
+          {
+            "id": "ent-1",
+            "name": "Mina"
+          }
+        ]
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-multi-tool",
+      "seq": 4,
+      "type": "text.delta",
+      "text": "Mina is the only named character so far. "
+    },
+    {
+      "v": 1,
+      "runId": "run-multi-tool",
+      "seq": 5,
+      "type": "tool.started",
+      "toolCallId": "call-2",
+      "name": "search_story"
+    },
+    {
+      "v": 1,
+      "runId": "run-multi-tool",
+      "seq": 6,
+      "type": "tool.args.delta",
+      "toolCallId": "call-2",
+      "delta": "{\"query\":\"Mina harbour\"}"
+    },
+    {
+      "v": 1,
+      "runId": "run-multi-tool",
+      "seq": 7,
+      "type": "tool.completed",
+      "part": {
+        "type": "tool_call",
+        "toolCallId": "call-2",
+        "name": "search_story",
+        "arguments": {
+          "query": "Mina harbour",
+          "limit": 8
+        },
+        "result": [
+          {
+            "chunk_id": "chunk-9",
+            "score": 0.81
+          }
+        ]
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-multi-tool",
+      "seq": 8,
+      "type": "text.delta",
+      "text": "She appears once, at the harbour."
+    },
+    {
+      "v": 1,
+      "runId": "run-multi-tool",
+      "seq": 9,
+      "type": "text.done",
+      "part": {
+        "type": "text",
+        "text": "Mina is the only named character so far. She appears once, at the harbour."
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-multi-tool",
+      "seq": 10,
+      "type": "usage",
+      "provider": "mock",
+      "model": "mock-1",
+      "promptTokens": 880,
+      "completionTokens": 18,
+      "credits": 9,
+      "billing": "platform"
+    },
+    {
+      "v": 1,
+      "runId": "run-multi-tool",
+      "seq": 11,
+      "type": "run.completed",
+      "finishReason": "stop"
+    }
+  ],
+  "sse": "data: {\"v\":1,\"runId\":\"run-multi-tool\",\"seq\":0,\"type\":\"run.started\",\"provider\":\"mock\",\"model\":\"mock-1\"}\n\ndata: {\"v\":1,\"runId\":\"run-multi-tool\",\"seq\":1,\"type\":\"tool.started\",\"toolCallId\":\"call-1\",\"name\":\"list_story_entities\"}\n\ndata: {\"v\":1,\"runId\":\"run-multi-tool\",\"seq\":2,\"type\":\"tool.args.delta\",\"toolCallId\":\"call-1\",\"delta\":\"{\\\"kind\\\":\\\"character\\\"}\"}\n\ndata: {\"v\":1,\"runId\":\"run-multi-tool\",\"seq\":3,\"type\":\"tool.completed\",\"part\":{\"type\":\"tool_call\",\"toolCallId\":\"call-1\",\"name\":\"list_story_entities\",\"arguments\":{\"kind\":\"character\"},\"result\":[{\"id\":\"ent-1\",\"name\":\"Mina\"}]}}\n\ndata: {\"v\":1,\"runId\":\"run-multi-tool\",\"seq\":4,\"type\":\"text.delta\",\"text\":\"Mina is the only named character so far. \"}\n\ndata: {\"v\":1,\"runId\":\"run-multi-tool\",\"seq\":5,\"type\":\"tool.started\",\"toolCallId\":\"call-2\",\"name\":\"search_story\"}\n\ndata: {\"v\":1,\"runId\":\"run-multi-tool\",\"seq\":6,\"type\":\"tool.args.delta\",\"toolCallId\":\"call-2\",\"delta\":\"{\\\"query\\\":\\\"Mina harbour\\\"}\"}\n\ndata: {\"v\":1,\"runId\":\"run-multi-tool\",\"seq\":7,\"type\":\"tool.completed\",\"part\":{\"type\":\"tool_call\",\"toolCallId\":\"call-2\",\"name\":\"search_story\",\"arguments\":{\"query\":\"Mina harbour\",\"limit\":8},\"result\":[{\"chunk_id\":\"chunk-9\",\"score\":0.81}]}}\n\ndata: {\"v\":1,\"runId\":\"run-multi-tool\",\"seq\":8,\"type\":\"text.delta\",\"text\":\"She appears once, at the harbour.\"}\n\ndata: {\"v\":1,\"runId\":\"run-multi-tool\",\"seq\":9,\"type\":\"text.done\",\"part\":{\"type\":\"text\",\"text\":\"Mina is the only named character so far. She appears once, at the harbour.\"}}\n\ndata: {\"v\":1,\"runId\":\"run-multi-tool\",\"seq\":10,\"type\":\"usage\",\"provider\":\"mock\",\"model\":\"mock-1\",\"promptTokens\":880,\"completionTokens\":18,\"credits\":9,\"billing\":\"platform\"}\n\ndata: {\"v\":1,\"runId\":\"run-multi-tool\",\"seq\":11,\"type\":\"run.completed\",\"finishReason\":\"stop\"}\n\n"
+}

@@ -1,0 +1,29 @@
+{
+  "name": "cancellation",
+  "description": "Stopped mid-delta; run.cancelled is terminal.",
+  "protocolVersion": 1,
+  "events": [
+    {
+      "v": 1,
+      "runId": "run-cancelled",
+      "seq": 0,
+      "type": "run.started",
+      "provider": "mock",
+      "model": "mock-1"
+    },
+    {
+      "v": 1,
+      "runId": "run-cancelled",
+      "seq": 1,
+      "type": "text.delta",
+      "text": "The lighthouse "
+    },
+    {
+      "v": 1,
+      "runId": "run-cancelled",
+      "seq": 2,
+      "type": "run.cancelled"
+    }
+  ],
+  "sse": "data: {\"v\":1,\"runId\":\"run-cancelled\",\"seq\":0,\"type\":\"run.started\",\"provider\":\"mock\",\"model\":\"mock-1\"}\n\ndata: {\"v\":1,\"runId\":\"run-cancelled\",\"seq\":1,\"type\":\"text.delta\",\"text\":\"The lighthouse \"}\n\ndata: {\"v\":1,\"runId\":\"run-cancelled\",\"seq\":2,\"type\":\"run.cancelled\"}\n\n"
+}

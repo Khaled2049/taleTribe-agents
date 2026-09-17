@@ -80,41 +80,22 @@ class TestAgentExecution:
         assert data["success"] is False
         assert data["error"]["code"] == "VALIDATION_ERROR"
 
-    def test_chat_with_context_accepts_legacy_context_payload(self):
+    def test_a_retired_action_is_rejected_as_unknown(self):
+        """chatWithContext was the legacy chat. Its removal must read as an
+        unknown action, not as a route that silently accepts and does nothing."""
         app.state.agent.execute_agent = AsyncMock(return_value={"response": "ok"})
 
         response = client.post(
             "/agent/execute",
             json={
                 "action": "chatWithContext",
-                "parameters": {
-                    "storyId": "s1",
-                    "message": "hello",
-                    "context": {
-                        "story": {"title": "Joy of Santa Fe"},
-                        "chapters": [],
-                    },
-                },
+                "parameters": {"storyId": "s1", "message": "hello"},
                 "user_id": "u1",
             },
         )
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["success"] is True
-        app.state.agent.execute_agent.assert_awaited_once_with(
-            "chatWithContext",
-            {
-                "storyId": "s1",
-                "message": "hello",
-                "context": {
-                    "story": {"title": "Joy of Santa Fe"},
-                    "chapters": [],
-                },
-            },
-            background_tasks=ANY,
-            user_id="u1",
-        )
+        assert response.status_code == 422
+        app.state.agent.execute_agent.assert_not_awaited()
 
     def test_enhance_wizard_input_success(self):
         app.state.agent.execute_agent = AsyncMock(

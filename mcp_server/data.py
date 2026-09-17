@@ -138,10 +138,16 @@ def _revision(record: dict) -> str:
     return str(record.get("revision", ""))
 
 
-async def get_owned_story(story_id: str, uid: str) -> dict:
+async def get_owned_story(
+    story_id: str,
+    uid: str,
+    *,
+    story_client: Optional[story_data.StoryDataClient] = None,
+) -> dict:
     """The single ownership gate every story-scoped read goes through."""
+    client = story_client or story_data.client()
     try:
-        story = await story_data.client().get_story(uid, story_id)
+        story = await client.get_story(uid, story_id)
     except story_data.NotFound as exc:
         raise StoryNotFoundError(story_id) from exc
     # story-data serves a published story to any caller; MCP is owner-only.
