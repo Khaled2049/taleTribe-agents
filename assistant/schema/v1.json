@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "NovelSync assistant protocol",
+  "title": "TheTaleTribe assistant protocol",
   "protocolVersion": 1,
   "terminalEventTypes": [
     "run.cancelled",

@@ -110,6 +110,31 @@ class StoryDataClient:
     ) -> dict:
         return await self._get(f"/v1/stories/{story_id}/{kind}/{entity_id}", uid)
 
+    async def get_assistant_thread(
+        self, uid: str, story_id: str, thread_id: str
+    ) -> dict:
+        return await self._get(
+            f"/v1/stories/{story_id}/assistant-threads/{thread_id}", uid
+        )
+
+    async def list_assistant_messages(
+        self,
+        uid: str,
+        story_id: str,
+        thread_id: str,
+        *,
+        cursor: int = 0,
+        limit: int = 20,
+    ) -> dict:
+        params: dict[str, Any] = {"limit": str(limit)}
+        if cursor > 0:
+            params["cursor"] = str(cursor)
+        return await self._get(
+            f"/v1/stories/{story_id}/assistant-threads/{thread_id}/messages",
+            uid,
+            **params,
+        )
+
 
 _client: Optional[StoryDataClient] = None
 

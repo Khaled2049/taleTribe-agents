@@ -116,7 +116,7 @@ async def _authorized_uid(
         )
         raise ToolError(
             "MCP access for this account has not been enabled. Request access "
-            "from your NovelSync profile."
+            "from your profile on TheTaleTribe."
         )
 
     granted = list(token.scopes or [])
@@ -130,8 +130,8 @@ async def _authorized_uid(
             granted_scopes=sorted(granted),
         )
         raise ToolError(
-            "This connection was granted read-only access. Reconnect the "
-            "NovelSync connector and approve write access, then try again."
+            "This connection was granted read-only access. Reconnect "
+            "TheTaleTribe's connector and approve write access, then try again."
         )
 
     if write_limiter is not None and not await write_limiter.allow(uid):
@@ -467,7 +467,7 @@ def register_tools(
             """Create a new story in the connected account. Requires write access.
 
             The story starts unpublished with no chapters — add them with
-            create_chapter. It appears in the NovelSync web app immediately.
+            create_chapter. It appears in TheTaleTribe's web app immediately.
 
             Repeating an identical call within two minutes returns the story
             already created rather than making a second one.

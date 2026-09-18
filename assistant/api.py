@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from agents.storyAgent.llm_provider import _byok_config, _firebase_token
 from assistant.errors import ErrorCode, safe_message
 from assistant.events import encode_sse
+from assistant.history import HistoryLimits
 from assistant.protocol import AgentRunRequest
 from assistant.run import RunLimits, run_assistant
 from assistant.version import ASSISTANT_PROTOCOL_VERSION
@@ -65,6 +66,7 @@ def register_assistant(
         run_id = uuid.uuid4().hex
         firebase_token = request.headers.get("X-Firebase-Token", "").strip() or None
         limits = RunLimits.from_settings(settings)
+        history_limits = HistoryLimits.from_settings(settings)
 
         async def frames():
             # ContextVars are installed inside the streaming task, not the route
@@ -90,6 +92,7 @@ def register_assistant(
                     embedder=agent.embedding_provider,
                     limits=limits,
                     edits_enabled=settings.assistant_edit_proposals_enabled,
+                    history_limits=history_limits,
                 ):
                     yield encode_sse(event)
             finally:

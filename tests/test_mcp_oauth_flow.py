@@ -446,7 +446,7 @@ def test_mcp_accepts_valid_token(client):
         headers={**MCP_HEADERS, "Authorization": f"Bearer {token['access_token']}"},
     )
     assert resp.status_code == 200, resp.text
-    assert resp.json()["result"]["serverInfo"]["name"] == "NovelSync"
+    assert resp.json()["result"]["serverInfo"]["name"] == "TheTaleTribe"
 
 
 def test_refresh_reuse_kills_the_grant_end_to_end(client):

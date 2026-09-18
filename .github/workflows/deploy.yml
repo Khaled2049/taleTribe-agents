@@ -96,7 +96,7 @@ jobs:
             gcloud artifacts repositories create ${{ env.ARTIFACT_REGISTRY_REPO }} \
               --repository-format=docker \
               --location=${{ env.REGION }} \
-              --description="Docker repository for NovelSync Agents"
+              --description="Docker repository for TheTaleTribe Agents"
           else
             echo "Repository already exists"
           fi

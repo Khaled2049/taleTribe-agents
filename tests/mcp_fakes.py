@@ -257,6 +257,8 @@ class FakeStoryData:
         self.stories: dict[str, dict] = {}
         self.chapters: dict[str, list[dict]] = {}
         self.entities: dict[tuple[str, str], list[dict]] = {}
+        self.threads: dict[str, dict] = {}
+        self.thread_messages: dict[str, list[dict]] = {}
         # Every path requested, so a test can assert on content=false.
         self.requests: list[tuple[str, dict]] = []
 
@@ -332,6 +334,28 @@ class FakeStoryData:
             raise story_data.NotFound(story_id)
         return record
 
+    def seed_thread(self, thread_id: str, story_id: str) -> dict:
+        record = {"id": thread_id, "storyId": story_id, "messageCount": 0}
+        self.threads[thread_id] = record
+        self.thread_messages.setdefault(thread_id, [])
+        return record
+
+    def seed_message(
+        self, thread_id: str, role: str, text: str, status: str = "complete"
+    ) -> dict:
+        rows = self.thread_messages.setdefault(thread_id, [])
+        record = {
+            "id": f"msg-{len(rows) + 1}",
+            "threadId": thread_id,
+            "sequence": len(rows) + 1,
+            "role": role,
+            "parts": [{"type": "text", "text": text}],
+            "status": status,
+        }
+        rows.append(record)
+        self.threads[thread_id]["messageCount"] = len(rows)
+        return record
+
     # -- client interface ---------------------------------------------
 
     async def list_stories(self, uid: str) -> list[dict]:
@@ -385,6 +409,48 @@ class FakeStoryData:
             if entity["id"] == entity_id:
                 return copy.deepcopy(entity)
         raise story_data.NotFound(entity_id)
+
+    async def get_assistant_thread(
+        self, uid: str, story_id: str, thread_id: str
+    ) -> dict:
+        from mcp_server import story_data
+
+        self.requests.append(
+            (f"/v1/stories/{story_id}/assistant-threads/{thread_id}", {})
+        )
+        self._owned_story(uid, story_id)
+        thread = self.threads.get(thread_id)
+        if thread is None or thread["storyId"] != story_id:
+            raise story_data.NotFound(thread_id)
+        return copy.deepcopy(thread)
+
+    async def list_assistant_messages(
+        self,
+        uid: str,
+        story_id: str,
+        thread_id: str,
+        *,
+        cursor: int = 0,
+        limit: int = 20,
+    ) -> dict:
+        params = {"limit": str(limit)}
+        if cursor > 0:
+            params["cursor"] = str(cursor)
+        self.requests.append(
+            (f"/v1/stories/{story_id}/assistant-threads/{thread_id}/messages", params)
+        )
+        from mcp_server import story_data
+
+        self._owned_story(uid, story_id)
+        thread = self.threads.get(thread_id)
+        if thread is None or thread["storyId"] != story_id:
+            raise story_data.NotFound(thread_id)
+        rows = [
+            row
+            for row in self.thread_messages.get(thread_id, [])
+            if row["sequence"] > cursor
+        ]
+        return {"messages": copy.deepcopy(rows[:limit])}
 
     async def close(self) -> None:
         return None

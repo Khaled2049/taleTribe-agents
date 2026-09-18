@@ -1,6 +1,6 @@
 # Repository Guidelines — taleTribe-agents
 
-This FastAPI service runs NovelSync’s AI story workflows. It calls LLMs through
+This FastAPI service runs TheTaleTribe’s AI story workflows. It calls LLMs through
 creditProxy and uses story-data as the canonical source for migrated stories
 and pgvector context.
 

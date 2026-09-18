@@ -1002,7 +1002,7 @@ def _replacement_html(op: dict, tag: str, index: int) -> str:
     raise ValueError(
         f"block {index} is a <{tag}>, which carries formatting this tool "
         "cannot rewrite without flattening it into a plain paragraph. Edit it "
-        "in the NovelSync editor, or delete it (replace with empty text) and "
+        "in TheTaleTribe's editor, or delete it (replace with empty text) and "
         "insert_after the replacement paragraphs."
     )
 

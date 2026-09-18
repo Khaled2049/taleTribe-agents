@@ -1,4 +1,4 @@
-"""Unified HTTP server for NovelSync services (agents and optional image generation)."""
+"""Unified HTTP server for TheTaleTribe services (agents and optional image generation)."""
 
 import logging
 import os
@@ -277,7 +277,7 @@ def create_app() -> FastAPI:
         await story_data.aclose()
 
     app = FastAPI(
-        title="NovelSync Unified Service",
+        title="TheTaleTribe Unified Service",
         description="Unified API for story agents and optional image generation",
         lifespan=lifespan,
     )

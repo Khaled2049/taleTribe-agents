@@ -1,4 +1,4 @@
-"""Assembly of the NovelSync MCP server (FastMCP + embedded OAuth 2.1 AS).
+"""Assembly of TheTaleTribe MCP server (FastMCP + embedded OAuth 2.1 AS).
 
 build_mcp_bundle() is the single entry point server.py uses. The returned
 bundle carries everything the host FastAPI app needs to mount: the FastMCP
@@ -92,9 +92,9 @@ def build_mcp_bundle(settings: Settings) -> McpBundle:
     revocation_options = RevocationOptions(enabled=True)
 
     mcp = FastMCP(
-        "NovelSync",
+        "TheTaleTribe",
         instructions=(
-            "Access to the connected user's NovelSync stories: list stories, "
+            "Access to the connected user's TheTaleTribe stories: list stories, "
             "read chapters, and inspect characters, places, and plots. With "
             "write access granted, also create new stories, append chapters "
             "to them, and edit existing chapters paragraph by paragraph. All "
