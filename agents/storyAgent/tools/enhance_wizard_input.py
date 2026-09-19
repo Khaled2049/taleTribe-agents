@@ -93,7 +93,7 @@ class EnhanceWizardInputTool:
 
         if wizard_type == "blueprint":
             return (
-                "You are a creative writing assistant for NovelSync.\n"
+                "You are a creative writing assistant for TheTaleTribe.\n"
                 f"Task: {type_descriptions[wizard_type]}\n"
                 "Blueprint schema (all fields optional based on provided input):\n"
                 "{\n"
@@ -109,7 +109,7 @@ class EnhanceWizardInputTool:
             )
 
         return (
-            "You are a creative writing assistant for NovelSync.\n"
+            "You are a creative writing assistant for TheTaleTribe.\n"
             f"Task: {type_descriptions[wizard_type]}\n"
             "Return ONLY the final prose text. No bullet points, no labels, no markdown.\n\n"
             f"type: {wizard_type}\n"

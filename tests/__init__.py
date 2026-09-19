@@ -1,1 +1,1 @@
-"""Test suite for NovelSync Agents."""
+"""Test suite for TheTaleTribe Agents."""

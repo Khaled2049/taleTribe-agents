@@ -44,11 +44,13 @@ class Settings(BaseSettings):
     # Independent ceilings for one streamed run. They are deliberately settings,
     # not prompt suggestions: the process must remain bounded when a provider
     # repeatedly asks for tools or never reaches a final answer.
-    assistant_max_model_calls: int = Field(default=4, ge=1, le=16)
-    assistant_max_tool_calls: int = Field(default=10, ge=1, le=100)
+    assistant_max_model_calls: int = Field(default=8, ge=1, le=16)
+    assistant_max_tool_calls: int = Field(default=20, ge=1, le=100)
     assistant_max_output_tokens: int = Field(default=2048, ge=1, le=8192)
-    assistant_run_timeout_seconds: float = Field(default=120, gt=0, le=300)
+    assistant_run_timeout_seconds: float = Field(default=240, gt=0, le=300)
     assistant_max_tool_result_chars: int = Field(default=8000, ge=256)
+    assistant_history_max_messages: int = Field(default=10, ge=0, le=50)
+    assistant_history_max_chars: int = Field(default=4000, ge=0, le=32000)
 
     # MCP server (OAuth 2.1 authorization server + owner-scoped story tools)
     enable_mcp: bool = True

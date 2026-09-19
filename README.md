@@ -1,8 +1,8 @@
 # taleTribe-agents
 
-The AI engine behind NovelSync — a FastAPI service that turns story context into generated content.
+The AI engine behind TheTaleTribe — a FastAPI service that turns story context into generated content.
 
-Every AI feature in NovelSync flows through this service. Legacy stories read from Firestore; PostgreSQL stories read canonical context and pgvector embeddings when `STORY_DATA_DATABASE_URL` is configured. All LLM calls are credit-metered through creditProxy, with optional per-user BYOK to bypass platform limits.
+Every AI feature in TheTaleTribe flows through this service. Legacy stories read from Firestore; PostgreSQL stories read canonical context and pgvector embeddings when `STORY_DATA_DATABASE_URL` is configured. All LLM calls are credit-metered through creditProxy, with optional per-user BYOK to bypass platform limits.
 
 ## Key features
 

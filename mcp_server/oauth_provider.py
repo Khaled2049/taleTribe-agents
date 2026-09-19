@@ -3,7 +3,7 @@
 Implements the `mcp` SDK's OAuthAuthorizationServerProvider protocol. The SDK
 owns the spec-sensitive endpoint behavior (/authorize, /token, /register,
 /revoke, PKCE verification, redirect_uri validation against the registration);
-this class only persists state and delegates login to the NovelSync web app
+this class only persists state and delegates login to TheTaleTribe's web app
 via the consent-page handoff (see oauth_routes.py).
 
 All Firestore work happens in oauth_store.py (sync) and is bridged with

@@ -1,8 +1,8 @@
 """Consent-page handoff endpoints for the MCP OAuth flow.
 
 These two routes are the bridge between the SDK-generated /authorize endpoint
-(which redirects the user to the frontend consent page with a txn id) and the
-NovelSync web app (which authenticates the user with Firebase and posts the
+(which redirects the user to the frontend consent page with a txn id) and
+TheTaleTribe's web app (which authenticates the user with Firebase and posts the
 resulting ID token back here).
 
 They live on the host FastAPI app rather than the mounted MCP Starlette app
@@ -167,7 +167,7 @@ def build_oauth_router(
             raise HTTPException(
                 status_code=403,
                 detail="MCP access is currently limited to approved accounts. "
-                "You can request access from your NovelSync profile.",
+                "You can request access from your profile on TheTaleTribe.",
             )
 
         try:

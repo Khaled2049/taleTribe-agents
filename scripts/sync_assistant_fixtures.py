@@ -10,7 +10,7 @@ set, which is the failure this arrangement exists to catch.
     python scripts/sync_assistant_fixtures.py --check    # verify, change nothing
 
 Run from the agents repository. Consumer paths are resolved relative to the
-NovelSync workspace root (the parent of this repository's directory), and a
+TheTaleTribe workspace root (the parent of this repository's directory), and a
 consumer that is not checked out is skipped rather than treated as a failure.
 """
 

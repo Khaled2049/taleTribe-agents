@@ -85,10 +85,10 @@ def owned(factory):
 
 def test_defaults_and_ceiling_validation():
     config = settings()
-    assert config.assistant_max_model_calls == 4
-    assert config.assistant_max_tool_calls == 10
+    assert config.assistant_max_model_calls == 8
+    assert config.assistant_max_tool_calls == 20
     assert config.assistant_max_output_tokens == 2048
-    assert config.assistant_run_timeout_seconds == 120
+    assert config.assistant_run_timeout_seconds == 240
     with pytest.raises(ValidationError):
         settings(assistant_max_model_calls=0)
     with pytest.raises(ValidationError):

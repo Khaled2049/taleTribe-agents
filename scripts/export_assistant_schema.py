@@ -49,7 +49,7 @@ SCHEMA_DIR = Path(__file__).resolve().parent.parent / "assistant" / "schema"
 def build() -> dict[str, Any]:
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "NovelSync assistant protocol",
+        "title": "TheTaleTribe assistant protocol",
         "protocolVersion": ASSISTANT_PROTOCOL_VERSION,
         "terminalEventTypes": sorted(TERMINAL_EVENT_TYPES),
         "errorCodes": [code.value for code in ErrorCode],
