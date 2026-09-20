@@ -39,6 +39,22 @@ def test_tool_arguments_reject_unknown_fields(name):
         TOOL_SCHEMAS[name].model_validate({"totallyUnexpected": 1})
 
 
+@pytest.mark.parametrize(
+    "name", sorted(available_tools(edits_enabled=True, research_enabled=True))
+)
+def test_every_model_facing_tool_carries_a_description(name):
+    """An undescribed tool is close to an absent one.
+
+    run.py sources each tool's description from its schema's docstring, so a
+    schema without one reaches the provider as a bare name and the model has to
+    guess when it applies. list_story_entities sat in the allowlist that way
+    while the roster's cut-off entities looked unreachable.
+    """
+    schema = available_tools(edits_enabled=True, research_enabled=True)[name]
+    description = str(schema.model_json_schema().get("description", "")).strip()
+    assert description, f"{name} has no docstring to describe it to the model"
+
+
 def test_tool_context_is_not_constructible_from_model_output():
     """A frozen dataclass has no model_validate, so no JSON path builds one."""
     context = ToolContext(user_id="uid-1", story_id="story-1")

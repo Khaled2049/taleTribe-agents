@@ -77,16 +77,37 @@ class GetStoryOverviewArgs(StrictModel):
 
 
 class SearchStoryArgs(StrictModel):
+    """Meaning-based search over this story's indexed prose and entity text.
+
+    Finds passages that are about something; it cannot enumerate, and a hit may
+    lag a recent edit. To check whether a named entity exists, list instead.
+    """
+
     query: str = Field(min_length=1, max_length=MAX_QUERY_CHARS)
     limit: int = Field(default=8, ge=1, le=MAX_TOOL_RESULTS)
 
 
 class ListStoryEntitiesArgs(StrictModel):
+    """Name every character, place, or plot line, past the prompt roster's first few.
+
+    Alphabetical and paged: while a result reports ``truncated``, raise
+    ``offset`` by ``limit`` to read the rest. This is the only way to know that
+    a story has no entity by some name -- the roster in the prompt is a prefix,
+    and search may simply miss a sparsely written one.
+    """
+
     kind: EntityKind
     limit: int = Field(default=20, ge=1, le=MAX_TOOL_RESULTS)
+    offset: int = Field(default=0, ge=0)
 
 
 class GetStoryEntityArgs(StrictModel):
+    """The full record for one character, place, or plot line.
+
+    ``entity_id`` is an id from list_story_entities or a search hit, never a
+    name and never invented.
+    """
+
     kind: EntityKind
     entity_id: str = Field(min_length=1, max_length=MAX_ID_CHARS)
 
@@ -119,6 +140,12 @@ class ProposeEditorEditDraft(StrictModel):
 
 
 class ResearchWebArgs(StrictModel):
+    """Look up real-world background the manuscript does not contain.
+
+    Never for facts about this story: results are outside sources, so they
+    cannot say what the writer wrote.
+    """
+
     query: str = Field(min_length=1, max_length=MAX_QUERY_CHARS)
     max_results: int = Field(default=3, ge=1, le=MAX_RESEARCH_RESULTS)
 

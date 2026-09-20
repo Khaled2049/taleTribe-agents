@@ -129,6 +129,39 @@ async def test_list_story_entities_reports_its_own_limit_as_truncation(fake):
     assert result.result["truncated"] is True
 
 
+async def test_list_story_entities_pages_past_the_first_window(fake):
+    """The whole point of the tool: reaching entity #13 with no name to search for."""
+    for i in range(30):
+        fake.seed_entity(STORY, "characters", f"char-{i:02d}", name=f"C{i:02d}")
+
+    first = await run(
+        "list_story_entities", {"kind": "character", "limit": 20}, runtime()
+    )
+    assert first.result["offset"] == 0
+    assert first.result["total"] == 31
+    assert first.result["truncated"] is True
+
+    second = await run(
+        "list_story_entities",
+        {"kind": "character", "limit": 20, "offset": 20},
+        runtime(),
+    )
+    assert second.result["offset"] == 20
+    assert len(second.result["entities"]) == 11
+    assert second.result["truncated"] is False
+
+    seen = [e["name"] for e in first.result["entities"] + second.result["entities"]]
+    assert len(set(seen)) == 31
+
+
+async def test_list_story_entities_past_the_end_is_empty_not_an_error(fake):
+    result = await run(
+        "list_story_entities", {"kind": "character", "offset": 500}, runtime()
+    )
+    assert result.result["entities"] == []
+    assert result.result["truncated"] is False
+
+
 async def test_get_story_entity(fake):
     result = await run(
         "get_story_entity", {"kind": "character", "entityId": "char-1"}, runtime()
