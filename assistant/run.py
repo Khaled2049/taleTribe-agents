@@ -86,7 +86,13 @@ Reading steps are limited; if you spend them all the writer gets no answer."""
 
 ROSTER_RULES = """The roster below already names this story's characters,
 places, plot lines, and chapters. Answer from it directly when it is enough, and
-call a tool only for something it does not contain."""
+call a tool only for something it does not contain.
+The roster is bounded, not complete. A line ending in "(+N more)" lists only the
+first few of that kind and N others are not shown, so the roster is never
+evidence that something does not exist: before answering that this story has no
+character, place, or plot line by some name, call list_story_entities for that
+kind, paging with offset while it reports truncated. Chapters beyond the listed
+ones come from get_story_overview."""
 
 EDIT_RULES = """
 You may propose one edit only when the user asks to rewrite their active text

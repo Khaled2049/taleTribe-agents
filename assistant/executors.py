@@ -314,12 +314,17 @@ async def list_story_entities(
     # The schema's `limit` bounds what the model asked for; data.list_entities
     # applies its own, larger page cap. Report both truncations as one flag so a
     # partial list is never presented as a complete roster.
-    items = page.items[: args.limit]
+    items = page.items[args.offset : args.offset + args.limit]
+    # `total` is what the server loaded, so it is itself bounded by
+    # COLLECTION_FETCH_LIMIT. That understatement is safe in the direction that
+    # matters -- it is `truncated`, not `total`, that says "keep paging".
     payload, clipped = _fit(
         {
             "kind": args.kind,
             "entities": items,
-            "truncated": page.truncated or len(items) < len(page.items),
+            "offset": args.offset,
+            "total": len(page.items),
+            "truncated": page.truncated or args.offset + len(items) < len(page.items),
         },
         runtime.max_result_chars,
     )

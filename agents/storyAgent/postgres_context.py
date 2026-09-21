@@ -19,6 +19,7 @@ from .embedding_text import _chunk_text, compose_entity_text
 logger = logging.getLogger(__name__)
 
 MAX_SLIM_CONTEXT_CHARS = 8_000
+SLIM_ROSTER_LIMIT = 12
 MAX_SLIM_DESCRIPTION_CHARS = 2_000
 MAX_SLIM_LABEL_CHARS = 120
 
@@ -104,30 +105,36 @@ class PostgresStoryContext:
             if story is None:
                 raise ValueError(f"Story {story_id} not found")
             characters = await conn.fetch(
-                "SELECT name FROM characters WHERE story_id=$1 ORDER BY name LIMIT 12",
+                "SELECT name,COUNT(*) OVER () AS total FROM characters WHERE story_id=$1 ORDER BY name LIMIT $2",
                 story_id,
+                SLIM_ROSTER_LIMIT,
             )
             places = await conn.fetch(
-                "SELECT name FROM places WHERE story_id=$1 ORDER BY name LIMIT 12",
+                "SELECT name,COUNT(*) OVER () AS total FROM places WHERE story_id=$1 ORDER BY name LIMIT $2",
                 story_id,
+                SLIM_ROSTER_LIMIT,
             )
             plots = await conn.fetch(
-                "SELECT name FROM plot_lines WHERE story_id=$1 ORDER BY created_at LIMIT 12",
+                "SELECT name,COUNT(*) OVER () AS total FROM plot_lines WHERE story_id=$1 ORDER BY created_at LIMIT $2",
                 story_id,
+                SLIM_ROSTER_LIMIT,
             )
             chapters = await conn.fetch(
-                "SELECT title FROM chapters WHERE story_id=$1 ORDER BY position LIMIT 12",
+                "SELECT title,COUNT(*) OVER () AS total FROM chapters WHERE story_id=$1 ORDER BY position LIMIT $2",
                 story_id,
+                SLIM_ROSTER_LIMIT,
             )
-        return self.format_slim_context(
-            {
-                "story": dict(story),
-                "characters": [dict(row) for row in characters],
-                "places": [dict(row) for row in places],
-                "plots": [dict(row) for row in plots],
-                "chapters": [dict(row) for row in chapters],
-            }
+        rosters = (
+            ("characters", characters, "name"),
+            ("places", places, "name"),
+            ("plots", plots, "name"),
+            ("chapters", chapters, "title"),
         )
+        payload: dict[str, Any] = {"story": dict(story), "totals": {}}
+        for key, rows, field in rosters:
+            payload[key] = [{field: row[field]} for row in rows]
+            payload["totals"][key] = int(rows[0]["total"]) if rows else 0
+        return self.format_slim_context(payload)
 
     async def search_chunks(
         self, story_id: str, embedding: list[float], top_k: int = 4
@@ -193,27 +200,39 @@ class PostgresStoryContext:
         """Small, bounded roster the assistant run seeds its prompt with.
 
         Pairs with the ``search_story`` tool: the roster names what exists, the
-        tool fetches the text on demand."""
+        tool fetches the text on demand.
+
+        A roster line that is a prefix ends in ``(+N more)``. Without it a model
+        reads twelve names as the complete cast and answers "there is no such
+        character" about the thirteenth, since nothing in the prompt says the
+        list was cut. ``totals`` carries the true per-kind count; it is optional
+        so a caller that already holds a whole collection can omit it.
+        """
         story = context["story"]
+        totals = context.get("totals") or {}
         lines = [
             f"Story: {_bounded(story.get('title', ''), MAX_SLIM_LABEL_CHARS)}",
             "Description: "
             + _bounded(story.get("description", ""), MAX_SLIM_DESCRIPTION_CHARS),
         ]
-        for label, items in (
-            ("Characters", context["characters"]),
-            ("Places", context["places"]),
-            ("Plot lines", context["plots"]),
-            ("Chapters", context["chapters"]),
+        for key, label in (
+            ("characters", "Characters"),
+            ("places", "Places"),
+            ("plots", "Plot lines"),
+            ("chapters", "Chapters"),
         ):
+            items = context[key]
             names = [
                 _bounded(
                     item.get("name") or item.get("title") or "", MAX_SLIM_LABEL_CHARS
                 )
-                for item in items[:12]
+                for item in items[:SLIM_ROSTER_LIMIT]
             ]
-            if names:
-                lines.append(f"{label}: " + ", ".join(names))
+            if not names:
+                continue
+            hidden = int(totals.get(key, len(items))) - len(names)
+            suffix = f" (+{hidden} more)" if hidden > 0 else ""
+            lines.append(f"{label}: " + ", ".join(names) + suffix)
         return "\n".join(lines)[:MAX_SLIM_CONTEXT_CHARS]
 
     async def claim(self, worker: str, limit: int = 20) -> list[asyncpg.Record]:
