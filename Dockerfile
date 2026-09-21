@@ -32,8 +32,11 @@ COPY mcp_server/ /app/mcp_server/
 # here crashes the container on startup rather than degrading silently.
 COPY assistant/ /app/assistant/
 
-# Copy the unified server and its root-level modules (imported by server.py)
-COPY server.py config.py rate_limit.py /app/
+# Copy the unified server and its root-level modules. capability_catalog.py is
+# the single source of tool names for both mcp_server/tools.py and
+# assistant/help.py, so leaving it out drops the whole MCP mount at startup
+# (server.py catches the ImportError and degrades silently).
+COPY server.py config.py rate_limit.py capability_catalog.py /app/
 
 # Disable local image generation in Docker (use external API instead)
 ENV ENABLE_LOCAL_IMAGE_GENERATION=false
