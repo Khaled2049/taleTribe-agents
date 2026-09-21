@@ -19,6 +19,7 @@ from pydantic import TypeAdapter
 
 from assistant.errors import ErrorCode
 from assistant.events import TERMINAL_EVENT_TYPES, AssistantEvent
+from assistant.help import HELP_BOUNDARIES, HELP_PREAMBLE, catalog_payload
 from assistant.protocol import (
     MAX_CONTENT_CHARS,
     MAX_EDIT_OPERATIONS,
@@ -72,6 +73,14 @@ def build() -> dict[str, Any]:
             "chapterWindowChars": MAX_CHAPTER_WINDOW_CHARS,
             "editOperations": MAX_EDIT_OPERATIONS,
             "researchResults": MAX_RESEARCH_RESULTS,
+        },
+        # Writer-facing copy, not JSON Schema, so it sits beside "limits"
+        # rather than under "definitions". The browser renders /help from this
+        # instead of asking the model what it can do.
+        "capabilities": {
+            "preamble": HELP_PREAMBLE,
+            "boundaries": list(HELP_BOUNDARIES),
+            "items": catalog_payload(),
         },
         "definitions": {
             "RunRequest": RunRequest.model_json_schema(by_alias=True),

@@ -10,6 +10,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import BaseModel, Field
 
+from capability_catalog import MCP_READ_TOOL_NAMES, MCP_WRITE_TOOL_NAMES
 from mcp_server import data, story_data, writes
 from mcp_server.access import AccessGate
 from rate_limit import PerUserRateLimiter
@@ -145,12 +146,7 @@ async def _bridge(fn, *args, **kwargs) -> Any:
 
 
 async def _read(coro) -> Any:
-    """Await a data.py read, mapping its failures onto tool errors.
-
-    Takes the coroutine rather than a callable: data.py reads over HTTP now, so
-    there is nothing blocking left to push onto a thread. _write still uses
-    _bridge because writes.py remains on the synchronous Firestore client.
-    """
+    """Await a data.py read, mapping its failures onto tool errors."""
     try:
         return await coro
     except data.StoryNotFoundError:
@@ -167,20 +163,19 @@ async def _read(coro) -> Any:
 
 
 async def _write(
-    fn,
-    *args,
+    coro,
+    *,
     caller: Caller,
     tool: str,
     story_id: Any = None,
-    **kwargs,
 ) -> Any:
-    """Run a writes.py function, mapping failures and recording the audit line.
+    """Await a writes.py call, mapping failures and recording the audit line.
 
     Denials are logged here rather than inside writes.py because this is the
     layer that knows *who* the caller is; writes.py only knows the uid.
     """
     try:
-        return await _bridge(fn, *args, **kwargs)
+        return await coro
     except data.StoryNotFoundError:
         logger.warning(
             "mcp_write_denied_ownership",
@@ -230,6 +225,22 @@ async def _write(
         raise ToolError(
             "Another change to this story is in progress. Try again in a moment."
         )
+    except story_data.Rejected as exc:
+        # story-data refused the input — most often one of the ceilings it owns
+        # (stories per user, chapters per story, words per chapter). Its message
+        # is written for a caller to read, so pass it through rather than
+        # restating those numbers here.
+        logger.warning(
+            "mcp_write_rejected",
+            uid=caller.uid,
+            client_id=caller.client_id,
+            tool=tool,
+            story_id=_short(story_id),
+        )
+        raise ToolError(exc.message)
+    except story_data.StoryDataError as exc:
+        logger.warning("mcp_story_data_unavailable", tool=tool, error=str(exc))
+        raise ToolError("The story service is unavailable. Try again shortly.")
     except ValueError as exc:
         raise ToolError(str(exc))
 
@@ -452,10 +463,10 @@ def register_tools(
         entity = await _read(data.get_entity(story_id, uid, entity_type, entity_id))
         return _result(entity)
 
-    tool_count = 7
+    tool_count = len(MCP_READ_TOOL_NAMES)
 
     if enable_writes:
-        tool_count += 4
+        tool_count += len(MCP_WRITE_TOOL_NAMES)
 
         @mcp.tool()
         async def create_story(
@@ -466,7 +477,8 @@ def register_tools(
         ) -> dict:
             """Create a new story in the connected account. Requires write access.
 
-            The story starts unpublished with no chapters — add them with
+            The story starts unpublished, with a single empty "Chapter 1" —
+            write into it with append_to_chapter, or add more with
             create_chapter. It appears in TheTaleTribe's web app immediately.
 
             Repeating an identical call within two minutes returns the story
@@ -480,13 +492,7 @@ def register_tools(
             """
             caller = await _authorize_write()
             story = await _write(
-                writes.create_story,
-                db,
-                caller.uid,
-                title,
-                description,
-                category,
-                tags,
+                writes.create_story(db, caller.uid, title, description, category, tags),
                 caller=caller,
                 tool="create_story",
             )
@@ -521,12 +527,7 @@ def register_tools(
             """
             caller = await _authorize_write()
             chapter = await _write(
-                writes.create_chapter,
-                db,
-                caller.uid,
-                story_id,
-                title,
-                content,
+                writes.create_chapter(db, caller.uid, story_id, title, content),
                 caller=caller,
                 tool="create_chapter",
                 story_id=story_id,
@@ -535,7 +536,7 @@ def register_tools(
                 "mcp_write_chapter_created",
                 caller,
                 chapter,
-                order=chapter["order"],
+                position=chapter["order"],
                 content_chars=len(content or ""),
                 word_count=chapter["word_count"],
                 chapter_count=chapter["chapter_count"],
@@ -572,13 +573,9 @@ def register_tools(
             """
             caller = await _authorize_write()
             result = await _write(
-                writes.append_to_chapter,
-                db,
-                caller.uid,
-                story_id,
-                chapter_id,
-                content,
-                revision,
+                writes.append_to_chapter(
+                    db, caller.uid, story_id, chapter_id, content, revision
+                ),
                 caller=caller,
                 tool="append_to_chapter",
                 story_id=story_id,
@@ -644,15 +641,16 @@ def register_tools(
             """
             caller = await _authorize_write()
             result = await _write(
-                writes.edit_chapter_blocks,
-                db,
-                caller.uid,
-                story_id,
-                chapter_id,
-                # Plain dicts across the boundary: writes.py stays free of the
-                # tool framework's types and re-validates them itself.
-                [op.model_dump() for op in ops],
-                revision,
+                writes.edit_chapter_blocks(
+                    db,
+                    caller.uid,
+                    story_id,
+                    chapter_id,
+                    # Plain dicts across the boundary: writes.py stays free of
+                    # the tool framework's types and re-validates them itself.
+                    [op.model_dump() for op in ops],
+                    revision,
+                ),
                 caller=caller,
                 tool="edit_chapter_blocks",
                 story_id=story_id,

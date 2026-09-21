@@ -17,6 +17,11 @@ _versions = itertools.count(1)
 _auto_ids = itertools.count(1)
 
 
+def _word_count(value: str) -> int:
+    """story-data's wordCount: runs of non-whitespace (internal/store)."""
+    return len(value.split())
+
+
 class FakeWriteOption:
     def __init__(self, last_update_time):
         self.last_update_time = last_update_time
@@ -251,7 +256,18 @@ class FakeStoryData:
       A fake that simply refused non-owners everywhere would make that check
       look redundant and let a real widening of MCP's scope pass the suite.
     - The worldbuilding routes are owner-only (they go through store.owner).
+
+    The write side reproduces the same three things story-data's write path
+    decides: the UNIQUE (story_id, position) constraint that makes two
+    concurrent creates collide, the per-row `revision` that backs If-Match, and
+    the ceilings it counts itself (stories, chapters, words) — because those
+    are exactly the outcomes writes.py now delegates rather than pre-checking.
     """
+
+    # internal/store: storyLimit, chapterLimit, wordLimit.
+    STORY_LIMIT = 100
+    CHAPTER_LIMIT = 50
+    WORD_LIMIT = 5000
 
     def __init__(self):
         self.stories: dict[str, dict] = {}
@@ -259,8 +275,16 @@ class FakeStoryData:
         self.entities: dict[tuple[str, str], list[dict]] = {}
         self.threads: dict[str, dict] = {}
         self.thread_messages: dict[str, list[dict]] = {}
+        self.profiles: dict[str, dict] = {}
         # Every path requested, so a test can assert on content=false.
         self.requests: list[tuple[str, dict]] = []
+        self.writes: list[tuple[str, dict]] = []
+        # Hooks a contention test installs to act between a read and the
+        # write that follows it. They persist across calls; the closure decides
+        # whether to act more than once.
+        self.before_create_chapter = None
+        self.before_update_chapter = None
+        self._ids = itertools.count(1)
 
     # -- seeding ------------------------------------------------------
 
@@ -297,6 +321,12 @@ class FakeStoryData:
         }
         record.update(fields)
         self.chapters.setdefault(story_id, []).append(record)
+        return record
+
+    def seed_profile(self, uid: str, **fields: Any) -> dict:
+        record = {"userId": uid, "username": ""}
+        record.update(fields)
+        self.profiles[uid] = record
         return record
 
     def seed_entity(
@@ -451,6 +481,117 @@ class FakeStoryData:
             if row["sequence"] > cursor
         ]
         return {"messages": copy.deepcopy(rows[:limit])}
+
+    async def get_my_profile(self, uid: str) -> dict:
+        from mcp_server import story_data
+
+        self.requests.append(("/v1/profiles/me", {}))
+        record = self.profiles.get(uid)
+        if record is None:
+            raise story_data.NotFound("/v1/profiles/me")
+        return copy.deepcopy(record)
+
+    # -- writes -------------------------------------------------------
+
+    def _chapter(self, story_id: str, chapter_id: str) -> Optional[dict]:
+        for chapter in self.chapters.get(story_id, []):
+            if chapter["id"] == chapter_id:
+                return chapter
+        return None
+
+    async def create_story(self, uid: str, payload: dict) -> dict:
+        from mcp_server import story_data
+
+        self.writes.append(("POST /v1/stories", copy.deepcopy(payload)))
+        owned = sum(1 for s in self.stories.values() if s["ownerId"] == uid)
+        if owned >= self.STORY_LIMIT:
+            raise story_data.Rejected(
+                f"you have reached the limit of {self.STORY_LIMIT} stories"
+            )
+        story_id = f"story-{next(self._ids)}"
+        record = self.seed_story(
+            story_id,
+            uid,
+            title=payload.get("title") or "",
+            description=payload.get("description") or "",
+            authorName=payload.get("authorName") or "",
+            category=payload.get("category") or "",
+            tags=list(payload.get("tags") or []),
+            published=bool(payload.get("published")),
+        )
+        # story-data's CreateStory seeds an empty first chapter in the same
+        # transaction; a test that appends to a new story depends on it.
+        self.seed_chapter(
+            story_id, f"chapter-{next(self._ids)}", title="Chapter 1", position=0.0
+        )
+        return copy.deepcopy(record)
+
+    async def create_chapter(self, uid: str, story_id: str, payload: dict) -> dict:
+        from mcp_server import story_data
+
+        self.writes.append(
+            (f"POST /v1/stories/{story_id}/chapters", copy.deepcopy(payload))
+        )
+        self._owned_story(uid, story_id)
+        if self.before_create_chapter is not None:
+            self.before_create_chapter()
+        content = payload.get("content") or ""
+        if _word_count(content) > self.WORD_LIMIT:
+            raise story_data.Rejected(
+                f"a chapter can hold at most {self.WORD_LIMIT} words; split "
+                "this into another chapter to keep writing"
+            )
+        existing = self.chapters.get(story_id, [])
+        if len(existing) >= self.CHAPTER_LIMIT:
+            raise story_data.Rejected(
+                f"this story has reached the limit of {self.CHAPTER_LIMIT} chapters"
+            )
+        position = float(payload.get("position") or 0)
+        if any(c["position"] == position for c in existing):
+            # UNIQUE (story_id, position) -> 409.
+            raise story_data.Conflict(f"position {position} is taken")
+        return copy.deepcopy(
+            self.seed_chapter(
+                story_id,
+                f"chapter-{next(self._ids)}",
+                title=payload.get("title") or "",
+                content=content,
+                position=position,
+                wordCount=_word_count(content),
+            )
+        )
+
+    async def update_chapter(
+        self, uid: str, story_id: str, chapter_id: str, payload: dict, revision: str
+    ) -> dict:
+        from mcp_server import story_data
+
+        self.writes.append(
+            (
+                f"PATCH /v1/stories/{story_id}/chapters/{chapter_id}",
+                copy.deepcopy(payload),
+            )
+        )
+        self._owned_story(uid, story_id)
+        if self.before_update_chapter is not None:
+            self.before_update_chapter()
+        chapter = self._chapter(story_id, chapter_id)
+        if chapter is None:
+            raise story_data.NotFound(chapter_id)
+        content = payload.get("content") or ""
+        if _word_count(content) > self.WORD_LIMIT:
+            raise story_data.Rejected(
+                f"a chapter can hold at most {self.WORD_LIMIT} words; split "
+                "this into another chapter to keep writing"
+            )
+        if str(chapter["revision"]) != str(revision):
+            raise story_data.Conflict(chapter_id)
+        chapter["title"] = payload.get("title") or ""
+        chapter["content"] = content
+        chapter["position"] = float(payload.get("position") or 0)
+        chapter["wordCount"] = _word_count(content)
+        chapter["revision"] += 1
+        return copy.deepcopy(chapter)
 
     async def close(self) -> None:
         return None

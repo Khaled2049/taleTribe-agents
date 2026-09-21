@@ -4,8 +4,8 @@ Every function takes the caller's Firebase uid and refuses to return anything
 the caller does not own. Missing and non-owned stories are indistinguishable to
 the caller ("not found") so story IDs cannot be probed for existence.
 
-Reads only — nothing here mutates. The write tools live in writes.py, which is
-still Firestore-backed and carries its own ownership gate.
+Reads only — nothing here mutates. The write tools live in writes.py and reuse
+get_owned_story below as their own gate.
 
 Ownership is asserted twice on purpose. story-data enforces it (the asserted uid
 scopes `GET /v1/stories`, and worldbuilding goes through its owner check), but

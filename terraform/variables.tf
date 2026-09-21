@@ -146,9 +146,9 @@ variable "indexing_worker_enabled" {
 }
 
 variable "enable_mcp_writes" {
-  description = "Allow MCP clients to create stories and chapters. Off by default: it is the only path in the service that mutates user content, and it requires a token granted the stories:write scope. Flip this in its own commit so a rollback needs no code change."
+  description = "Allow MCP clients with stories:write to create and edit stories and chapters through story-data. On after the canonical-write cutover; set false as the emergency kill switch."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "enable_mcp_access_allowlist" {

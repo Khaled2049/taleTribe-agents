@@ -1,13 +1,11 @@
 """Unit tests for mcp_server.data (owner-enforced reads) and mcp_server.tools."""
 
-import itertools
 import json
 import os
-import pathlib
-import re
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "test-project")
@@ -19,6 +17,7 @@ from mcp.server.fastmcp import FastMCP  # noqa: E402
 from mcp.server.fastmcp.exceptions import ToolError  # noqa: E402
 from structlog.testing import capture_logs  # noqa: E402
 
+from capability_catalog import MCP_READ_TOOL_NAMES, MCP_WRITE_TOOL_NAMES  # noqa: E402
 from mcp_server import app as mcp_app  # noqa: E402
 from mcp_server import blocks as blocks_module  # noqa: E402
 from mcp_server import data  # noqa: E402
@@ -103,72 +102,6 @@ def _seeded_story_data() -> FakeStoryData:
         "story-b", "chb", title="Secret", position=1.0, content="secret text"
     )
     return _use_story_data(fake)
-
-
-def _seeded_db() -> FakeFirestoreClient:
-    db = FakeFirestoreClient()
-    db.seed(
-        "stories/story-a",
-        {
-            "userId": UID_A,
-            "title": "Story A",
-            "description": "d" * 400,
-            "isPublished": False,
-            "chapterCount": 2,
-            "author": "Author A",
-            "updatedAt": datetime(2026, 7, 1, tzinfo=timezone.utc),
-            "chapterIndex": [
-                {"title": "Chapter Two", "order": 2},
-                {"title": "Chapter One", "order": 1},
-            ],
-        },
-    )
-    db.seed(
-        "stories/story-a/chapters/ch1",
-        {
-            "title": "Chapter One",
-            "order": 1,
-            "wordCount": 5,
-            "content": "0123456789" * 2500,  # 25_000 chars
-        },
-    )
-    db.seed(
-        "stories/story-a/chapters/ch2",
-        {"title": "Chapter Two", "order": 2, "wordCount": 3, "content": "short"},
-    )
-    db.seed(
-        "stories/story-a/characters/char1",
-        {
-            "name": "Mira",
-            "personality": "p" * 400,
-            "soul": "steadfast",
-            "embedding": [0.1, 0.2],
-            "relationships": [{"name": "Bran", "relation": "brother"}],
-        },
-    )
-    # A second user-a story WITHOUT chapterIndex (exercises the fallback).
-    db.seed(
-        "stories/story-c",
-        {
-            "userId": UID_A,
-            "title": "Story C",
-            "updatedAt": datetime(2026, 7, 20, tzinfo=timezone.utc),
-        },
-    )
-    db.seed(
-        "stories/story-c/chapters/cc1",
-        {"title": "Only Chapter", "order": 1, "content": "hello"},
-    )
-    # Another user's story: must be invisible to user-a.
-    db.seed(
-        "stories/story-b",
-        {"userId": UID_B, "title": "Story B", "chapterIndex": []},
-    )
-    db.seed(
-        "stories/story-b/chapters/chb",
-        {"title": "Secret", "order": 1, "content": "secret text"},
-    )
-    return db
 
 
 # ---------------------------------------------------------------------------
@@ -665,7 +598,7 @@ async def test_tool_idor_returns_not_found():
 
 
 async def test_tool_unauthenticated_rejected():
-    mcp = _tool_server(_seeded_db())
+    mcp = _tool_server(FakeFirestoreClient())
     with patch("mcp_server.tools.get_access_token", return_value=None):
         with pytest.raises(ToolError, match="Not authenticated"):
             await mcp.call_tool("list_my_stories", {})
@@ -714,52 +647,60 @@ async def test_tool_entities_roundtrip():
 # ---------------------------------------------------------------------------
 # writes.py — ownership (the highest-value tests in this file)
 #
-# Every denial case asserts the document count is unchanged. The bug worth
+# Every denial case asserts that story-data saw no write at all. The bug worth
 # catching is not "denied", it is "denied but wrote anyway".
 # ---------------------------------------------------------------------------
 
 
 def _doc_count(db) -> int:
+    """Firestore documents — now only the mcpWrites reservations."""
     return len(db.docs)
 
 
-_fake_versions = itertools.count(1_000_000)
+def _write_env() -> tuple[FakeFirestoreClient, FakeStoryData]:
+    """The two backends a write touches, seeded as the read fixture is.
+
+    Content goes to story-data; Firestore holds only the idempotency
+    reservation, so the fakes stay separate and an assertion says which one it
+    means.
+    """
+    return FakeFirestoreClient(), _seeded_story_data()
 
 
-def _bump() -> int:
-    """A fresh document version, for simulating a concurrent writer."""
-    return next(_fake_versions)
+def _blank_env() -> tuple[FakeFirestoreClient, FakeStoryData]:
+    return FakeFirestoreClient(), _use_story_data(FakeStoryData())
 
 
 async def test_create_chapter_idor_raises_story_not_found():
-    db = _seeded_db()
-    before = _doc_count(db)
+    db, fake = _write_env()
     with pytest.raises(data.StoryNotFoundError):
-        writes.create_chapter(db, UID_A, "story-b", "Sneaky", "text")
-    assert _doc_count(db) == before
+        await writes.create_chapter(db, UID_A, "story-b", "Sneaky", "text")
+    assert fake.writes == []
+    assert _doc_count(db) == 0
 
 
 async def test_create_chapter_missing_story_indistinguishable_from_not_owned():
-    db = _seeded_db()
+    db, _ = _write_env()
     with pytest.raises(data.StoryNotFoundError):
-        writes.create_chapter(db, UID_A, "no-such-story", "T", "x")
+        await writes.create_chapter(db, UID_A, "no-such-story", "T", "x")
     with pytest.raises(data.StoryNotFoundError):
-        writes.create_chapter(db, UID_A, "story-b", "T", "x")
-
-
-async def test_chapter_userid_matches_story_owner():
-    db = _seeded_db()
-    result = writes.create_chapter(db, UID_A, "story-a", "New", "body")
-    stored, _ = db.docs[f"stories/story-a/chapters/{result['chapter_id']}"]
-    assert stored["userId"] == UID_A
+        await writes.create_chapter(db, UID_A, "story-b", "T", "x")
 
 
 async def test_no_write_argument_can_target_another_users_story():
     """Guards against a later `user_id`-style parameter reopening the IDOR."""
-    db = _seeded_db()
-    story = writes.create_story(db, UID_B, "B's book")
+    db, fake = _write_env()
+    story = await writes.create_story(db, UID_B, "B's book")
     with pytest.raises(data.StoryNotFoundError):
-        writes.create_chapter(db, UID_A, story["story_id"], "T", "x")
+        await writes.create_chapter(db, UID_A, story["story_id"], "T", "x")
+
+
+async def test_the_asserted_uid_is_the_one_story_data_is_told():
+    """story-data derives ownership from X-User-ID, so the uid writes.py passes
+    IS the authorization decision. A caller's own id must reach it unchanged."""
+    db, fake = _blank_env()
+    await writes.create_story(db, UID_B, "B's book")
+    assert [s["ownerId"] for s in fake.stories.values()] == [UID_B]
 
 
 # ---------------------------------------------------------------------------
@@ -767,300 +708,228 @@ async def test_no_write_argument_can_target_another_users_story():
 # ---------------------------------------------------------------------------
 
 
-async def test_created_story_carries_the_fields_a_listing_orders_on():
-    """Firestore's order_by silently DROPS documents missing `updatedAt`, so a
-    story written without it exists but is invisible to a listing.
+async def test_create_story_sends_the_fields_story_data_stores():
+    """story-data decodes with DisallowUnknownFields, so an unrecognised key is
+    a 400 for the whole request rather than a silently dropped field."""
+    db, fake = _blank_env()
+    fake.seed_profile(UID_A, username="mira")
+    result = await writes.create_story(db, UID_A, "T", "D", "Fantasy", ["a", "b"])
 
-    Previously asserted by listing through data.py; the read path serves
-    story-data now, so the property is asserted at the document instead.
-    """
-    db = _seeded_db()
-    created = writes.create_story(db, UID_A, "Fresh")
-    doc = db.docs[f"stories/{created['story_id']}"][0]
-    assert doc.get("updatedAt") is not None
-    assert doc["userId"] == UID_A
-
-
-async def test_create_story_writes_every_field_mapstorydoc_reads():
-    # Field list mirrors StoriesRepo.createStory / mapStoryDoc in the frontend
-    # repo (src/services/StoriesRepo.ts) — mapStoryDoc calls .toDate() on the
-    # timestamps without guarding, so an absent one throws in story lists.
-    db = FakeFirestoreClient()
-    result = writes.create_story(db, UID_A, "T", "D", "Fantasy", ["a", "b"])
-    stored, _ = db.docs[f"stories/{result['story_id']}"]
-    for field in (
-        "id",
-        "title",
-        "description",
-        "userId",
-        "author",
-        "isPublished",
-        "createdAt",
-        "updatedAt",
-        "chapterCount",
-        "views",
-        "likes",
-        "category",
-        "tags",
-        "targetAudience",
-        "language",
-        "copyright",
-        "coverImageUrl",
-    ):
-        assert field in stored, f"missing {field}"
-    assert stored["id"] == result["story_id"]
-    assert stored["userId"] == UID_A
-    assert stored["isPublished"] is False
-    assert stored["chapterCount"] == 0
-    assert stored["createdAt"].tzinfo is not None
-    assert stored["updatedAt"].tzinfo is not None
+    path, payload = fake.writes[-1]
+    assert path == "POST /v1/stories"
+    assert payload == {
+        "title": "T",
+        "description": "D",
+        "authorName": "mira",
+        "category": "Fantasy",
+        "tags": ["a", "b"],
+        "published": False,
+    }
+    assert result["story_id"] in fake.stories
+    assert result["is_published"] is False
 
 
 async def test_create_story_author_from_public_profile():
-    db = FakeFirestoreClient()
-    db.seed(f"publicProfiles/{UID_A}", {"username": "mira"})
-    result = writes.create_story(db, UID_A, "T")
-    assert db.docs[f"stories/{result['story_id']}"][0]["author"] == "mira"
+    db, fake = _blank_env()
+    fake.seed_profile(UID_A, username="mira")
+    await writes.create_story(db, UID_A, "T")
+    assert fake.writes[-1][1]["authorName"] == "mira"
 
 
 async def test_create_story_author_blank_when_profile_missing():
-    db = FakeFirestoreClient()
-    result = writes.create_story(db, UID_A, "T")
-    assert db.docs[f"stories/{result['story_id']}"][0]["author"] == ""
+    """A story must still be creatable before the writer has a public profile —
+    the byline is cosmetic, and story-data serves the username on read anyway."""
+    db, fake = _blank_env()
+    await writes.create_story(db, UID_A, "T")
+    assert fake.writes[-1][1]["authorName"] == ""
 
 
-async def test_create_chapter_bumps_chapter_count_and_story_updated_at():
-    db = _seeded_db()
-    before = db.docs["stories/story-a"][0]["updatedAt"]
-    writes.create_chapter(db, UID_A, "story-a", "Three", "text")
-    story, _ = db.docs["stories/story-a"]
-    assert story["chapterCount"] == 3
-    assert story["updatedAt"] > before
+async def test_create_chapter_reports_the_chapter_count_it_observed():
+    db, fake = _write_env()
+    result = await writes.create_chapter(db, UID_A, "story-a", "Three", "text")
+    assert result["chapter_count"] == 3
+    assert len(fake.chapters["story-a"]) == 3
 
 
 async def test_created_chapter_carries_the_fields_a_listing_needs():
-    """Same shift as above: verified where the write lands, not read back."""
-    db = _seeded_db()
-    created = writes.create_chapter(db, UID_A, "story-a", "Three", "one two three")
-    doc = db.docs[f"stories/story-a/chapters/{created['chapter_id']}"][0]
-    assert doc["title"] == "Three"
-    assert doc["wordCount"] == 3
-    assert doc["order"] == created["order"]
+    db, fake = _write_env()
+    created = await writes.create_chapter(
+        db, UID_A, "story-a", "Three", "one two three"
+    )
+    stored = next(
+        c for c in fake.chapters["story-a"] if c["id"] == created["chapter_id"]
+    )
+    assert stored["title"] == "Three"
+    assert stored["position"] == created["order"]
+    # Counted by story-data, reported back rather than recomputed here.
+    assert created["word_count"] == stored["wordCount"] == 3
 
 
 # ---------------------------------------------------------------------------
 # writes.py — ordering and concurrency
+#
+# `position` carries a UNIQUE (story_id, position) constraint in story-data, so
+# a lost race is a 409 on insert rather than a duplicate row. These tests drive
+# that path through the fake's before_create_chapter hook.
 # ---------------------------------------------------------------------------
 
 
-async def test_order_derives_from_max_order_not_chapter_count():
-    """Post-delete drift: chapterCount lags max(order) because the frontend's
-    deleteChapter decrements without renumbering. Deriving order from the
-    counter (as StoriesRepo.addChapter does) would collide at 4."""
-    db = FakeFirestoreClient()
-    db.seed("stories/s", {"userId": UID_A, "chapterCount": 4, "title": "S"})
-    for idx, order in enumerate((0, 1, 3, 4)):
-        db.seed(f"stories/s/chapters/c{idx}", {"title": f"C{idx}", "order": order})
-    result = writes.create_chapter(db, UID_A, "s", "Next", "x")
-    assert result["order"] == 5
+async def test_position_derives_from_the_highest_position_not_the_count():
+    """Positions keep gaps after a mid-book delete, so deriving the next one
+    from the number of chapters would collide at 4."""
+    db, fake = _blank_env()
+    fake.seed_story("s", UID_A, title="S")
+    for idx, position in enumerate((0, 1, 3, 4)):
+        fake.seed_chapter("s", f"c{idx}", title=f"C{idx}", position=float(position))
+    result = await writes.create_chapter(db, UID_A, "s", "Next", "x")
+    assert result["position" if "position" in result else "order"] == 5.0
 
 
-async def test_create_chapter_retries_on_lost_precondition():
-    db = _seeded_db()
-    bumped = {"done": False}
+async def test_create_chapter_retries_when_the_position_is_taken():
+    db, fake = _write_env()
+    stolen = {"done": False}
 
-    def concurrent_writer(path):
-        # Act as a second caller landing between our read and our update.
-        if path == "stories/story-a" and not bumped["done"]:
-            bumped["done"] = True
-            db.docs[path] = (dict(db.docs[path][0]), 999_999)
+    def concurrent_writer():
+        # A second caller lands between our index read and our insert.
+        if not stolen["done"]:
+            stolen["done"] = True
+            fake.seed_chapter("story-a", "rival", title="Rival", position=3.0)
 
-    db.before_update = concurrent_writer
-    result = writes.create_chapter(db, UID_A, "story-a", "Three", "x")
+    fake.before_create_chapter = concurrent_writer
+    result = await writes.create_chapter(db, UID_A, "story-a", "Three", "x")
     assert result["attempts"] == 2
-    assert result["order"] == 3
+    assert result["order"] == 4.0
 
 
-async def test_orders_are_unique_under_repeated_contention():
-    db = _seeded_db()
-    orders = []
+async def test_positions_are_unique_under_repeated_contention():
+    db, fake = _write_env()
+    positions = []
     for n in range(4):
         state = {"done": False}
 
-        def concurrent_writer(path, state=state):
-            if path == "stories/story-a" and not state["done"]:
+        def concurrent_writer(state=state, n=n):
+            if not state["done"]:
                 state["done"] = True
-                db.docs[path] = (dict(db.docs[path][0]), _bump())
+                fake.seed_chapter(
+                    "story-a",
+                    f"rival{n}",
+                    title="Rival",
+                    position=_next_free_position(fake),
+                )
 
-        db.before_update = concurrent_writer
+        fake.before_create_chapter = concurrent_writer
         # Distinct titles: identical arguments would hit the idempotency
         # replay and return the same chapter rather than exercising ordering.
-        orders.append(
-            writes.create_chapter(db, UID_A, "story-a", f"C{n}", "x")["order"]
+        positions.append(
+            (await writes.create_chapter(db, UID_A, "story-a", f"C{n}", "x"))["order"]
         )
-    assert len(set(orders)) == len(orders)
+    all_positions = [c["position"] for c in fake.chapters["story-a"]]
+    assert len(set(positions)) == len(positions)
+    assert len(set(all_positions)) == len(all_positions)
 
 
-async def test_no_order_collision_with_a_claimed_but_unwritten_chapter():
-    """The interleaving the retry loop alone cannot save: caller A claims its
-    slot (the story doc moves), but its chapter document is not written yet, so
-    a max(order) read by caller B still reports the old ceiling. B must take
-    its order from the nextChapterOrder counter A's claim bumped — deriving it
-    from the subcollection gave both callers the same value."""
-    db = FakeFirestoreClient()
-    db.seed("stories/s", {"userId": UID_A, "title": "S", "chapterCount": 3})
-    for i in range(3):
-        db.seed(f"stories/s/chapters/c{i}", {"title": f"C{i}", "order": i})
-
-    # Caller A: claim the counters exactly as _append_chapter does, then stall
-    # before the chapter write.
-    story_ref = db.collection("stories").document("s")
-    snap_a = writes._owned_story_snapshot(db, "s", UID_A)
-    story_a = snap_a.to_dict()
-    order_a = max(
-        int(story_a.get("nextChapterOrder") or 0), writes._next_order(db, "s")
-    )
-    story_ref.update(
-        {
-            "chapterCount": 4,
-            "nextChapterOrder": order_a + 1,
-            "updatedAt": writes._now(),
-        },
-        option=db.write_option(last_update_time=snap_a.update_time),
-    )
-
-    # Caller B: full create_chapter while A's chapter is still unwritten.
-    result_b = writes.create_chapter(db, UID_A, "s", "From B", "text")
-
-    # Caller A finally writes its chapter.
-    chapter_a = story_ref.collection("chapters").document()
-    chapter_a.set({"id": chapter_a.id, "title": "From A", "order": order_a})
-
-    assert result_b["order"] != order_a
-    orders = [
-        (doc.to_dict() or {}).get("order")
-        for doc in story_ref.collection("chapters").stream()
-    ]
-    assert len(set(orders)) == len(orders)
-
-
-async def test_order_counter_self_heals_below_existing_chapters():
-    """A frontend addChapter can write an order the counter never saw; the
-    max(counter, subcollection) floor must step over it rather than collide."""
-    db = FakeFirestoreClient()
-    # Counter says 2, but a chapter with order 5 already exists.
-    db.seed(
-        "stories/s",
-        {"userId": UID_A, "title": "S", "chapterCount": 1, "nextChapterOrder": 2},
-    )
-    db.seed("stories/s/chapters/c0", {"title": "C0", "order": 5})
-    result = writes.create_chapter(db, UID_A, "s", "Next", "x")
-    assert result["order"] == 6
+def _next_free_position(fake: FakeStoryData, story_id: str = "story-a") -> float:
+    return max(c["position"] for c in fake.chapters[story_id]) + 1.0
 
 
 async def test_write_conflict_after_exhausting_attempts():
-    db = _seeded_db()
+    db, fake = _write_env()
 
-    def always_stale(path):
-        # A NEW version every time, so no retry can ever match what it read.
-        if path == "stories/story-a":
-            db.docs[path] = (dict(db.docs[path][0]), _bump())
+    def always_steal():
+        # Take the slot every time, so no retry can ever find a free one.
+        fake.seed_chapter(
+            "story-a",
+            f"rival{len(fake.chapters['story-a'])}",
+            title="Rival",
+            position=_next_free_position(fake),
+        )
 
-    db.before_update = always_stale
+    fake.before_create_chapter = always_steal
     with pytest.raises(writes.WriteConflictError):
-        writes.create_chapter(db, UID_A, "story-a", "C", "x")
+        await writes.create_chapter(db, UID_A, "story-a", "C", "x")
 
 
 # ---------------------------------------------------------------------------
-# writes.py — limits the Admin SDK bypasses
+# writes.py — limits
+#
+# The per-user, per-story and per-chapter ceilings belong to story-data, which
+# counts them transactionally; writes.py keeps only the stored-size bound that
+# has no counterpart there. These tests pin that split rather than the numbers.
 # ---------------------------------------------------------------------------
 
 
-async def test_story_cap_enforced_from_denormalized_counter():
-    db = FakeFirestoreClient()
-    db.seed(f"users/{UID_A}", {"storyCount": writes.MAX_STORIES_PER_USER})
-    before = _doc_count(db)
-    with pytest.raises(writes.LimitExceededError) as exc:
-        writes.create_story(db, UID_A, "One too many")
-    assert exc.value.limit_name == "stories_per_user"
-    assert _doc_count(db) == before
-
-    db.seed(f"users/{UID_A}", {"storyCount": writes.MAX_STORIES_PER_USER - 1})
-    assert writes.create_story(db, UID_A, "Just fits")["story_id"]
+async def test_story_cap_is_reported_from_story_data():
+    db, fake = _blank_env()
+    for i in range(FakeStoryData.STORY_LIMIT):
+        fake.seed_story(f"s{i}", UID_A)
+    with pytest.raises(story_data.Rejected, match="limit of 100 stories"):
+        await writes.create_story(db, UID_A, "One too many")
 
 
-async def test_missing_user_doc_counts_as_zero_stories():
-    # Matches the userStoryCount() helper in firestore.rules.
-    db = FakeFirestoreClient()
-    assert writes.create_story(db, UID_A, "First")["story_id"]
+async def test_chapter_cap_is_reported_from_story_data():
+    db, fake = _blank_env()
+    fake.seed_story("s", UID_A)
+    for i in range(FakeStoryData.CHAPTER_LIMIT):
+        fake.seed_chapter("s", f"c{i}", position=float(i))
+    with pytest.raises(story_data.Rejected, match="limit of 50 chapters"):
+        await writes.create_chapter(db, UID_A, "s", "Too many", "x")
 
 
-async def test_chapter_cap_enforced():
-    db = FakeFirestoreClient()
-    db.seed(
-        "stories/s",
-        {"userId": UID_A, "chapterCount": writes.MAX_CHAPTERS_PER_STORY},
-    )
-    before = _doc_count(db)
-    with pytest.raises(writes.LimitExceededError) as exc:
-        writes.create_chapter(db, UID_A, "s", "Too many", "x")
-    assert exc.value.limit_name == "chapters_per_story"
-    assert _doc_count(db) == before
+async def test_word_cap_is_reported_from_story_data():
+    db, fake = _write_env()
+    with pytest.raises(story_data.Rejected, match="5000 words"):
+        await writes.create_chapter(
+            db, UID_A, "story-a", "T", "word " * (FakeStoryData.WORD_LIMIT + 1)
+        )
 
 
 async def test_content_char_cap_measures_the_stored_string():
-    db = _seeded_db()
-    before = _doc_count(db)
+    """The one ceiling still applied here: story-data bounds words, not bytes,
+    so nothing downstream would refuse megabytes of markup."""
+    db, fake = _write_env()
     # One word, long enough that the stored <p>-wrapped form exceeds the cap.
     with pytest.raises(writes.LimitExceededError) as exc:
-        writes.create_chapter(
+        await writes.create_chapter(
             db, UID_A, "story-a", "T", "x" * (writes.MAX_CHAPTER_CONTENT_CHARS + 1)
         )
     assert exc.value.limit_name == "chapter_content_chars"
-    assert _doc_count(db) == before
+    assert fake.writes == []
+    assert _doc_count(db) == 0
 
 
 async def test_content_char_cap_boundary_is_inclusive():
-    db = _seeded_db()
+    db, fake = _write_env()
     # "<p>" + body + "</p>" == exactly the cap.
     body = "x" * (writes.MAX_CHAPTER_CONTENT_CHARS - len("<p></p>"))
-    result = writes.create_chapter(db, UID_A, "story-a", "T", body)
-    stored, _ = db.docs[f"stories/story-a/chapters/{result['chapter_id']}"]
+    result = await writes.create_chapter(db, UID_A, "story-a", "T", body)
+    stored = next(
+        c for c in fake.chapters["story-a"] if c["id"] == result["chapter_id"]
+    )
     assert len(stored["content"]) == writes.MAX_CHAPTER_CONTENT_CHARS
-
-
-async def test_word_cap_enforced():
-    db = _seeded_db()
-    before = _doc_count(db)
-    with pytest.raises(writes.LimitExceededError) as exc:
-        writes.create_chapter(
-            db, UID_A, "story-a", "T", "word " * (writes.MAX_CHAPTER_WORDS + 1)
-        )
-    assert exc.value.limit_name == "chapter_words"
-    assert _doc_count(db) == before
 
 
 @pytest.mark.parametrize("bad_title", ["", "   ", "t" * 201])
 async def test_blank_and_oversize_titles_rejected(bad_title):
-    db = _seeded_db()
+    db, fake = _write_env()
     with pytest.raises(ValueError):
-        writes.create_story(db, UID_A, bad_title)
+        await writes.create_story(db, UID_A, bad_title)
     with pytest.raises(ValueError):
-        writes.create_chapter(db, UID_A, "story-a", bad_title, "x")
+        await writes.create_chapter(db, UID_A, "story-a", bad_title, "x")
+    assert fake.writes == []
 
 
 async def test_tag_count_and_length_capped():
-    db = FakeFirestoreClient()
+    db, _ = _blank_env()
     with pytest.raises(ValueError):
-        writes.create_story(db, UID_A, "T", tags=[f"t{i}" for i in range(11)])
+        await writes.create_story(db, UID_A, "T", tags=[f"t{i}" for i in range(11)])
     with pytest.raises(ValueError):
-        writes.create_story(db, UID_A, "T", tags=["x" * 41])
+        await writes.create_story(db, UID_A, "T", tags=["x" * 41])
 
 
 async def test_description_cap_enforced():
-    db = FakeFirestoreClient()
+    db, _ = _blank_env()
     with pytest.raises(ValueError):
-        writes.create_story(db, UID_A, "T", "d" * 2001)
+        await writes.create_story(db, UID_A, "T", "d" * 2001)
 
 
 # ---------------------------------------------------------------------------
@@ -1069,77 +938,87 @@ async def test_description_cap_enforced():
 
 
 async def test_content_is_escaped_and_paragraph_wrapped():
-    db = _seeded_db()
-    result = writes.create_chapter(
+    db, fake = _write_env()
+    result = await writes.create_chapter(
         db, UID_A, "story-a", "T", "a & b <script>x</script>\n\nsecond"
     )
-    stored, _ = db.docs[f"stories/story-a/chapters/{result['chapter_id']}"]
+    stored = next(
+        c for c in fake.chapters["story-a"] if c["id"] == result["chapter_id"]
+    )
     assert stored["content"] == (
         "<p>a &amp; b &lt;script&gt;x&lt;/script&gt;</p>\n<p>second</p>"
     )
     assert "<script" not in stored["content"]
 
 
-async def test_word_count_matches_the_frontend_formula():
-    # StoriesRepo.countWords is content.trim().split(/\s+/) over the raw HTML,
-    # and the editor recomputes it on the next save — so counting the stored
-    # string here keeps the number from jumping under the user.
-    db = _seeded_db()
+async def test_word_count_comes_back_from_story_data():
+    """Counted once, by the service that stores it — so the number cannot drift
+    from what the next read reports."""
+    db, fake = _write_env()
     plain = "one two three\n\nfour five"
-    result = writes.create_chapter(db, UID_A, "story-a", "T", plain)
-    stored, _ = db.docs[f"stories/story-a/chapters/{result['chapter_id']}"]
+    result = await writes.create_chapter(db, UID_A, "story-a", "T", plain)
+    stored = next(
+        c for c in fake.chapters["story-a"] if c["id"] == result["chapter_id"]
+    )
     assert result["word_count"] == len(stored["content"].split())
     assert result["word_count"] == len(plain.split())
 
 
 async def test_empty_content_stores_empty_string():
-    db = _seeded_db()
-    result = writes.create_chapter(db, UID_A, "story-a", "T", "")
-    stored, _ = db.docs[f"stories/story-a/chapters/{result['chapter_id']}"]
+    db, fake = _write_env()
+    result = await writes.create_chapter(db, UID_A, "story-a", "T", "")
+    stored = next(
+        c for c in fake.chapters["story-a"] if c["id"] == result["chapter_id"]
+    )
     assert stored["content"] == ""
     assert stored["wordCount"] == 0
 
 
 # ---------------------------------------------------------------------------
 # writes.py — idempotency
+#
+# The reservation is the one part of the write path still in Firestore: it is
+# the connector's own bookkeeping, not story content. These tests therefore
+# still assert against the Firestore fake, and against story-data for the
+# "wrote once" half.
 # ---------------------------------------------------------------------------
 
 
 async def test_identical_create_story_returns_same_id_and_writes_once():
-    db = FakeFirestoreClient()
-    first = writes.create_story(db, UID_A, "Twice", "same")
-    second = writes.create_story(db, UID_A, "Twice", "same")
+    db, fake = _blank_env()
+    first = await writes.create_story(db, UID_A, "Twice", "same")
+    second = await writes.create_story(db, UID_A, "Twice", "same")
     assert second["story_id"] == first["story_id"]
     assert first["idempotent_replay"] is False
     assert second["idempotent_replay"] is True
-    assert len([p for p in db.docs if p.startswith("stories/")]) == 1
+    assert len(fake.stories) == 1
 
 
 async def test_identical_create_chapter_returns_same_id_and_writes_once():
-    db = _seeded_db()
-    first = writes.create_chapter(db, UID_A, "story-a", "Dup", "body")
-    second = writes.create_chapter(db, UID_A, "story-a", "Dup", "body")
+    db, fake = _write_env()
+    first = await writes.create_chapter(db, UID_A, "story-a", "Dup", "body")
+    second = await writes.create_chapter(db, UID_A, "story-a", "Dup", "body")
     assert second["chapter_id"] == first["chapter_id"]
-    assert db.docs["stories/story-a"][0]["chapterCount"] == 3  # bumped once
+    assert len(fake.chapters["story-a"]) == 3  # created once
 
 
 async def test_idempotency_is_scoped_to_the_caller():
     """Cross-user dedup would be both an information leak and a denial of
     service — B could pre-claim A's key and block the write."""
-    db = FakeFirestoreClient()
-    a = writes.create_story(db, UID_A, "Same title", "same")
-    b = writes.create_story(db, UID_B, "Same title", "same")
+    db, _ = _blank_env()
+    a = await writes.create_story(db, UID_A, "Same title", "same")
+    b = await writes.create_story(db, UID_B, "Same title", "same")
     assert a["story_id"] != b["story_id"]
 
 
 async def test_idempotency_window_expires():
-    db = FakeFirestoreClient()
-    first = writes.create_story(db, UID_A, "Later", "again")
+    db, _ = _blank_env()
+    first = await writes.create_story(db, UID_A, "Later", "again")
     later = datetime.now(timezone.utc) + timedelta(
         seconds=writes.IDEMPOTENCY_TTL_SECONDS + 1
     )
     with patch("mcp_server.writes._now", return_value=later):
-        second = writes.create_story(db, UID_A, "Later", "again")
+        second = await writes.create_story(db, UID_A, "Later", "again")
     assert second["story_id"] != first["story_id"]
 
 
@@ -1150,9 +1029,9 @@ async def test_expired_reservation_is_claimed_by_exactly_one_racer():
     The loser of the takeover is told the call is already in flight rather than
     being allowed to write a second story.
     """
-    db = FakeFirestoreClient()
-    writes.create_story(db, UID_A, "Later", "again")
-    stories_before = len([p for p in db.docs if p.startswith("stories/")])
+    db, fake = _blank_env()
+    await writes.create_story(db, UID_A, "Later", "again")
+    stories_before = len(fake.stories)
 
     later = datetime.now(timezone.utc) + timedelta(
         seconds=writes.IDEMPOTENCY_TTL_SECONDS + 1
@@ -1170,42 +1049,45 @@ async def test_expired_reservation_is_claimed_by_exactly_one_racer():
         if doc_path != path:
             return
         db.before_update = None
-        data, _version = db.docs[path]
-        db.docs[path] = (data, next(mcp_fakes._versions))
+        record, _version = db.docs[path]
+        db.docs[path] = (record, next(mcp_fakes._versions))
 
     db.before_update = steal
     with patch("mcp_server.writes._now", return_value=later):
         with pytest.raises(writes.DuplicateInFlightError):
-            writes.create_story(db, UID_A, "Later", "again")
+            await writes.create_story(db, UID_A, "Later", "again")
     db.before_update = None
-    assert len([p for p in db.docs if p.startswith("stories/")]) == stories_before
+    assert len(fake.stories) == stories_before
 
 
 async def test_a_vanished_reservation_is_reclaimed():
     """TTL collection or a concurrent _release can remove the document between
     the create that lost and the read that follows it. The key is free then."""
-    db = FakeFirestoreClient()
-    first = writes.create_story(db, UID_A, "Gone", "poof")
+    db, _ = _blank_env()
+    first = await writes.create_story(db, UID_A, "Gone", "poof")
     for path in [p for p in db.docs if p.startswith(f"{writes.WRITES_COLLECTION}/")]:
         del db.docs[path]
-    second = writes.create_story(db, UID_A, "Gone", "poof")
+    second = await writes.create_story(db, UID_A, "Gone", "poof")
     assert second["story_id"] != first["story_id"]
     assert second["idempotent_replay"] is False
 
 
 async def test_failed_write_releases_the_reservation():
-    db = FakeFirestoreClient()
-    db.seed(f"users/{UID_A}", {"storyCount": writes.MAX_STORIES_PER_USER})
-    with pytest.raises(writes.LimitExceededError):
-        writes.create_story(db, UID_A, "Blocked")
+    """A rejection from story-data must free the key, or the caller's corrected
+    retry would be refused as a duplicate for two minutes."""
+    db, fake = _blank_env()
+    for i in range(FakeStoryData.STORY_LIMIT):
+        fake.seed_story(f"s{i}", UID_A)
+    with pytest.raises(story_data.Rejected):
+        await writes.create_story(db, UID_A, "Blocked")
     assert not [p for p in db.docs if p.startswith(f"{writes.WRITES_COLLECTION}/")]
     # And the same call succeeds once the blocker is gone.
-    db.seed(f"users/{UID_A}", {"storyCount": 0})
-    assert writes.create_story(db, UID_A, "Blocked")["story_id"]
+    fake.stories.pop("s0")
+    assert (await writes.create_story(db, UID_A, "Blocked"))["story_id"]
 
 
 async def test_concurrent_identical_call_is_reported_not_silently_dropped():
-    db = FakeFirestoreClient()
+    db, _ = _blank_env()
     key = writes.idempotency_key(
         UID_A,
         "create_story",
@@ -1220,7 +1102,7 @@ async def test_concurrent_identical_call_is_reported_not_silently_dropped():
         },
     )
     with pytest.raises(writes.DuplicateInFlightError):
-        writes.create_story(db, UID_A, "Inflight")
+        await writes.create_story(db, UID_A, "Inflight")
 
 
 # ---------------------------------------------------------------------------
@@ -1228,10 +1110,14 @@ async def test_concurrent_identical_call_is_reported_not_silently_dropped():
 # ---------------------------------------------------------------------------
 
 
+def _write_tool_server(**kwargs) -> tuple[FastMCP, FakeFirestoreClient, FakeStoryData]:
+    """A tool server with writes on, wired to both fakes."""
+    db, fake = _write_env()
+    return _tool_server(db, enable_writes=True, **kwargs), db, fake
+
+
 async def test_read_only_token_cannot_call_write_tools():
-    db = _seeded_db()
-    mcp = _tool_server(db, enable_writes=True)
-    before = _doc_count(db)
+    mcp, db, fake = _write_tool_server()
     with patch("mcp_server.tools.get_access_token", return_value=_token()):
         with pytest.raises(ToolError, match="read-only"):
             await mcp.call_tool("create_story", {"title": "Nope"})
@@ -1239,12 +1125,12 @@ async def test_read_only_token_cannot_call_write_tools():
             await mcp.call_tool(
                 "create_chapter", {"story_id": "story-a", "title": "Nope"}
             )
-    assert _doc_count(db) == before
+    assert fake.writes == []
+    assert _doc_count(db) == 0
 
 
 async def test_write_scoped_token_can_call_write_tools():
-    db = _seeded_db()
-    mcp = _tool_server(db, enable_writes=True)
+    mcp, _db, _fake = _write_tool_server()
     with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
         story = await _call(mcp, "create_story", {"title": "Made by MCP"})
         chapter = await _call(
@@ -1254,7 +1140,9 @@ async def test_write_scoped_token_can_call_write_tools():
         )
     assert story["notice"] == UNTRUSTED_NOTICE
     assert chapter["notice"] == UNTRUSTED_NOTICE
-    assert chapter["order"] == 0
+    # story-data seeds "Chapter 1" at position 0, so the first added chapter
+    # lands after it.
+    assert chapter["order"] == 1.0
 
 
 async def test_write_scoped_token_can_still_call_read_tools():
@@ -1265,71 +1153,81 @@ async def test_write_scoped_token_can_still_call_read_tools():
 
 
 async def test_write_tools_absent_when_disabled():
-    mcp = _tool_server(_seeded_db(), enable_writes=False)
+    mcp = _read_tool_server(enable_writes=False)
     names = {t.name for t in await mcp.list_tools()}
-    assert names.isdisjoint(
-        {"create_story", "create_chapter", "append_to_chapter", "edit_chapter_blocks"}
-    )
+    assert names == MCP_READ_TOOL_NAMES
+    assert names.isdisjoint(MCP_WRITE_TOOL_NAMES)
     # get_chapter_blocks is a READ tool: it stays available with writes off.
     assert "get_chapter_blocks" in names
     assert len(names) == 7
 
 
 async def test_write_tools_present_when_enabled():
-    mcp = _tool_server(_seeded_db(), enable_writes=True)
+    mcp, _db, _fake = _write_tool_server()
     names = {t.name for t in await mcp.list_tools()}
-    assert {
-        "create_story",
-        "create_chapter",
-        "append_to_chapter",
-        "edit_chapter_blocks",
-    } <= names
-    assert len(names) == 11
+    assert names == MCP_READ_TOOL_NAMES | MCP_WRITE_TOOL_NAMES
 
 
 async def test_write_tool_idor_returns_story_not_found():
-    db = _seeded_db()
-    mcp = _tool_server(db, enable_writes=True)
-    before = _doc_count(db)
+    mcp, db, fake = _write_tool_server()
     with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
         with pytest.raises(ToolError, match="Story not found"):
             await mcp.call_tool(
                 "create_chapter", {"story_id": "story-b", "title": "Sneaky"}
             )
-    assert _doc_count(db) == before
+    assert fake.writes == []
+    assert _doc_count(db) == 0
 
 
 async def test_write_tool_unauthenticated_rejected():
-    mcp = _tool_server(_seeded_db(), enable_writes=True)
+    mcp, _db, _fake = _write_tool_server()
     with patch("mcp_server.tools.get_access_token", return_value=None):
         with pytest.raises(ToolError, match="Not authenticated"):
             await mcp.call_tool("create_story", {"title": "x"})
 
 
 async def test_write_rate_limit_is_separate_and_tighter():
-    # Writes land in the Firestore fake, reads come from story-data, so the
-    # read assertion below counts the seeded stories rather than the written one.
-    mcp = _read_tool_server(enable_writes=True, write_rpm=1)
+    mcp, _db, _fake = _write_tool_server(write_rpm=1)
     with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
         await mcp.call_tool("create_story", {"title": "First"})
         with pytest.raises(ToolError, match="Write rate limit"):
             await mcp.call_tool("create_story", {"title": "Second"})
         # The shared bucket is untouched: reads still work.
         result = await _call(mcp, "list_my_stories", {})
-    assert result["count"] == 2
+    # The seeded two, plus the one just written.
+    assert result["count"] == 3
 
 
-async def test_write_tools_persist_story_and_chapter():
-    """What the write tools store, asserted where they store it.
+async def test_a_story_data_outage_is_reported_not_swallowed():
+    """A write that never reached the service must not look like a refusal the
+    model can fix by rewording."""
+    mcp, _db, fake = _write_tool_server()
 
-    This was a write-then-read-back roundtrip through the read tools. The read
-    tools serve story-data now while the write tools still write Firestore, so a
-    roundtrip cannot pass — and the configuration it would need is rejected by
-    config. Until the write tools are ported, the write side is verified at its
-    own backend and the roundtrip is covered end to end against the real stack.
-    """
-    db = _seeded_db()
-    mcp = _tool_server(db, enable_writes=True)
+    async def boom(*args, **kwargs):
+        raise story_data.StoryDataError("connection reset")
+
+    fake.create_story = boom
+    with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
+        with pytest.raises(ToolError, match="story service is unavailable"):
+            await mcp.call_tool("create_story", {"title": "x"})
+
+
+async def test_story_data_limit_message_reaches_the_model():
+    """The ceilings live in story-data now, so its wording is what the caller
+    must see — a generic "rejected" would leave the model guessing."""
+    mcp, _db, fake = _write_tool_server()
+    for i in range(FakeStoryData.STORY_LIMIT):
+        fake.seed_story(f"cap{i}", UID_A)
+    with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
+        with pytest.raises(ToolError, match="limit of 100 stories"):
+            await mcp.call_tool("create_story", {"title": "One too many"})
+
+
+async def test_write_tools_round_trip_through_the_read_tools():
+    """The point of the port: one backend, so a tool can read back what it just
+    wrote. Under the Firestore write path this could not pass — and the config
+    it needed was rejected outright."""
+    mcp, _db, _fake = _write_tool_server()
     with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
         story = await _call(mcp, "create_story", {"title": "Round Trip"})
         chapter = await _call(
@@ -1337,14 +1235,19 @@ async def test_write_tools_persist_story_and_chapter():
             "create_chapter",
             {"story_id": story["story_id"], "title": "Ch1", "content": "a b c"},
         )
+        overview = await _call(
+            mcp, "get_story_overview", {"story_id": story["story_id"]}
+        )
+        read_back = await _call(
+            mcp,
+            "get_chapter",
+            {"story_id": story["story_id"], "chapter_id": chapter["chapter_id"]},
+        )
 
-    story_doc = db.docs[f"stories/{story['story_id']}"][0]
-    assert story_doc["title"] == "Round Trip"
-    assert story_doc["userId"] == UID_A
-
-    path = f"stories/{story['story_id']}/chapters/{chapter['chapter_id']}"
-    assert db.docs[path][0]["title"] == "Ch1"
-    assert db.docs[path][0]["wordCount"] == 3
+    assert overview["title"] == "Round Trip"
+    assert "Ch1" in [c["title"] for c in overview["chapters"]]
+    assert read_back["content"] == "<p>a b c</p>"
+    assert read_back["word_count"] == 3
 
 
 # ---------------------------------------------------------------------------
@@ -1379,21 +1282,21 @@ def _rich_story_data() -> FakeStoryData:
     return fake
 
 
-def _rich_db() -> FakeFirestoreClient:
-    db = _seeded_db()
-    db.seed(
-        "stories/story-a/chapters/rich",
-        {"title": "Rich", "order": 3, "wordCount": 9, "content": RICH},
-    )
-    return db
+def _rich_env() -> tuple[FakeFirestoreClient, FakeStoryData]:
+    return FakeFirestoreClient(), _rich_story_data()
 
 
-def _revision_of(db, path: str = "stories/story-a/chapters/rich") -> str:
-    return str(db.docs[path][1])
+def _chapter_row(fake: FakeStoryData, chapter: str, story: str = "story-a") -> dict:
+    return next(c for c in fake.chapters[story] if c["id"] == chapter)
 
 
-def _content_of(db, path: str = "stories/story-a/chapters/rich") -> str:
-    return db.docs[path][0]["content"]
+def _revision_of(fake, chapter: str = "rich", story: str = "story-a") -> str:
+    """The token a read hands the caller: story-data's integer revision."""
+    return str(_chapter_row(fake, chapter, story)["revision"])
+
+
+def _content_of(fake, chapter: str = "rich", story: str = "story-a") -> str:
+    return _chapter_row(fake, chapter, story)["content"]
 
 
 async def test_get_chapter_exposes_a_revision():
@@ -1457,77 +1360,81 @@ async def test_get_chapter_blocks_on_an_empty_chapter():
 # Chapter editing — the revision guard
 #
 # This is the safety property of the whole feature: an edit must never land on
-# a version the caller did not read.
+# a version the caller did not read. story-data carries an integer `revision`
+# per row and takes it back as If-Match, so the guard is that header plus a
+# cheap pre-check on the read.
 # ---------------------------------------------------------------------------
 
 
 async def test_stale_revision_is_refused_and_writes_nothing():
-    db = _rich_db()
-    before = _content_of(db)
+    db, fake = _rich_env()
+    before = _content_of(fake)
     with pytest.raises(writes.StaleRevisionError):
-        writes.append_to_chapter(
-            db, UID_A, "story-a", "rich", "more", "not-the-version"
-        )
-    assert _content_of(db) == before
+        await writes.append_to_chapter(db, UID_A, "story-a", "rich", "more", "999")
+    assert _content_of(fake) == before
+    assert not any(path.startswith("PATCH") for path, _ in fake.writes)
 
 
-async def test_missing_revision_is_refused():
-    db = _rich_db()
-    with pytest.raises(ValueError, match="revision is required"):
-        writes.append_to_chapter(db, UID_A, "story-a", "rich", "more", "")
+@pytest.mark.parametrize("bad", ["", "   ", "not-a-number", "0", "-3"])
+async def test_unusable_revisions_are_refused_before_any_request(bad):
+    """Parsed here rather than forwarded: a caller that invents a revision gets
+    a sentence it can act on, not a 428 from a service it has never heard of."""
+    db, fake = _rich_env()
+    with pytest.raises(ValueError, match="revision"):
+        await writes.append_to_chapter(db, UID_A, "story-a", "rich", "more", bad)
+    assert fake.writes == []
 
 
 async def test_fresh_revision_succeeds_and_returns_the_new_one():
-    db = _rich_db()
-    old = _revision_of(db)
-    result = writes.append_to_chapter(db, UID_A, "story-a", "rich", "more", old)
-    assert result["revision"] == _revision_of(db)
+    db, fake = _rich_env()
+    old = _revision_of(fake)
+    result = await writes.append_to_chapter(db, UID_A, "story-a", "rich", "more", old)
+    assert result["revision"] == _revision_of(fake)
     assert result["revision"] != old
 
 
 async def test_concurrent_writer_between_check_and_update_is_caught():
-    """The window the precondition exists to close.
+    """The window If-Match exists to close.
 
-    The pre-check passes, then a concurrent editor save lands, then our update
-    runs. Without the last_update_time option this would silently clobber it.
+    The pre-check passes, then a concurrent editor save lands, then our PATCH
+    runs. Without the header this would silently clobber it.
     """
-    db = _rich_db()
-    revision = _revision_of(db)
-    path = "stories/story-a/chapters/rich"
+    db, fake = _rich_env()
+    revision = _revision_of(fake)
 
-    def concurrent_editor(updated_path: str) -> None:
-        if updated_path != path:
-            return
-        db.before_update = None  # fire once
-        record, _ = db.docs[path]
-        db.docs[path] = ({**record, "content": "<p>the human typed this</p>"}, _bump())
+    def concurrent_editor() -> None:
+        fake.before_update_chapter = None  # fire once
+        row = _chapter_row(fake, "rich")
+        row["content"] = "<p>the human typed this</p>"
+        row["revision"] += 1
 
-    db.before_update = concurrent_editor
+    fake.before_update_chapter = concurrent_editor
     with pytest.raises(writes.StaleRevisionError):
-        writes.append_to_chapter(db, UID_A, "story-a", "rich", "appended", revision)
-    assert _content_of(db) == "<p>the human typed this</p>"
+        await writes.append_to_chapter(
+            db, UID_A, "story-a", "rich", "appended", revision
+        )
+    assert _content_of(fake) == "<p>the human typed this</p>"
 
 
-async def test_the_write_path_accepts_its_own_revision_spelling():
-    """The write path must agree with itself on how a revision is spelled.
+async def test_the_revision_a_read_hands_out_is_the_one_a_write_accepts():
+    """The handshake the port exists to restore.
 
-    This used to take the revision from get_chapter_blocks. It cannot while the
-    read tools serve story-data (integer `revision`) and the write tools write
-    Firestore (a timestamp token) — the two spellings do not meet, which is why
-    config rejects ENABLE_MCP_WRITES alongside STORY_DATA_URL. Porting the write
-    tools restores the cross-side handshake, via If-Match.
+    Under the Firestore write path a read returned story-data's integer
+    revision while a write expected a timestamp token, so the two never met —
+    which is why config refused that combination outright. Taking the token
+    straight from the read tool and passing it to a write must now work, and
+    the write's own returned revision must chain into a second edit.
     """
-    db = _rich_db()
-    snap = (
-        db.collection("stories")
-        .document("story-a")
-        .collection("chapters")
-        .document("rich")
-        .get()
+    db, fake = _rich_env()
+    listing = await data.get_chapter_blocks("story-a", "rich", UID_A, 0, 500)
+    first = await writes.append_to_chapter(
+        db, UID_A, "story-a", "rich", "ok", listing["revision"]
     )
-    writes.append_to_chapter(
-        db, UID_A, "story-a", "rich", "ok", writes._revision_token(snap.update_time)
+    second = await writes.append_to_chapter(
+        db, UID_A, "story-a", "rich", "again", first["revision"]
     )
+    assert second["revision"] == _revision_of(fake)
+    assert _content_of(fake).endswith("<p>ok</p>\n<p>again</p>")
 
 
 # ---------------------------------------------------------------------------
@@ -1536,31 +1443,30 @@ async def test_the_write_path_accepts_its_own_revision_spelling():
 
 
 async def test_append_preserves_existing_content_byte_for_byte():
-    db = _rich_db()
-    writes.append_to_chapter(
-        db, UID_A, "story-a", "rich", "New line.", _revision_of(db)
+    db, fake = _rich_env()
+    await writes.append_to_chapter(
+        db, UID_A, "story-a", "rich", "New line.", _revision_of(fake)
     )
-    stored = _content_of(db)
+    stored = _content_of(fake)
     assert stored.startswith(RICH)
     assert stored == RICH + "\n<p>New line.</p>"
 
 
 async def test_append_to_an_empty_chapter_adds_no_leading_separator():
-    db = _seeded_db()
-    db.seed("stories/story-a/chapters/blank", {"title": "Blank", "content": ""})
-    path = "stories/story-a/chapters/blank"
-    writes.append_to_chapter(
-        db, UID_A, "story-a", "blank", "First.", _revision_of(db, path)
+    db, fake = _rich_env()
+    fake.seed_chapter("story-a", "blank", title="Blank", content="", position=9.0)
+    await writes.append_to_chapter(
+        db, UID_A, "story-a", "blank", "First.", _revision_of(fake, "blank")
     )
-    assert _content_of(db, path) == "<p>First.</p>"
+    assert _content_of(fake, "blank") == "<p>First.</p>"
 
 
 async def test_append_escapes_markup_and_splits_paragraphs():
-    db = _rich_db()
-    writes.append_to_chapter(
-        db, UID_A, "story-a", "rich", "<b>bold</b>\n\nsecond", _revision_of(db)
+    db, fake = _rich_env()
+    await writes.append_to_chapter(
+        db, UID_A, "story-a", "rich", "<b>bold</b>\n\nsecond", _revision_of(fake)
     )
-    stored = _content_of(db)
+    stored = _content_of(fake)
     assert "<p>&lt;b&gt;bold&lt;/b&gt;</p>" in stored
     assert stored.endswith("<p>second</p>")
 
@@ -1569,83 +1475,86 @@ async def test_append_block_count_survives_malformed_existing_content():
     """block_count must be what split_blocks will say next time, not the sum of
     the two halves — an unclosed tag makes those differ, and the number is the
     index range the caller's next edit addresses."""
-    db = _rich_db()
-    db.seed(
-        "stories/story-a/chapters/broken",
-        {"title": "Broken", "order": 9, "wordCount": 1, "content": "<p>unclosed"},
+    db, fake = _rich_env()
+    fake.seed_chapter(
+        "story-a", "broken", title="Broken", position=9.0, content="<p>unclosed"
     )
-    result = writes.append_to_chapter(
-        db,
-        UID_A,
-        "story-a",
-        "broken",
-        "New paragraph.",
-        _revision_of(db, "stories/story-a/chapters/broken"),
+    result = await writes.append_to_chapter(
+        db, UID_A, "story-a", "broken", "New paragraph.", _revision_of(fake, "broken")
     )
-    content = _content_of(db, "stories/story-a/chapters/broken")
+    content = _content_of(fake, "broken")
     assert result["block_count"] == len(blocks_module.split_blocks(content)) == 1
     assert result["appended_blocks"] == 1  # the sum would have said 2
 
 
-async def test_append_recomputes_word_count_and_touches_the_story():
-    db = _rich_db()
-    story_before = db.docs["stories/story-a"][0]["updatedAt"]
-    result = writes.append_to_chapter(
-        db, UID_A, "story-a", "rich", "one two three", _revision_of(db)
+async def test_append_reports_the_word_count_story_data_stored():
+    db, fake = _rich_env()
+    result = await writes.append_to_chapter(
+        db, UID_A, "story-a", "rich", "one two three", _revision_of(fake)
     )
-    record = db.docs["stories/story-a/chapters/rich"][0]
-    assert record["wordCount"] == result["word_count"]
-    assert record["wordCount"] == len(_content_of(db).split())
-    assert db.docs["stories/story-a"][0]["updatedAt"] > story_before
+    row = _chapter_row(fake, "rich")
+    assert row["wordCount"] == result["word_count"]
+    assert row["wordCount"] == len(_content_of(fake).split())
 
 
-async def test_append_does_not_touch_chapter_count():
-    """No chapter is created by an edit, so the counter must not move."""
-    db = _rich_db()
-    before = db.docs["stories/story-a"][0]["chapterCount"]
-    writes.append_to_chapter(db, UID_A, "story-a", "rich", "x", _revision_of(db))
-    assert db.docs["stories/story-a"][0]["chapterCount"] == before
+async def test_append_carries_the_title_and_position_through_the_patch():
+    """story-data's chapter PATCH takes a whole ChapterInput, so a body-only
+    edit that omitted these would rename the chapter and move it to the front
+    of the book."""
+    db, fake = _rich_env()
+    await writes.append_to_chapter(
+        db, UID_A, "story-a", "rich", "x", _revision_of(fake)
+    )
+    row = _chapter_row(fake, "rich")
+    assert row["title"] == "Rich"
+    assert row["position"] == 3.0
+
+
+async def test_append_does_not_create_a_chapter():
+    db, fake = _rich_env()
+    before = len(fake.chapters["story-a"])
+    await writes.append_to_chapter(
+        db, UID_A, "story-a", "rich", "x", _revision_of(fake)
+    )
+    assert len(fake.chapters["story-a"]) == before
 
 
 async def test_append_rejects_empty_content():
-    db = _rich_db()
+    db, fake = _rich_env()
     with pytest.raises(ValueError, match="must not be empty"):
-        writes.append_to_chapter(db, UID_A, "story-a", "rich", "   ", _revision_of(db))
-
-
-async def test_append_enforces_the_word_cap_on_the_rebuilt_string():
-    db = _seeded_db()
-    body = "<p>" + " ".join(["w"] * (writes.MAX_CHAPTER_WORDS - 1)) + "</p>"
-    db.seed("stories/story-a/chapters/big", {"title": "Big", "content": body})
-    path = "stories/story-a/chapters/big"
-    with pytest.raises(writes.LimitExceededError) as exc:
-        writes.append_to_chapter(
-            db, UID_A, "story-a", "big", "two more words", _revision_of(db, path)
+        await writes.append_to_chapter(
+            db, UID_A, "story-a", "rich", "   ", _revision_of(fake)
         )
-    assert exc.value.limit_name == "chapter_words"
-    assert _content_of(db, path) == body  # denied, and nothing written
+
+
+async def test_append_word_cap_is_reported_from_story_data():
+    db, fake = _rich_env()
+    body = "<p>" + " ".join(["w"] * (FakeStoryData.WORD_LIMIT - 1)) + "</p>"
+    fake.seed_chapter("story-a", "big", title="Big", position=9.0, content=body)
+    with pytest.raises(story_data.Rejected, match="5000 words"):
+        await writes.append_to_chapter(
+            db, UID_A, "story-a", "big", "two more words", _revision_of(fake, "big")
+        )
+    assert _content_of(fake, "big") == body  # denied, and nothing written
 
 
 async def test_append_enforces_the_char_cap_on_the_rebuilt_string():
-    db = _seeded_db()
+    db, fake = _rich_env()
     body = "<p>" + "x" * (writes.MAX_CHAPTER_CONTENT_CHARS - 10) + "</p>"
-    db.seed("stories/story-a/chapters/big", {"title": "Big", "content": body})
-    path = "stories/story-a/chapters/big"
+    fake.seed_chapter("story-a", "big", title="Big", position=9.0, content=body)
     with pytest.raises(writes.LimitExceededError) as exc:
-        writes.append_to_chapter(
-            db, UID_A, "story-a", "big", "y" * 100, _revision_of(db, path)
+        await writes.append_to_chapter(
+            db, UID_A, "story-a", "big", "y" * 100, _revision_of(fake, "big")
         )
     assert exc.value.limit_name == "chapter_content_chars"
-    assert _content_of(db, path) == body
+    assert _content_of(fake, "big") == body
 
 
 async def test_append_is_owner_scoped():
-    db = _rich_db()
-    path = "stories/story-b/chapters/chb"
+    db, fake = _rich_env()
     with pytest.raises(data.StoryNotFoundError):
-        writes.append_to_chapter(
-            db, UID_A, "story-b", "chb", "x", _revision_of(db, path)
-        )
+        await writes.append_to_chapter(db, UID_A, "story-b", "chb", "x", "1")
+    assert fake.writes == []
 
 
 # ---------------------------------------------------------------------------
@@ -1653,69 +1562,76 @@ async def test_append_is_owner_scoped():
 # ---------------------------------------------------------------------------
 
 
-def _edit(db, ops, chapter="rich", uid=UID_A):
-    path = f"stories/story-a/chapters/{chapter}"
-    return writes.edit_chapter_blocks(
-        db, uid, "story-a", chapter, ops, _revision_of(db, path)
+async def _edit(db, fake, ops, chapter="rich", uid=UID_A):
+    return await writes.edit_chapter_blocks(
+        db, uid, "story-a", chapter, ops, _revision_of(fake, chapter)
     )
 
 
 async def test_replace_leaves_every_other_block_byte_identical():
     """The central promise of block editing."""
-    db = _rich_db()
+    db, fake = _rich_env()
     original = blocks_module.split_blocks(RICH)
-    _edit(db, [{"action": "replace", "index": 1, "text": "She counted twice."}])
-    after = blocks_module.split_blocks(_content_of(db))
+    await _edit(
+        db, fake, [{"action": "replace", "index": 1, "text": "She counted twice."}]
+    )
+    after = blocks_module.split_blocks(_content_of(fake))
     assert after[1].html == "<p>She counted twice.</p>"
     for position in (0, 2, 3, 4):
         assert after[position].html == original[position].html
 
 
 async def test_replace_with_empty_text_removes_the_block():
-    db = _rich_db()
-    result = _edit(db, [{"action": "replace", "index": 4, "text": ""}])
+    db, fake = _rich_env()
+    result = await _edit(db, fake, [{"action": "replace", "index": 4, "text": ""}])
     assert result["block_count"] == 4
-    assert "cave.png" not in _content_of(db)
+    assert "cave.png" not in _content_of(fake)
 
 
 async def test_removing_every_block_leaves_an_empty_chapter():
-    db = _rich_db()
+    db, fake = _rich_env()
     ops = [{"action": "replace", "index": i, "text": ""} for i in range(5)]
-    result = _edit(db, ops)
-    assert _content_of(db) == ""
+    result = await _edit(db, fake, ops)
+    assert _content_of(fake) == ""
     assert result["block_count"] == 0
     assert result["word_count"] == 0
 
 
 async def test_insert_after_places_the_block_in_the_right_seam():
-    db = _rich_db()
-    _edit(db, [{"action": "insert_after", "index": 1, "text": "Then she stopped."}])
-    tags = [b.tag for b in blocks_module.split_blocks(_content_of(db))]
+    db, fake = _rich_env()
+    await _edit(
+        db, fake, [{"action": "insert_after", "index": 1, "text": "Then she stopped."}]
+    )
+    tags = [b.tag for b in blocks_module.split_blocks(_content_of(fake))]
     assert tags == ["h2", "p", "p", "ul", "blockquote", "img"]
-    assert blocks_module.split_blocks(_content_of(db))[2].html == (
+    assert blocks_module.split_blocks(_content_of(fake))[2].html == (
         "<p>Then she stopped.</p>"
     )
 
 
 async def test_insert_after_minus_one_prepends():
-    db = _rich_db()
-    _edit(db, [{"action": "insert_after", "index": -1, "text": "Prologue."}])
-    assert _content_of(db).startswith("<p>Prologue.</p>\n<h2>")
+    db, fake = _rich_env()
+    await _edit(
+        db, fake, [{"action": "insert_after", "index": -1, "text": "Prologue."}]
+    )
+    assert _content_of(fake).startswith("<p>Prologue.</p>\n<h2>")
 
 
 async def test_insert_after_last_index_appends():
-    db = _rich_db()
-    _edit(db, [{"action": "insert_after", "index": 4, "text": "The end."}])
-    assert _content_of(db).endswith("<p>The end.</p>")
+    db, fake = _rich_env()
+    await _edit(db, fake, [{"action": "insert_after", "index": 4, "text": "The end."}])
+    assert _content_of(fake).endswith("<p>The end.</p>")
 
 
 async def test_one_op_may_introduce_several_blocks():
-    db = _rich_db()
-    result = _edit(
-        db, [{"action": "replace", "index": 1, "text": "First para.\n\nSecond para."}]
+    db, fake = _rich_env()
+    result = await _edit(
+        db,
+        fake,
+        [{"action": "replace", "index": 1, "text": "First para.\n\nSecond para."}],
     )
     assert result["block_count"] == 6
-    after = blocks_module.split_blocks(_content_of(db))
+    after = blocks_module.split_blocks(_content_of(fake))
     assert [b.html for b in after[1:3]] == ["<p>First para.</p>", "<p>Second para.</p>"]
 
 
@@ -1725,54 +1641,60 @@ async def test_replacing_a_heading_keeps_its_level():
     RICH[0] is an <h2>. Routing it through _to_paragraph_html like a paragraph
     would silently demote it, and nothing in the product could restore it.
     """
-    db = _rich_db()
-    _edit(db, [{"action": "replace", "index": 0, "text": "The Ascent"}])
-    after = blocks_module.split_blocks(_content_of(db))
+    db, fake = _rich_env()
+    await _edit(db, fake, [{"action": "replace", "index": 0, "text": "The Ascent"}])
+    after = blocks_module.split_blocks(_content_of(fake))
     assert after[0] == blocks_module.Block(tag="h2", html="<h2>The Ascent</h2>")
 
 
 async def test_heading_replacement_escapes_markup():
-    db = _rich_db()
-    _edit(db, [{"action": "replace", "index": 0, "text": "A <b>bold</b> title"}])
-    assert "<h2>A &lt;b&gt;bold&lt;/b&gt; title</h2>" in _content_of(db)
+    db, fake = _rich_env()
+    await _edit(
+        db, fake, [{"action": "replace", "index": 0, "text": "A <b>bold</b> title"}]
+    )
+    assert "<h2>A &lt;b&gt;bold&lt;/b&gt; title</h2>" in _content_of(fake)
 
 
 async def test_multi_paragraph_text_is_refused_for_a_heading():
-    db = _rich_db()
+    db, fake = _rich_env()
     with pytest.raises(ValueError, match="single line"):
-        _edit(db, [{"action": "replace", "index": 0, "text": "One.\n\nTwo."}])
-    assert _content_of(db) == RICH
+        await _edit(
+            db, fake, [{"action": "replace", "index": 0, "text": "One.\n\nTwo."}]
+        )
+    assert _content_of(fake) == RICH
 
 
 @pytest.mark.parametrize("index", [2, 4])  # <ul>, <img>
 async def test_replacing_a_structural_block_is_refused(index):
     """Refused rather than flattened: _to_paragraph_html would turn the list
     into one soft-wrapped <p> and drop every item boundary."""
-    db = _rich_db()
+    db, fake = _rich_env()
     with pytest.raises(ValueError, match="cannot rewrite"):
-        _edit(db, [{"action": "replace", "index": index, "text": "rope and lamp"}])
-    assert _content_of(db) == RICH
+        await _edit(
+            db, fake, [{"action": "replace", "index": index, "text": "rope and lamp"}]
+        )
+    assert _content_of(fake) == RICH
 
 
 async def test_a_structural_block_can_still_be_deleted():
     """Deletion stays open for every tag — it is what the caller asked for,
     where a rewrite would be a downgrade they did not ask for."""
-    db = _rich_db()
-    _edit(db, [{"action": "replace", "index": 2, "text": ""}])
-    tags = [b.tag for b in blocks_module.split_blocks(_content_of(db))]
+    db, fake = _rich_env()
+    await _edit(db, fake, [{"action": "replace", "index": 2, "text": ""}])
+    tags = [b.tag for b in blocks_module.split_blocks(_content_of(fake))]
     assert tags == ["h2", "p", "blockquote", "img"]
 
 
 async def test_a_refused_op_abandons_the_whole_call():
     """One bad op must not leave the other ops half-applied."""
-    db = _rich_db()
+    db, fake = _rich_env()
     ops = [
         {"action": "replace", "index": 1, "text": "Rewritten."},
         {"action": "replace", "index": 2, "text": "flattened list"},
     ]
     with pytest.raises(ValueError, match="cannot rewrite"):
-        _edit(db, ops)
-    assert _content_of(db) == RICH
+        await _edit(db, fake, ops)
+    assert _content_of(fake) == RICH
 
 
 @pytest.mark.parametrize("bad_text", [0, False, [], None, 12])
@@ -1781,17 +1703,17 @@ async def test_a_non_string_text_is_refused_not_treated_as_a_deletion(bad_text):
     which is the deletion sentinel — a malformed op silently destroyed a
     paragraph. Pydantic catches these at the tool layer; this is the boundary
     behind it holding on its own."""
-    db = _rich_db()
+    db, fake = _rich_env()
     with pytest.raises(ValueError, match="text must be a string"):
-        _edit(db, [{"action": "replace", "index": 1, "text": bad_text}])
-    assert _content_of(db) == RICH
+        await _edit(db, fake, [{"action": "replace", "index": 1, "text": bad_text}])
+    assert _content_of(fake) == RICH
 
 
 async def test_an_absent_text_key_still_means_deletion():
     """ "" is the documented schema default, so an omitted key keeps deleting."""
-    db = _rich_db()
-    _edit(db, [{"action": "replace", "index": 1}])
-    tags = [b.tag for b in blocks_module.split_blocks(_content_of(db))]
+    db, fake = _rich_env()
+    await _edit(db, fake, [{"action": "replace", "index": 1}])
+    tags = [b.tag for b in blocks_module.split_blocks(_content_of(fake))]
     assert tags == ["h2", "ul", "blockquote", "img"]
 
 
@@ -1805,10 +1727,10 @@ async def test_indices_refer_to_the_original_listing_regardless_of_op_order():
         {"action": "replace", "index": 0, "text": "New heading."},
         {"action": "insert_after", "index": 2, "text": "After the list."},
     ]
-    first = _rich_db()
-    _edit(first, ops)
-    second = _rich_db()
-    _edit(second, list(reversed(ops)))
+    db_one, first = _rich_env()
+    await _edit(db_one, first, ops)
+    db_two, second = _rich_env()
+    await _edit(db_two, second, list(reversed(ops)))
     assert _content_of(first) == _content_of(second)
 
     after = blocks_module.split_blocks(_content_of(first))
@@ -1820,29 +1742,31 @@ async def test_indices_refer_to_the_original_listing_regardless_of_op_order():
 
 
 async def test_removal_and_insert_in_one_call_use_original_indices():
-    db = _rich_db()
-    _edit(
+    db, fake = _rich_env()
+    await _edit(
         db,
+        fake,
         [
             {"action": "replace", "index": 3, "text": ""},  # drop the blockquote
             {"action": "insert_after", "index": 0, "text": "Subtitle."},
         ],
     )
-    tags = [b.tag for b in blocks_module.split_blocks(_content_of(db))]
+    tags = [b.tag for b in blocks_module.split_blocks(_content_of(fake))]
     assert tags == ["h2", "p", "p", "ul", "img"]
 
 
 async def test_duplicate_index_is_rejected():
-    db = _rich_db()
+    db, fake = _rich_env()
     with pytest.raises(ValueError, match="two operations target block 1"):
-        _edit(
+        await _edit(
             db,
+            fake,
             [
                 {"action": "replace", "index": 1, "text": "a"},
                 {"action": "insert_after", "index": 1, "text": "b"},
             ],
         )
-    assert _content_of(db) == RICH
+    assert _content_of(fake) == RICH
 
 
 @pytest.mark.parametrize(
@@ -1855,25 +1779,30 @@ async def test_duplicate_index_is_rejected():
     ],
 )
 async def test_out_of_range_indices_are_rejected(op):
-    db = _rich_db()
+    db, fake = _rich_env()
     with pytest.raises(ValueError, match="out of range"):
-        _edit(db, [op])
-    assert _content_of(db) == RICH
+        await _edit(db, fake, [op])
+    assert _content_of(fake) == RICH
 
 
 async def test_empty_chapter_guides_the_caller_to_insert_after_minus_one():
-    db = _seeded_db()
-    db.seed("stories/story-a/chapters/blank", {"title": "Blank", "content": ""})
+    db, fake = _rich_env()
+    fake.seed_chapter("story-a", "blank", title="Blank", position=9.0, content="")
     with pytest.raises(ValueError, match="no blocks yet"):
-        _edit(db, [{"action": "replace", "index": 0, "text": "x"}], chapter="blank")
-    _edit(
-        db, [{"action": "insert_after", "index": -1, "text": "First."}], chapter="blank"
+        await _edit(
+            db, fake, [{"action": "replace", "index": 0, "text": "x"}], chapter="blank"
+        )
+    await _edit(
+        db,
+        fake,
+        [{"action": "insert_after", "index": -1, "text": "First."}],
+        chapter="blank",
     )
-    assert _content_of(db, "stories/story-a/chapters/blank") == "<p>First.</p>"
+    assert _content_of(fake, "blank") == "<p>First.</p>"
 
 
 async def test_op_list_validation():
-    db = _rich_db()
+    db, fake = _rich_env()
     for bad, match in [
         ([], "at least one"),
         ([{"action": "delete", "index": 0}], "action must be one of"),
@@ -1890,62 +1819,84 @@ async def test_op_list_validation():
         ("not-a-list", "ops must be a list"),
     ]:
         with pytest.raises(ValueError, match=match):
-            _edit(db, bad)
-    assert _content_of(db) == RICH
+            await _edit(db, fake, bad)
+    assert _content_of(fake) == RICH
 
 
 async def test_too_many_ops_rejected():
-    db = _rich_db()
+    db, fake = _rich_env()
     ops = [
         {"action": "insert_after", "index": i, "text": "x"}
         for i in range(writes.MAX_OPS_PER_CALL + 1)
     ]
     with pytest.raises(ValueError, match="at most 20 operations"):
-        _edit(db, ops)
+        await _edit(db, fake, ops)
 
 
 async def test_edit_escapes_markup():
-    db = _rich_db()
-    _edit(db, [{"action": "replace", "index": 1, "text": "<script>x</script>"}])
-    assert "<script>" not in _content_of(db)
-    assert "&lt;script&gt;" in _content_of(db)
+    db, fake = _rich_env()
+    await _edit(
+        db, fake, [{"action": "replace", "index": 1, "text": "<script>x</script>"}]
+    )
+    assert "<script>" not in _content_of(fake)
+    assert "&lt;script&gt;" in _content_of(fake)
 
 
-async def test_edit_enforces_caps_on_the_rebuilt_string():
-    db = _rich_db()
-    with pytest.raises(writes.LimitExceededError) as exc:
-        _edit(
+async def test_edit_word_cap_is_reported_from_story_data():
+    db, fake = _rich_env()
+    with pytest.raises(story_data.Rejected, match="5000 words"):
+        await _edit(
             db,
+            fake,
             [
                 {
                     "action": "replace",
                     "index": 1,
-                    "text": " ".join(["w"] * (writes.MAX_CHAPTER_WORDS + 1)),
+                    "text": " ".join(["w"] * (FakeStoryData.WORD_LIMIT + 1)),
                 }
             ],
         )
-    assert exc.value.limit_name == "chapter_words"
-    assert _content_of(db) == RICH
+    assert _content_of(fake) == RICH
+
+
+async def test_edit_enforces_the_char_cap_on_the_rebuilt_string():
+    """The one ceiling still applied here, and it is measured on the joined
+    blocks rather than the caller's text."""
+    db, fake = _rich_env()
+    with pytest.raises(writes.LimitExceededError) as exc:
+        await _edit(
+            db,
+            fake,
+            [
+                {
+                    "action": "replace",
+                    "index": 1,
+                    "text": "x" * writes.MAX_CHAPTER_CONTENT_CHARS,
+                }
+            ],
+        )
+    assert exc.value.limit_name == "chapter_content_chars"
+    assert _content_of(fake) == RICH
 
 
 async def test_edit_is_owner_scoped():
-    db = _rich_db()
-    path = "stories/story-b/chapters/chb"
+    db, fake = _rich_env()
     with pytest.raises(data.StoryNotFoundError):
-        writes.edit_chapter_blocks(
+        await writes.edit_chapter_blocks(
             db,
             UID_A,
             "story-b",
             "chb",
             [{"action": "replace", "index": 0, "text": "mine now"}],
-            _revision_of(db, path),
+            _revision_of(fake, "chb", "story-b"),
         )
+    assert fake.writes == []
 
 
 async def test_edit_on_a_missing_chapter_raises_entity_not_found():
-    db = _rich_db()
+    db, fake = _rich_env()
     with pytest.raises(data.EntityNotFoundError):
-        writes.edit_chapter_blocks(
+        await writes.edit_chapter_blocks(
             db,
             UID_A,
             "story-a",
@@ -1961,48 +1912,60 @@ async def test_edit_on_a_missing_chapter_raises_entity_not_found():
 
 
 async def test_identical_append_replays_instead_of_appending_twice():
-    db = _rich_db()
-    revision = _revision_of(db)
-    first = writes.append_to_chapter(db, UID_A, "story-a", "rich", "Once.", revision)
-    after_first = _content_of(db)
-    second = writes.append_to_chapter(db, UID_A, "story-a", "rich", "Once.", revision)
+    db, fake = _rich_env()
+    revision = _revision_of(fake)
+    first = await writes.append_to_chapter(
+        db, UID_A, "story-a", "rich", "Once.", revision
+    )
+    after_first = _content_of(fake)
+    second = await writes.append_to_chapter(
+        db, UID_A, "story-a", "rich", "Once.", revision
+    )
     assert first["idempotent_replay"] is False
     assert second["idempotent_replay"] is True
     assert second["revision"] == first["revision"]
-    assert _content_of(db) == after_first
+    assert _content_of(fake) == after_first
 
 
 async def test_identical_edit_replays_instead_of_editing_twice():
-    db = _rich_db()
-    revision = _revision_of(db)
+    db, fake = _rich_env()
+    revision = _revision_of(fake)
     ops = [{"action": "insert_after", "index": 0, "text": "Inserted."}]
-    first = writes.edit_chapter_blocks(db, UID_A, "story-a", "rich", ops, revision)
-    after_first = _content_of(db)
-    second = writes.edit_chapter_blocks(db, UID_A, "story-a", "rich", ops, revision)
+    first = await writes.edit_chapter_blocks(
+        db, UID_A, "story-a", "rich", ops, revision
+    )
+    after_first = _content_of(fake)
+    second = await writes.edit_chapter_blocks(
+        db, UID_A, "story-a", "rich", ops, revision
+    )
     assert second["idempotent_replay"] is True
-    assert _content_of(db) == after_first
-    assert _content_of(db).count("Inserted.") == 1
+    assert _content_of(fake) == after_first
+    assert _content_of(fake).count("Inserted.") == 1
     assert first["block_count"] == second["block_count"]
 
 
 async def test_same_ops_against_the_new_revision_is_a_fresh_edit():
     """A replay is anchored to the base version, not to the text of the call."""
-    db = _rich_db()
+    db, fake = _rich_env()
     ops = [{"action": "insert_after", "index": 0, "text": "Again."}]
-    writes.edit_chapter_blocks(db, UID_A, "story-a", "rich", ops, _revision_of(db))
-    writes.edit_chapter_blocks(db, UID_A, "story-a", "rich", ops, _revision_of(db))
-    assert _content_of(db).count("Again.") == 2
+    await writes.edit_chapter_blocks(
+        db, UID_A, "story-a", "rich", ops, _revision_of(fake)
+    )
+    await writes.edit_chapter_blocks(
+        db, UID_A, "story-a", "rich", ops, _revision_of(fake)
+    )
+    assert _content_of(fake).count("Again.") == 2
 
 
 async def test_op_order_does_not_change_the_idempotency_key():
-    db = _rich_db()
-    revision = _revision_of(db)
+    db, fake = _rich_env()
+    revision = _revision_of(fake)
     ops = [
         {"action": "replace", "index": 0, "text": "A."},
         {"action": "insert_after", "index": 2, "text": "B."},
     ]
-    writes.edit_chapter_blocks(db, UID_A, "story-a", "rich", ops, revision)
-    replay = writes.edit_chapter_blocks(
+    await writes.edit_chapter_blocks(db, UID_A, "story-a", "rich", ops, revision)
+    replay = await writes.edit_chapter_blocks(
         db, UID_A, "story-a", "rich", list(reversed(ops)), revision
     )
     assert replay["idempotent_replay"] is True
@@ -2010,10 +1973,10 @@ async def test_op_order_does_not_change_the_idempotency_key():
 
 async def test_failed_edit_releases_the_reservation():
     """A corrected retry must not be blocked by the failed attempt's claim."""
-    db = _rich_db()
-    revision = _revision_of(db)
-    with pytest.raises(writes.LimitExceededError):
-        writes.edit_chapter_blocks(
+    db, fake = _rich_env()
+    revision = _revision_of(fake)
+    with pytest.raises(story_data.Rejected):
+        await writes.edit_chapter_blocks(
             db,
             UID_A,
             "story-a",
@@ -2022,12 +1985,12 @@ async def test_failed_edit_releases_the_reservation():
                 {
                     "action": "replace",
                     "index": 1,
-                    "text": " ".join(["w"] * (writes.MAX_CHAPTER_WORDS + 1)),
+                    "text": " ".join(["w"] * (FakeStoryData.WORD_LIMIT + 1)),
                 }
             ],
             revision,
         )
-    ok = writes.edit_chapter_blocks(
+    ok = await writes.edit_chapter_blocks(
         db,
         UID_A,
         "story-a",
@@ -2042,16 +2005,15 @@ async def test_another_users_completed_edit_cannot_be_replayed():
     """Ownership is checked before the reservation is consulted, so an attacker
     who somehow knew the exact arguments of someone else's successful edit gets
     "not found" rather than a replay of its result."""
-    db = _rich_db()
-    story = writes.create_story(db, UID_B, "B's book")
-    chapter = writes.create_chapter(db, UID_B, story["story_id"], "Ch", "text")
-    path = f"stories/{story['story_id']}/chapters/{chapter['chapter_id']}"
-    revision = _revision_of(db, path)
-    writes.append_to_chapter(
+    db, fake = _rich_env()
+    story = await writes.create_story(db, UID_B, "B's book")
+    chapter = await writes.create_chapter(db, UID_B, story["story_id"], "Ch", "text")
+    revision = _revision_of(fake, chapter["chapter_id"], story["story_id"])
+    await writes.append_to_chapter(
         db, UID_B, story["story_id"], chapter["chapter_id"], "hi", revision
     )
     with pytest.raises(data.StoryNotFoundError):
-        writes.append_to_chapter(
+        await writes.append_to_chapter(
             db, UID_A, story["story_id"], chapter["chapter_id"], "hi", revision
         )
 
@@ -2062,7 +2024,7 @@ async def test_another_users_completed_edit_cannot_be_replayed():
 
 
 async def test_edit_tools_require_the_write_scope():
-    db = _rich_db()
+    db, fake = _rich_env()
     mcp = _tool_server(db, enable_writes=True)
     with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A)):
         for name, args in [
@@ -2078,15 +2040,15 @@ async def test_edit_tools_require_the_write_scope():
                     {
                         "story_id": "story-a",
                         "chapter_id": "rich",
-                        "revision": _revision_of(db),
+                        "revision": _revision_of(fake),
                         **args,
                     },
                 )
-    assert _content_of(db) == RICH
+    assert _content_of(fake) == RICH
 
 
 async def test_edit_tool_idor_returns_story_not_found():
-    db = _rich_db()
+    db, fake = _rich_env()
     mcp = _tool_server(db, enable_writes=True)
     with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
         with pytest.raises(ToolError, match="Story not found"):
@@ -2096,14 +2058,14 @@ async def test_edit_tool_idor_returns_story_not_found():
                     "story_id": "story-b",
                     "chapter_id": "chb",
                     "content": "mine now",
-                    "revision": _revision_of(db, "stories/story-b/chapters/chb"),
+                    "revision": _revision_of(fake, "chb", "story-b"),
                 },
             )
-    assert _content_of(db, "stories/story-b/chapters/chb") == "secret text"
+    assert _content_of(fake, "chb", "story-b") == "secret text"
 
 
 async def test_edit_tool_missing_chapter_says_chapter_not_found():
-    db = _rich_db()
+    db, fake = _rich_env()
     mcp = _tool_server(db, enable_writes=True)
     with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
         with pytest.raises(ToolError, match="Chapter not found"):
@@ -2119,7 +2081,7 @@ async def test_edit_tool_missing_chapter_says_chapter_not_found():
 
 
 async def test_stale_revision_through_the_tool_layer_tells_the_model_to_reread():
-    db = _rich_db()
+    db, fake = _rich_env()
     mcp = _tool_server(db, enable_writes=True)
     with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
         with pytest.raises(ToolError, match="changed since you read it"):
@@ -2129,14 +2091,14 @@ async def test_stale_revision_through_the_tool_layer_tells_the_model_to_reread()
                     "story_id": "story-a",
                     "chapter_id": "rich",
                     "content": "x",
-                    "revision": "stale",
+                    "revision": "999",
                 },
             )
-    assert _content_of(db) == RICH
+    assert _content_of(fake) == RICH
 
 
 async def test_edit_tools_share_the_write_rate_limiter():
-    db = _rich_db()
+    db, fake = _rich_env()
     mcp = _tool_server(db, enable_writes=True, write_rpm=1)
     with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
         await _call(
@@ -2146,7 +2108,7 @@ async def test_edit_tools_share_the_write_rate_limiter():
                 "story_id": "story-a",
                 "chapter_id": "rich",
                 "content": "one",
-                "revision": _revision_of(db),
+                "revision": _revision_of(fake),
             },
         )
         with pytest.raises(ToolError, match="Write rate limit"):
@@ -2156,7 +2118,7 @@ async def test_edit_tools_share_the_write_rate_limiter():
                     "story_id": "story-a",
                     "chapter_id": "rich",
                     "content": "two",
-                    "revision": _revision_of(db),
+                    "revision": _revision_of(fake),
                 },
             )
 
@@ -2172,7 +2134,7 @@ async def test_edit_tools_share_the_write_rate_limiter():
         (
             "create_chapter",
             {"story_id": "story-a", "title": "Audited", "content": "One two."},
-            {"order": 4, "chapter_count": 3, "attempts": 1},
+            {"position": 4.0, "chapter_count": 4, "attempts": 1},
         ),
     ],
 )
@@ -2181,7 +2143,7 @@ async def test_every_write_is_audited_with_the_caller_and_target(
 ):
     """The audit line is the only record of who changed what, so its spine —
     uid, connector, story, replay flag — has to survive refactoring."""
-    db = _rich_db()
+    db, fake = _rich_env()
     mcp = _tool_server(db, enable_writes=True)
     with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
         with capture_logs() as logs:
@@ -2199,7 +2161,7 @@ async def test_every_write_is_audited_with_the_caller_and_target(
 async def test_audit_lines_carry_no_user_prose():
     """Lengths and counts only. A result field holding the author's words must
     never reach the logs, which is why _audit forwards nothing implicitly."""
-    db = _rich_db()
+    db, fake = _rich_env()
     mcp = _tool_server(db, enable_writes=True)
     secret = "Zephyrine unmistakable prose"
     with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
@@ -2215,7 +2177,7 @@ async def test_audit_lines_carry_no_user_prose():
 
 
 async def test_chapter_edits_are_audited_with_the_chapter_id():
-    db = _rich_db()
+    db, fake = _rich_env()
     mcp = _tool_server(db, enable_writes=True)
     with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
         with capture_logs() as logs:
@@ -2226,7 +2188,7 @@ async def test_chapter_edits_are_audited_with_the_chapter_id():
                     "story_id": "story-a",
                     "chapter_id": "rich",
                     "content": "Postscript.",
-                    "revision": _revision_of(db),
+                    "revision": _revision_of(fake),
                 },
             )
     line = next(e for e in logs if e["event"] == "mcp_write_chapter_appended")
@@ -2238,31 +2200,29 @@ async def test_chapter_edits_are_audited_with_the_chapter_id():
 async def test_full_edit_cycle_through_the_write_tools():
     """Edit by index, chain a second edit on the returned revision, verify bytes.
 
-    The block listing and the final read used to come from the read tools. They
-    serve story-data now, whose integer revision cannot satisfy a Firestore
-    precondition, so the cycle stays on the write backend: block indices are
-    computed from the stored content and the result is asserted there. The
-    properties under test are unchanged — revision chaining without a re-read,
-    and byte-identity of blocks nobody touched.
+    Both halves go through the tool layer: the block listing comes from the
+    READ tool and its revision drives the write, which is the handshake the
+    Firestore write path could not make.
     """
-    db = _rich_db()
+    db, fake = _rich_env()
     mcp = _tool_server(db, enable_writes=True)
 
-    stored_blocks = blocks_module.split_blocks(_content_of(db))
-    target_index = next(
-        i
-        for i, block in enumerate(stored_blocks)
-        if blocks_module.block_preview(block.html).startswith("She")
-    )
-
     with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
+        listing = await _call(
+            mcp, "get_chapter_blocks", {"story_id": "story-a", "chapter_id": "rich"}
+        )
+        target_index = next(
+            block["index"]
+            for block in listing["blocks"]
+            if block["preview"].startswith("She")
+        )
         edited = await _call(
             mcp,
             "edit_chapter_blocks",
             {
                 "story_id": "story-a",
                 "chapter_id": "rich",
-                "revision": _revision_of(db),
+                "revision": listing["revision"],
                 "ops": [
                     {
                         "action": "replace",
@@ -2283,8 +2243,11 @@ async def test_full_edit_cycle_through_the_write_tools():
                 "revision": edited["revision"],
             },
         )
+        final_read = await _call(
+            mcp, "get_chapter", {"story_id": "story-a", "chapter_id": "rich"}
+        )
 
-    final = _content_of(db)
+    final = final_read["content"]
     assert "She counted the steps twice." in final
     assert final.endswith("<p>Postscript.</p>")
     # Untouched blocks kept their exact markup through two edits.
@@ -2294,38 +2257,101 @@ async def test_full_edit_cycle_through_the_write_tools():
 
 
 # ---------------------------------------------------------------------------
-# Drift guards
+# story_data client — status mapping for the write verbs
+#
+# The fake reproduces these outcomes everywhere else in this file, so they are
+# pinned once against real httpx responses.
 # ---------------------------------------------------------------------------
 
 
-def test_revision_token_agrees_across_the_two_real_firestore_types():
-    # Lives in writes.py now: only the Firestore write path still needs it.
-    """The fake cannot catch this, and it breaks every chained edit if wrong.
-
-    A read gives DocumentSnapshot.update_time (DatetimeWithNanoseconds); a
-    write gives WriteResult.update_time (protobuf Timestamp). str() spells the
-    same instant completely differently for the two, so a token taken straight
-    from str() would make an edit's returned revision never match the next
-    read's — refusing every chained edit as stale with nothing else going on.
-    """
-    from google.api_core.datetime_helpers import DatetimeWithNanoseconds
-    from google.protobuf import timestamp_pb2
-
-    from_write = timestamp_pb2.Timestamp(seconds=1_785_000_000, nanos=745_934_000)
-    # The library's own conversion, so both objects are the same instant by
-    # construction rather than by my arithmetic.
-    from_read = DatetimeWithNanoseconds.from_timestamp_pb(from_write)
-
-    assert str(from_write) != str(from_read)  # the trap this guards
-    assert writes._revision_token(from_write) == writes._revision_token(from_read)
+def _client_over(handler) -> story_data.StoryDataClient:
+    client = story_data.StoryDataClient("http://sd.test", "tok")
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return client
 
 
-def test_revision_token_distinguishes_adjacent_versions():
-    from google.protobuf import timestamp_pb2
+@pytest.mark.parametrize(
+    "status,expected",
+    [
+        (404, story_data.NotFound),
+        (403, story_data.NotFound),  # "not yours" must not be distinguishable
+        (409, story_data.Conflict),
+        (428, story_data.Conflict),  # If-Match missing or unparseable
+        (422, story_data.Rejected),
+        (400, story_data.Rejected),
+        (500, story_data.StoryDataError),
+    ],
+)
+async def test_write_status_codes_map_to_their_errors(status, expected):
+    client = _client_over(
+        lambda request: httpx.Response(status, json={"error": "nope"})
+    )
+    with pytest.raises(expected):
+        await client.create_story("u", {"title": "x"})
 
-    a = timestamp_pb2.Timestamp(seconds=1_785_000_000, nanos=1)
-    b = timestamp_pb2.Timestamp(seconds=1_785_000_000, nanos=2)
-    assert writes._revision_token(a) != writes._revision_token(b)
+
+async def test_a_rejection_carries_story_datas_own_message():
+    """The ceilings live there now, so its wording is what the model must see."""
+    client = _client_over(
+        lambda request: httpx.Response(
+            422, json={"error": "you have reached the limit of 100 stories"}
+        )
+    )
+    with pytest.raises(story_data.Rejected) as exc:
+        await client.create_story("u", {"title": "x"})
+    assert exc.value.message == "you have reached the limit of 100 stories"
+
+
+async def test_update_chapter_sends_the_revision_as_if_match():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(request.headers)
+        return httpx.Response(200, json={"id": "c", "revision": 8})
+
+    result = await _client_over(handler).update_chapter(
+        "u", "s", "c", {"title": "T", "content": "x", "position": 1}, "7"
+    )
+    assert seen["if-match"] == "7"
+    assert seen["x-user-id"] == "u"
+    assert seen["x-service-token"] == "tok"
+    assert result["revision"] == 8
+
+
+async def test_all_write_methods_match_the_story_data_http_contract():
+    seen: list[tuple[str, str, dict]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(
+            (
+                request.method,
+                request.url.path,
+                json.loads(request.content.decode()),
+            )
+        )
+        if request.url.path == "/v1/stories":
+            return httpx.Response(201, json={"id": "s"})
+        if request.method == "POST":
+            return httpx.Response(201, json={"id": "c", "revision": 1})
+        return httpx.Response(200, json={"id": "c", "revision": 2})
+
+    client = _client_over(handler)
+    story = {"title": "T", "published": False}
+    chapter = {"title": "C", "content": "<p>x</p>", "position": 1.0}
+    await client.create_story("u", story)
+    await client.create_chapter("u", "s", chapter)
+    await client.update_chapter("u", "s", "c", chapter, "1")
+
+    assert seen == [
+        ("POST", "/v1/stories", story),
+        ("POST", "/v1/stories/s/chapters", chapter),
+        ("PATCH", "/v1/stories/s/chapters/c", chapter),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Drift guards
+# ---------------------------------------------------------------------------
 
 
 def test_block_op_actions_match_the_writes_layer():
@@ -2369,29 +2395,16 @@ def test_tools_write_scope_constant_matches_app():
     assert WRITE_SCOPE == mcp_app.MCP_WRITE_SCOPE
 
 
-def test_write_limits_match_the_client_limits():
-    """The Admin SDK bypasses firestore.rules, so writes.py re-declares the
-    ceilings. Parse the frontend's own sources and fail when they drift.
-
-    Skipped when the sibling repo isn't checked out — this has none of the
-    CI-credential cost that retired the previous cross-repo test.
+def test_ceilings_story_data_owns_are_not_restated_here():
+    """writes.py used to re-declare firestore.rules' ceilings because the Admin
+    SDK bypassed them. story-data enforces its own, transactionally, so a copy
+    here would be a second number to keep in step — and the first one to go
+    stale. Only the stored-size bound, which has no counterpart there, remains.
     """
-    root = pathlib.Path(__file__).resolve().parents[2] / "taleTribe-frontend"
-    repo = root / "src" / "services" / "StoriesRepo.ts"
-    rules = root / "firestore.rules"
-    if not repo.exists() or not rules.exists():
-        pytest.skip("taleTribe-frontend not checked out beside this repo")
-
-    repo_src = repo.read_text()
-    word_limit = int(re.search(r"WORD_LIMIT\s*=\s*(\d+)", repo_src).group(1))
-    chapter_limit = int(re.search(r"CHAPTER_LIMIT\s*=\s*(\d+)", repo_src).group(1))
-    assert writes.MAX_CHAPTER_WORDS == word_limit
-    assert writes.MAX_CHAPTERS_PER_STORY == chapter_limit
-
-    rules_src = rules.read_text()
-    assert f"content.size() <= {writes.MAX_CHAPTER_CONTENT_CHARS}" in rules_src
-    # firestore.rules spells the cap inline: "... < 100; // MAX_STORIES_PER_USER"
-    stories_cap = int(
-        re.search(r"userStoryCount\([^)]*\)\s*<\s*(\d+)", rules_src).group(1)
-    )
-    assert writes.MAX_STORIES_PER_USER == stories_cap
+    for gone in (
+        "MAX_STORIES_PER_USER",
+        "MAX_CHAPTERS_PER_STORY",
+        "MAX_CHAPTER_WORDS",
+    ):
+        assert not hasattr(writes, gone), f"{gone} is story-data's to enforce"
+    assert writes.MAX_CHAPTER_CONTENT_CHARS == 100_000
