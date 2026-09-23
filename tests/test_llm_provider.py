@@ -314,6 +314,45 @@ async def test_get_balance_maps_5xx_to_backend_unavailable():
 
 
 @pytest.mark.asyncio
+async def test_get_provider_catalog_forwards_auth_and_returns_catalog():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/v1/providers"
+        assert request.headers.get("X-Firebase-Token") == "fb-token"
+        return httpx.Response(
+            200,
+            json={"version": 1, "providers": [{"id": "gemini", "models": []}]},
+        )
+
+    provider = _provider_with_transport(handler)
+    data = await provider.get_provider_catalog(firebase_token="fb-token")
+    assert data["providers"][0]["id"] == "gemini"
+
+
+@pytest.mark.asyncio
+async def test_validate_provider_posts_key_without_logging_or_transforming_it():
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert request.url.path == "/v1/providers/validate"
+        assert body == {
+            "user_id": "user123",
+            "provider": "anthropic",
+            "api_key": "secret-key",
+            "model": "claude-sonnet-4-6",
+        }
+        return httpx.Response(
+            200,
+            json={"valid": True, "provider": "anthropic", "model": "claude-sonnet-4-6"},
+        )
+
+    provider = _provider_with_transport(handler)
+    data = await provider.validate_provider(
+        "user123", "anthropic", "secret-key", "claude-sonnet-4-6"
+    )
+    assert data["valid"] is True
+
+
+@pytest.mark.asyncio
 async def test_purchase_credits_posts_amount_and_returns_new_balance():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"

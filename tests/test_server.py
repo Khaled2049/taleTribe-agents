@@ -409,6 +409,49 @@ class TestCredits:
         assert response.json()["error"]["code"] == "RATE_LIMITED"
 
 
+class TestAiProviders:
+    def test_catalog_success(self):
+        app.state.agent.llm_provider.get_provider_catalog = AsyncMock(
+            return_value={"version": 1, "providers": [{"id": "gemini"}]}
+        )
+
+        response = client.post(
+            "/ai/providers", headers={"X-Firebase-Token": "fb-token"}
+        )
+
+        assert response.status_code == 200
+        assert response.json()["data"]["providers"][0]["id"] == "gemini"
+        app.state.agent.llm_provider.get_provider_catalog.assert_awaited_once_with(
+            "fb-token"
+        )
+
+    def test_validation_forwards_user_key_and_model(self):
+        app.state.agent.llm_provider.validate_provider = AsyncMock(
+            return_value={
+                "valid": True,
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+            }
+        )
+
+        response = client.post(
+            "/ai/providers/validate",
+            json={
+                "user_id": "u1",
+                "provider": "openai",
+                "api_key": "secret",
+                "model": "gpt-4o-mini",
+            },
+            headers={"X-Firebase-Token": "fb-token"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["data"]["valid"] is True
+        app.state.agent.llm_provider.validate_provider.assert_awaited_once_with(
+            "u1", "openai", "secret", "gpt-4o-mini", "fb-token"
+        )
+
+
 class TestDocsEndpoints:
     def test_openapi_schema_available(self):
         response = client.get("/openapi.json")

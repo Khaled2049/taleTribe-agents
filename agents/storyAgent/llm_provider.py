@@ -411,17 +411,76 @@ class CreditProxyProvider(LLMProvider):
                 e.response.status_code, e.response.text, None
             ) from e
 
+    async def get_provider_catalog(
+        self, firebase_token: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Return creditProxy's credential-free provider/model catalog."""
+        headers = await self._auth_headers(firebase_token)
+        try:
+            resp = await self._client.get(
+                f"{self.base_url}/v1/providers", headers=headers
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if not isinstance(data, dict):
+                raise BackendUnavailableError("creditProxy returned an invalid catalog")
+            return data
+        except httpx.TimeoutException as e:
+            raise LLMTimeoutError(str(e)) from e
+        except httpx.RequestError as e:
+            raise BackendUnavailableError(f"creditProxy unreachable: {e}") from e
+        except httpx.HTTPStatusError as e:
+            raise _classify_http_error(
+                e.response.status_code, e.response.text, None
+            ) from e
+
+    async def validate_provider(
+        self,
+        user_id: str,
+        provider: str,
+        api_key: str,
+        model: Optional[str] = None,
+        firebase_token: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Validate one BYOK key/model through the metering gateway."""
+        headers = await self._auth_headers(firebase_token)
+        try:
+            resp = await self._client.post(
+                f"{self.base_url}/v1/providers/validate",
+                json={
+                    "user_id": user_id,
+                    "provider": provider,
+                    "api_key": api_key,
+                    "model": model or "",
+                },
+                headers=headers,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if not isinstance(data, dict):
+                raise BackendUnavailableError(
+                    "creditProxy returned an invalid validation result"
+                )
+            return data
+        except httpx.TimeoutException as e:
+            raise LLMTimeoutError(str(e)) from e
+        except httpx.RequestError as e:
+            raise BackendUnavailableError(f"creditProxy unreachable: {e}") from e
+        except httpx.HTTPStatusError as e:
+            raise _classify_http_error(
+                e.response.status_code, e.response.text, None
+            ) from e
+
 
 def get_llm_provider(
     project_id: Optional[str] = None, location: str = "us-central1"
 ) -> LLMProvider:
     """Return a CreditProxyProvider. CREDIT_PROXY_URL must be set.
 
-    Provider/model selection is configured entirely in creditProxy via LLM_PROVIDER:
-      mock     — canned responses, no API key needed
-      ollama   — local LLM via OLLAMA_BASE_URL
-      gemini   — GEMINI_API_KEY (platform default)
-      BYOK     — per-request key forwarded via byok_* fields in the payload
+    Provider/model selection is configured in creditProxy's LiteLLM adapter:
+      mock      — canned responses, no API key needed
+      platform  — configured Gemini, Anthropic, or OpenAI model
+      BYOK      — request-scoped key forwarded via byok_* fields
     """
     credit_proxy_url = os.getenv("CREDIT_PROXY_URL")
     if not credit_proxy_url:
