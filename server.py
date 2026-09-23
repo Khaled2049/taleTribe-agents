@@ -134,7 +134,7 @@ class ErrorDetail(BaseModel):
 class ProviderConfig(BaseModel):
     """Per-request BYOK provider override."""
 
-    provider: str  # "gemini" | "claude" | "openai"
+    provider: str  # "gemini" | "anthropic" | "openai" ("claude" legacy alias)
     api_key: str
     model: Optional[str] = None
 
@@ -179,6 +179,15 @@ class PurchaseCreditsRequest(BaseModel):
 
     user_id: str = Field(min_length=1, max_length=128)
     credits: int
+
+
+class ProviderValidationRequest(BaseModel):
+    """Validate a BYOK provider credential and selected/default model."""
+
+    user_id: str = Field(min_length=1, max_length=128)
+    provider: str = Field(min_length=1, max_length=64)
+    api_key: str = Field(min_length=1, max_length=4096)
+    model: Optional[str] = Field(default=None, max_length=256)
 
 
 def _try_load_image_router(current_dir: Path, enabled: bool):
@@ -578,6 +587,64 @@ def create_app() -> FastAPI:
                 detail={
                     "code": "INTERNAL_ERROR",
                     "message": "Credit service is temporarily unavailable. Please try again.",
+                    "details": None,
+                },
+            ) from exc
+
+    @app.post("/ai/providers", response_model=AgentResponse)
+    async def ai_providers(
+        raw_request: Request,
+        _: None = Depends(_verify_internal_token),
+    ) -> AgentResponse:
+        firebase_token = raw_request.headers.get("X-Firebase-Token", "").strip() or None
+        try:
+            data = await app.state.agent.llm_provider.get_provider_catalog(
+                firebase_token
+            )
+            return AgentResponse(success=True, data=data)
+        except LLMProviderError as exc:
+            logger.warning("provider_catalog_error", error_type=type(exc).__name__)
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "BACKEND_UNAVAILABLE",
+                    "message": "AI provider catalog is temporarily unavailable.",
+                    "details": None,
+                },
+            ) from exc
+
+    @app.post("/ai/providers/validate", response_model=AgentResponse)
+    async def ai_provider_validate(
+        request: ProviderValidationRequest,
+        raw_request: Request,
+        _: None = Depends(_verify_internal_token),
+    ) -> AgentResponse:
+        firebase_token = raw_request.headers.get("X-Firebase-Token", "").strip() or None
+        try:
+            data = await app.state.agent.llm_provider.validate_provider(
+                request.user_id,
+                request.provider,
+                request.api_key,
+                request.model,
+                firebase_token,
+            )
+            return AgentResponse(success=True, data=data)
+        except RateLimitedError as exc:
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "code": "RATE_LIMITED",
+                    "message": "Too many validation attempts. Try again shortly.",
+                    "details": None,
+                },
+            ) from exc
+        except LLMProviderError as exc:
+            logger.warning("provider_validation_error", error_type=type(exc).__name__)
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "BACKEND_UNAVAILABLE",
+                    "message": "Provider validation is temporarily unavailable.",
                     "details": None,
                 },
             ) from exc
