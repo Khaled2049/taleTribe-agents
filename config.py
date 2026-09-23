@@ -6,7 +6,8 @@ Instantiated once inside create_app() so tests can monkeypatch env vars before c
 
 import json
 import logging
-from typing import Optional
+import os
+from typing import Literal, Optional
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
@@ -19,7 +20,8 @@ class Settings(BaseSettings):
     google_cloud_project: str
 
     # Runtime environment
-    environment: str = "development"
+    environment: Literal["development", "test", "production"] = "development"
+    allow_insecure_local_auth: bool = False
 
     # OIDC / service-to-service auth (required in production)
     agent_service_url: str = ""
@@ -36,7 +38,8 @@ class Settings(BaseSettings):
     vertex_ai_location: str = "us-central1"
 
     # Feature flags
-    enable_local_image_generation: bool = True
+    enable_local_image_generation: bool = False
+    image_generation_max_concurrent: int = Field(default=1, ge=1, le=8)
     assistant_api_enabled: bool = False
     assistant_edit_proposals_enabled: bool = True
     assistant_research_enabled: bool = False
@@ -79,6 +82,8 @@ class Settings(BaseSettings):
     # tighter bucket than the rest of the flow.
     mcp_register_requests_per_minute_per_ip: int = 5
     mcp_oauth_requests_per_minute_per_ip: int = 30
+    mcp_register_requests_per_minute_total: int = Field(default=20, ge=0)
+    mcp_trusted_proxy_hops: int = Field(default=1, ge=0, le=5)
     mcp_access_token_ttl_seconds: int = 3600
     mcp_refresh_token_ttl_seconds: int = 2592000  # 30 days
 
@@ -188,6 +193,22 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def check_insecure_local_auth(self) -> "Settings":
+        if not self.allow_insecure_local_auth:
+            return self
+        if self.environment == "production":
+            raise ValueError(
+                "ALLOW_INSECURE_LOCAL_AUTH cannot be enabled when "
+                "ENVIRONMENT=production"
+            )
+        if os.getenv("K_SERVICE"):
+            raise ValueError(
+                "ALLOW_INSECURE_LOCAL_AUTH cannot be enabled on Cloud Run "
+                "(K_SERVICE is set)"
+            )
+        return self
+
+    @model_validator(mode="after")
     def check_mcp_write_backend(self) -> "Settings":
         """Writes go to story-data, so they cannot be enabled without it.
 
@@ -205,6 +226,15 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     # Derived helpers (computed from raw fields)
     # ------------------------------------------------------------------
+
+    @property
+    def insecure_local_auth(self) -> bool:
+        return self.allow_insecure_local_auth and self.environment != "production"
+
+    @property
+    def bind_host(self) -> str:
+        default = "0.0.0.0" if self.environment == "production" else "127.0.0.1"
+        return os.getenv("HOST", "").strip() or default
 
     @property
     def oidc_audience(self) -> Optional[str]:

@@ -22,7 +22,11 @@ os.environ.setdefault("FIRESTORE_EMULATOR_HOST", "localhost:9999")
 from fastapi.testclient import TestClient  # noqa: E402
 
 import mcp_server.app as mcp_app_module  # noqa: E402
-from mcp_server.throttle import OAuthThrottleMiddleware, client_ip  # noqa: E402
+from mcp_server.throttle import (  # noqa: E402
+    MAX_OAUTH_BODY_BYTES,
+    OAuthThrottleMiddleware,
+    client_ip,
+)
 from tests.mcp_fakes import FakeFirestoreClient  # noqa: E402
 
 fake_db = FakeFirestoreClient()
@@ -136,27 +140,98 @@ def test_health_still_reachable_under_throttle(client):
 # ---------------------------------------------------------------------------
 
 
-def test_client_ip_prefers_first_forwarded_entry():
+def _request(forwarded=None, peer=("10.1.1.1", 1234)):
     from starlette.requests import Request
 
-    scope = {
-        "type": "http",
-        "headers": [(b"x-forwarded-for", b"203.0.113.9, 70.41.3.18, 150.172.238.178")],
-        "client": ("10.1.1.1", 1234),
-    }
-    assert client_ip(Request(scope)) == "203.0.113.9"
+    headers = [(b"x-forwarded-for", forwarded)] if forwarded is not None else []
+    return Request({"type": "http", "headers": headers, "client": peer})
+
+
+def test_client_ip_takes_entry_appended_by_trusted_proxy():
+    request = _request(b"203.0.113.9, 70.41.3.18, 150.172.238.178")
+    assert client_ip(request, 1) == "150.172.238.178"
+    assert client_ip(request, 2) == "70.41.3.18"
+
+
+def test_client_ip_ignores_forwarded_header_with_zero_hops():
+    assert client_ip(_request(b"203.0.113.9"), 0) == "10.1.1.1"
+
+
+def test_client_ip_falls_back_to_peer_when_chain_is_short():
+    assert client_ip(_request(b"203.0.113.9"), 2) == "10.1.1.1"
+    assert client_ip(_request(b" , "), 1) == "10.1.1.1"
 
 
 def test_client_ip_falls_back_to_socket_then_unknown():
-    from starlette.requests import Request
+    assert client_ip(_request()) == "10.1.1.1"
+    assert client_ip(_request(peer=None)) == "unknown"
 
-    assert (
-        client_ip(Request({"type": "http", "headers": [], "client": ("10.1.1.1", 80)}))
-        == "10.1.1.1"
+
+def test_forged_forwarded_prefixes_do_not_create_new_buckets(client):
+    real = "10.0.3.1"
+    statuses = [
+        _register(client, f"{forged}, {real}").status_code
+        for forged in ("198.51.100.1", "198.51.100.2", "198.51.100.3")
+    ]
+    assert statuses == [201, 201, 429]
+
+
+def test_consent_routes_key_on_trusted_entry(client):
+    real = "10.0.3.2"
+    statuses = [
+        client.get(
+            "/oauth/txn/missing", headers={"X-Forwarded-For": f"198.51.100.{i}, {real}"}
+        ).status_code
+        for i in range(4)
+    ]
+    assert statuses == [404, 404, 404, 429]
+
+
+async def test_register_total_budget_caps_distinct_clients():
+    from starlette.responses import Response
+
+    passed = []
+
+    async def inner_app(scope, receive, send):
+        passed.append(scope["path"])
+        await Response(status_code=201)(scope, receive, send)
+
+    middleware = OAuthThrottleMiddleware(
+        inner_app,
+        register_per_minute=5,
+        oauth_per_minute=5,
+        register_total_per_minute=2,
     )
-    assert (
-        client_ip(Request({"type": "http", "headers": [], "client": None})) == "unknown"
-    )
+
+    async def call(path, ip):
+        sent = []
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            sent.append(message)
+
+        await middleware(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": path,
+                "headers": [(b"x-forwarded-for", ip.encode())],
+                "client": ("10.9.9.9", 1),
+            },
+            receive,
+            send,
+        )
+        return sent[0]["status"]
+
+    assert [await call("/register", f"203.0.113.{i}") for i in range(3)] == [
+        201,
+        201,
+        429,
+    ]
+    assert await call("/token", "203.0.113.50") == 201
+    assert passed == ["/register", "/register", "/token"]
 
 
 async def test_non_http_scopes_pass_through():
@@ -171,3 +246,145 @@ async def test_non_http_scopes_pass_through():
     )
     await middleware({"type": "lifespan"}, None, None)
     assert seen == ["lifespan"]
+
+
+def _client_docs():
+    return sum(1 for path in fake_db.docs if path.startswith("mcpOauthClients/"))
+
+
+async def test_starlette_enforces_urlencoded_form_limits():
+    import starlette
+    from starlette.formparsers import MultiPartException
+    from starlette.requests import Request
+
+    version = tuple(int(p) for p in starlette.__version__.split(".")[:3])
+    assert version >= (1, 3, 1)
+
+    async def receive():
+        return {"type": "http.request", "body": b"a=1&b=2", "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "headers": [(b"content-type", b"application/x-www-form-urlencoded")],
+        },
+        receive,
+    )
+    with pytest.raises(MultiPartException):
+        await request.form(max_fields=1)
+
+
+def test_oversized_declared_body_rejected_before_parsing(client):
+    before = _client_docs()
+    resp = client.post(
+        "/register",
+        content=b"{" + b" " * (MAX_OAUTH_BODY_BYTES + 1) + b"}",
+        headers={"Content-Type": "application/json", "X-Forwarded-For": "10.0.1.1"},
+    )
+    assert resp.status_code == 413
+    assert resp.json()["error"] == "invalid_request"
+    assert _client_docs() == before
+
+
+def test_oversized_token_form_rejected(client):
+    resp = client.post(
+        "/token",
+        content=b"&".join(b"f%d=x" % i for i in range(5000)),
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "X-Forwarded-For": "10.0.1.2",
+        },
+    )
+    assert resp.status_code == 413
+
+
+def test_body_at_limit_still_reaches_handler(client):
+    resp = client.post(
+        "/token",
+        content=b"grant_type=x&pad=" + b"a" * (MAX_OAUTH_BODY_BYTES - 17),
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "X-Forwarded-For": "10.0.1.3",
+        },
+    )
+    assert resp.status_code not in (413, 429)
+
+
+async def _run_middleware(chunks, headers, path="/token"):
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+
+    parsed = []
+
+    async def inner_app(scope, receive, send):
+        form = await Request(scope, receive).form()
+        parsed.append(len(form))
+        await JSONResponse({"ok": True})(scope, receive, send)
+
+    messages = [
+        {"type": "http.request", "body": chunk, "more_body": i < len(chunks) - 1}
+        for i, chunk in enumerate(chunks)
+    ]
+    consumed = 0
+
+    async def receive():
+        nonlocal consumed
+        consumed += 1
+        return messages[consumed - 1]
+
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    middleware = OAuthThrottleMiddleware(
+        inner_app, register_per_minute=10, oauth_per_minute=10, max_body_bytes=100
+    )
+    await middleware(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "headers": [
+                (b"content-type", b"application/x-www-form-urlencoded"),
+                *headers,
+            ],
+            "client": ("10.2.2.2", 1234),
+        },
+        receive,
+        send,
+    )
+    status = next(m["status"] for m in sent if m["type"] == "http.response.start")
+    return status, parsed, consumed
+
+
+async def test_streamed_body_without_length_is_cut_off():
+    chunks = [b"a=" + b"x" * 60] * 10
+    status, parsed, consumed = await _run_middleware(chunks, [])
+    assert status == 413
+    assert parsed == []
+    assert consumed == 2
+
+
+async def test_streamed_body_within_limit_passes():
+    status, parsed, _ = await _run_middleware([b"a=1&", b"b=2"], [])
+    assert status == 200
+    assert parsed == [2]
+
+
+async def test_malformed_content_length_rejected():
+    status, parsed, consumed = await _run_middleware(
+        [b"a=1"], [(b"content-length", b"nope")]
+    )
+    assert status == 413
+    assert parsed == []
+    assert consumed == 0
+
+
+async def test_unthrottled_paths_have_no_body_cap():
+    status, parsed, _ = await _run_middleware(
+        [b"a=" + b"x" * 500], [], path="/somewhere-else"
+    )
+    assert status == 200
+    assert parsed == [1]

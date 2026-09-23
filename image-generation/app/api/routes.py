@@ -81,9 +81,7 @@ async def generate_cover(request: CoverRequest) -> CoverResponse:
         HTTPException: If image generation fails
     """
     try:
-        logger.info(
-            f"Received request to generate cover with prompt: {request.prompt[:50]}..."
-        )
+        logger.info("Received cover generation request (%d chars)", len(request.prompt))
         image_service = get_image_service()
 
         # Generate image
@@ -106,17 +104,11 @@ async def generate_cover(request: CoverRequest) -> CoverResponse:
 
         return response
 
-    except RuntimeError as e:
-        logger.error(f"Runtime error during image generation: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Image generation failed: {str(e)}",
-        ) from e
     except Exception as e:
-        logger.error(f"Unexpected error during image generation: {str(e)}")
+        logger.exception("Image generation failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An unexpected error occurred: {str(e)}",
+            detail="Image generation failed.",
         ) from e
 
 
@@ -158,6 +150,6 @@ async def health_check():
             "device": settings.device,
             "model_loaded": model_loaded,
         }
-    except Exception as e:
-        logger.error(f"Health check failed: {str(e)}")
-        return {"status": "unhealthy", "error": str(e)}
+    except Exception:
+        logger.exception("Health check failed")
+        return {"status": "unhealthy"}

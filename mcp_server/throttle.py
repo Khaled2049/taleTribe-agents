@@ -35,20 +35,47 @@ logger = structlog.get_logger(__name__)
 REGISTER_PATH = "/register"
 # A healthy client hits /token on every access-token renewal, so this is looser.
 OAUTH_PATHS = frozenset({"/authorize", "/token", "/revoke"})
+MAX_OAUTH_BODY_BYTES = 16 * 1024
 
 
-def client_ip(request: Request) -> str:
-    """Best-effort client IP.
+class _BodyTooLarge(Exception):
+    pass
 
-    Cloud Run terminates at one proxy hop, so the first X-Forwarded-For entry is
-    the caller. The header is client-controlled and therefore spoofable — good
-    enough to bound accidental hammering and casual abuse, not a security
-    boundary.
-    """
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+
+def _oauth_error(status_code: int, error: str, description: str, headers=None):
+    return JSONResponse(
+        {"error": error, "error_description": description},
+        status_code=status_code,
+        headers=headers,
+    )
+
+
+def _too_large_response() -> JSONResponse:
+    return _oauth_error(413, "invalid_request", "Request body too large.")
+
+
+def _declared_length(scope) -> Optional[int]:
+    for name, value in scope.get("headers", []):
+        if name == b"content-length":
+            try:
+                return int(value)
+            except ValueError:
+                return -1
+    return None
+
+
+def client_ip(request: Request, trusted_hops: int = 1) -> str:
+    peer = request.client.host if request.client else "unknown"
+    if trusted_hops <= 0:
+        return peer
+    entries = [
+        entry.strip()
+        for entry in request.headers.get("x-forwarded-for", "").split(",")
+        if entry.strip()
+    ]
+    if len(entries) < trusted_hops:
+        return peer
+    return entries[-trusted_hops]
 
 
 class OAuthThrottleMiddleware:
@@ -60,9 +87,15 @@ class OAuthThrottleMiddleware:
         *,
         register_per_minute: int,
         oauth_per_minute: int,
+        register_total_per_minute: int = 0,
+        trusted_proxy_hops: int = 1,
+        max_body_bytes: int = MAX_OAUTH_BODY_BYTES,
     ) -> None:
         self._app = app
+        self._max_body_bytes = max_body_bytes
+        self._trusted_proxy_hops = trusted_proxy_hops
         self._register_limiter = PerUserRateLimiter(register_per_minute)
+        self._register_total_limiter = PerUserRateLimiter(register_total_per_minute)
         self._oauth_limiter = PerUserRateLimiter(oauth_per_minute)
 
     def _limiter_for(self, path: str) -> Optional[PerUserRateLimiter]:
@@ -83,27 +116,74 @@ class OAuthThrottleMiddleware:
             await self._app(scope, receive, send)
             return
 
-        ip = client_ip(Request(scope))
+        ip = client_ip(Request(scope), self._trusted_proxy_hops)
         if not await limiter.allow(ip):
-            logger.warning(
-                "mcp_oauth_throttled",
-                path=scope.get("path"),
-                method=scope.get("method"),
-                client_ip=ip,
+            await self._reject(scope, receive, send, "mcp_oauth_throttled", ip)
+            return
+        if (
+            limiter is self._register_limiter
+            and not await self._register_total_limiter.allow("*")
+        ):
+            await self._reject(
+                scope, receive, send, "mcp_oauth_register_budget_exhausted", ip
             )
-            # OAuth clients parse the RFC 6749 error shape; the 429 and
-            # Retry-After tell a well-behaved one when to come back.
-            response = JSONResponse(
-                {
-                    "error": "temporarily_unavailable",
-                    "error_description": (
-                        "Too many requests to this endpoint. Retry in a minute."
-                    ),
-                },
-                status_code=429,
-                headers={"Retry-After": "60"},
-            )
-            await response(scope, receive, send)
             return
 
-        await self._app(scope, receive, send)
+        await self._call_with_body_limit(scope, receive, send)
+
+    async def _reject(self, scope, receive, send, event: str, ip: str) -> None:
+        logger.warning(
+            event,
+            path=scope.get("path"),
+            method=scope.get("method"),
+            client_ip=ip,
+        )
+        response = _oauth_error(
+            429,
+            "temporarily_unavailable",
+            "Too many requests to this endpoint. Retry in a minute.",
+            headers={"Retry-After": "60"},
+        )
+        await response(scope, receive, send)
+
+    async def _call_with_body_limit(self, scope, receive, send) -> None:
+        limit = self._max_body_bytes
+        declared = _declared_length(scope)
+        if declared is not None and not 0 <= declared <= limit:
+            logger.warning(
+                "mcp_oauth_body_rejected",
+                path=scope.get("path"),
+                declared_length=declared,
+            )
+            await _too_large_response()(scope, receive, send)
+            return
+
+        received = 0
+        response_started = False
+
+        async def limited_receive():
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > limit:
+                    raise _BodyTooLarge()
+            return message
+
+        async def tracking_send(message):
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self._app(scope, limited_receive, tracking_send)
+        except _BodyTooLarge:
+            logger.warning(
+                "mcp_oauth_body_rejected",
+                path=scope.get("path"),
+                received_bytes=received,
+            )
+            if response_started:
+                raise
+            await _too_large_response()(scope, receive, send)

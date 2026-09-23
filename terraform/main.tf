@@ -248,6 +248,16 @@ resource "google_cloud_run_v2_service" "app" {
       }
 
       env {
+        name  = "MCP_TRUSTED_PROXY_HOPS"
+        value = tostring(var.mcp_trusted_proxy_hops)
+      }
+
+      env {
+        name  = "MCP_REGISTER_REQUESTS_PER_MINUTE_TOTAL"
+        value = tostring(var.mcp_register_requests_per_minute_total)
+      }
+
+      env {
         name  = "FIREBASE_FUNCTIONS_SERVICE_ACCOUNT"
         value = var.firebase_functions_service_account
       }
@@ -347,7 +357,7 @@ resource "google_cloud_run_v2_service" "app" {
 # enable_mcp rather than enable_mcp_writes so that flipping writes on does not
 # also require a TTL policy change — the collection is simply unused until then.
 resource "google_firestore_field" "mcp_oauth_ttl" {
-  for_each = var.enable_mcp ? toset(["mcpOauthTxns", "mcpOauthCodes", "mcpOauthTokens", "mcpOauthClients", "mcpWrites"]) : toset([])
+  for_each = var.enable_mcp ? toset(["mcpOauthTxns", "mcpOauthCodes", "mcpOauthTokens", "mcpOauthFamilies", "mcpOauthClients", "mcpWrites"]) : toset([])
 
   project    = var.project_id
   database   = "(default)"

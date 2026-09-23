@@ -268,7 +268,7 @@ def test_revoke_token_family_kills_live_descendants_only():
     store.consume_refresh_token(hash_token("rt-1"))  # rotates gen 1 away
 
     # Only the two still-live gen-2 documents are rewritten.
-    assert store.revoke_token_family("fam-1") == 2
+    assert store.revoke_token_family("fam-1", 2592000) == 2
 
     for token in ("at-1", "rt-1", "at-2", "rt-2"):
         assert store.get_token(hash_token(token)) is None
@@ -292,10 +292,83 @@ def test_every_revocation_path_stamps_revoked_at():
         assert record["revokedAt"] is not None
 
     _mint_pair(store, access="at-3", refresh="rt-3", family_id="fam-3")
-    store.revoke_token_family("fam-3")  # reuse detection
+    store.revoke_token_family("fam-3", 2592000)  # reuse detection
     for token in ("at-3", "rt-3"):
         record = store.get_token(hash_token(token), include_revoked=True)
         assert record["revokedAt"] is not None
+
+
+def test_mint_refused_after_family_revoked_with_no_live_tokens():
+    store, _ = _store()
+    _mint_pair(store, access="at-1", refresh="rt-1", family_id="fam-r")
+    store.consume_refresh_token(hash_token("rt-1"))
+    assert store.revoke_token_family("fam-r", 2592000) == 0
+
+    assert (
+        store.save_token_pair(
+            access_hash=hash_token("at-2"),
+            refresh_hash=hash_token("rt-2"),
+            uid="user-a",
+            client_id="c1",
+            scopes=["stories:read"],
+            family_id="fam-r",
+            access_ttl_seconds=3600,
+            refresh_ttl_seconds=2592000,
+        )
+        is False
+    )
+    assert store.get_token(hash_token("at-2")) is None
+    assert store.get_token(hash_token("rt-2")) is None
+
+
+@pytest.mark.parametrize("family_exists", [True, False])
+def test_revocation_during_mint_commit_is_not_lost(family_exists):
+    store, db = _store()
+    if family_exists:
+        _mint_pair(store, access="at-1", refresh="rt-1", family_id="fam-c")
+        store.consume_refresh_token(hash_token("rt-1"))
+    fired = []
+
+    def revoke_once():
+        if not fired:
+            fired.append(True)
+            store.revoke_token_family("fam-c", 2592000)
+
+    db.before_commit = revoke_once
+    saved = store.save_token_pair(
+        access_hash=hash_token("at-2"),
+        refresh_hash=hash_token("rt-2"),
+        uid="user-a",
+        client_id="c1",
+        scopes=["stories:read"],
+        family_id="fam-c",
+        access_ttl_seconds=3600,
+        refresh_ttl_seconds=2592000,
+    )
+    assert fired and saved is False
+    assert "mcpOauthTokens/" + hash_token("at-2") not in db.docs
+    assert "mcpOauthTokens/" + hash_token("rt-2") not in db.docs
+
+
+def test_revoked_family_rejects_tokens_the_walk_missed():
+    store, db = _store()
+    _mint_pair(store, access="at-1", refresh="rt-1", family_id="fam-w")
+    db.collection("mcpOauthFamilies").document("fam-w").set(
+        {"revoked": True}, merge=True
+    )
+    assert store.get_token(hash_token("at-1")) is None
+    assert store.get_token(hash_token("rt-1")) is None
+    assert store.get_token(hash_token("rt-1"), include_revoked=True) is not None
+
+
+def test_mint_records_family_with_refresh_lifetime():
+    store, db = _store()
+    _mint_pair(store, family_id="fam-t")
+    family = db.docs["mcpOauthFamilies/fam-t"][0]
+    assert family["revoked"] is False
+    assert family["uid"] == "user-a"
+    remaining = as_utc(family["expiresAt"]) - datetime.now(timezone.utc)
+    assert timedelta(days=29) < remaining <= timedelta(days=30)
 
 
 def test_as_utc_normalizes_naive_and_rejects_non_datetimes():
@@ -312,8 +385,8 @@ def test_as_utc_normalizes_naive_and_rejects_non_datetimes():
 def test_revoke_token_family_ignores_missing_family():
     store, _ = _store()
     _mint_pair(store)
-    assert store.revoke_token_family("") == 0
-    assert store.revoke_token_family("fam-unknown") == 0
+    assert store.revoke_token_family("", 2592000) == 0
+    assert store.revoke_token_family("fam-unknown", 2592000) == 0
     assert store.get_token(hash_token("rt-1")) is not None
 
 
@@ -520,6 +593,37 @@ async def test_refresh_reuse_revokes_the_whole_family():
     # The thief's freshly minted pair died with it — the race has no winner.
     assert await provider.load_access_token(second.access_token) is None
     assert store.get_token(hash_token(second.refresh_token)) is None
+
+
+async def test_replay_between_rotation_and_mint_kills_the_successor():
+    import anyio
+
+    store, _ = _store()
+    provider = _provider(store)
+    client = _client()
+    code = await _granted_code(provider, client)
+    loaded = await provider.load_authorization_code(client, code)
+    first = await provider.exchange_authorization_code(client, loaded)
+    stolen = await provider.load_refresh_token(client, first.refresh_token)
+
+    consume = store.consume_refresh_token
+
+    def consume_then_replay(token_hash):
+        record = consume(token_hash)
+        replayed = anyio.from_thread.run(
+            provider.load_refresh_token, client, first.refresh_token
+        )
+        assert replayed is None
+        return record
+
+    store.consume_refresh_token = consume_then_replay
+    with pytest.raises(TokenError) as exc:
+        await provider.exchange_refresh_token(client, stolen, ["stories:read"])
+    assert exc.value.error == "invalid_grant"
+    assert not any(
+        path.startswith("mcpOauthTokens/") and not data.get("revoked")
+        for path, (data, _) in store._db.docs.items()
+    )
 
 
 async def test_refresh_reuse_spares_other_grants():

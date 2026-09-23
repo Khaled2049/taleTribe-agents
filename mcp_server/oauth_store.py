@@ -23,6 +23,8 @@ CLIENTS_COLLECTION = "mcpOauthClients"
 TXNS_COLLECTION = "mcpOauthTxns"
 CODES_COLLECTION = "mcpOauthCodes"
 TOKENS_COLLECTION = "mcpOauthTokens"
+FAMILIES_COLLECTION = "mcpOauthFamilies"
+MINT_ATTEMPTS = 3
 
 TXN_STATUS_PENDING = "pending"
 TXN_STATUS_COMPLETED = "completed"
@@ -230,32 +232,70 @@ class OAuthStore:
         family_id: str,
         access_ttl_seconds: int,
         refresh_ttl_seconds: int,
-    ) -> None:
-        now = _now()
-        base = {
-            "uid": uid,
-            "clientId": client_id,
-            "scopes": scopes,
-            "familyId": family_id,
-            "revoked": False,
-        }
+    ) -> bool:
+        family_ref = self._db.collection(FAMILIES_COLLECTION).document(family_id)
         tokens = self._db.collection(TOKENS_COLLECTION)
-        tokens.document(access_hash).set(
-            {
-                **base,
-                "type": "access",
-                "pairedWith": refresh_hash,
-                "expiresAt": now + timedelta(seconds=access_ttl_seconds),
-            }
-        )
-        tokens.document(refresh_hash).set(
-            {
-                **base,
-                "type": "refresh",
-                "pairedWith": access_hash,
+        for _ in range(MINT_ATTEMPTS):
+            family = family_ref.get()
+            if family.exists and (family.to_dict() or {}).get("revoked"):
+                return False
+            now = _now()
+            family_fields = {
+                "uid": uid,
+                "clientId": client_id,
+                "revoked": False,
                 "expiresAt": now + timedelta(seconds=refresh_ttl_seconds),
             }
-        )
+            base = {
+                "uid": uid,
+                "clientId": client_id,
+                "scopes": scopes,
+                "familyId": family_id,
+                "revoked": False,
+            }
+            batch = self._db.batch()
+            if family.exists:
+                batch.update(
+                    family_ref,
+                    family_fields,
+                    option=self._db.write_option(last_update_time=family.update_time),
+                )
+            else:
+                batch.create(family_ref, family_fields)
+            batch.set(
+                tokens.document(access_hash),
+                {
+                    **base,
+                    "type": "access",
+                    "pairedWith": refresh_hash,
+                    "expiresAt": now + timedelta(seconds=access_ttl_seconds),
+                },
+            )
+            batch.set(
+                tokens.document(refresh_hash),
+                {
+                    **base,
+                    "type": "refresh",
+                    "pairedWith": access_hash,
+                    "expiresAt": now + timedelta(seconds=refresh_ttl_seconds),
+                },
+            )
+            try:
+                batch.commit()
+                return True
+            except (
+                gcp_exceptions.AlreadyExists,
+                gcp_exceptions.FailedPrecondition,
+                gcp_exceptions.NotFound,
+            ):
+                continue
+        return False
+
+    def family_revoked(self, family_id: str) -> bool:
+        if not family_id:
+            return False
+        snap = self._db.collection(FAMILIES_COLLECTION).document(family_id).get()
+        return bool(snap.exists and (snap.to_dict() or {}).get("revoked"))
 
     def get_token(
         self, token_hash: str, *, include_revoked: bool = False
@@ -275,11 +315,13 @@ class OAuthStore:
         data = snap.to_dict()
         if _expired(data):
             return None
-        if data.get("revoked") and not include_revoked:
+        if include_revoked:
+            return data
+        if data.get("revoked") or self.family_revoked(data.get("familyId") or ""):
             return None
         return data
 
-    def revoke_token_family(self, family_id: str) -> int:
+    def revoke_token_family(self, family_id: str, retain_seconds: int) -> int:
         """Revoke every still-live token descended from one authorization.
 
         Returns the number actually revoked. Already-revoked documents are left
@@ -290,6 +332,15 @@ class OAuthStore:
         """
         if not family_id:
             return 0
+        now = _now()
+        self._db.collection(FAMILIES_COLLECTION).document(family_id).set(
+            {
+                "revoked": True,
+                "revokedAt": now,
+                "expiresAt": now + timedelta(seconds=retain_seconds),
+            },
+            merge=True,
+        )
         tokens = self._db.collection(TOKENS_COLLECTION)
         revoked = 0
         for snap in tokens.where(

@@ -43,6 +43,7 @@ ENV ENABLE_LOCAL_IMAGE_GENERATION=false
 
 # Set Python path
 ENV PYTHONPATH=/app
+ENV HOST=0.0.0.0
 
 # Expose port (Cloud Run will set PORT env var, default to 8000 for local)
 EXPOSE 8080
