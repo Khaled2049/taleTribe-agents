@@ -45,11 +45,11 @@ def _verify_firebase_uid(
     raw_token: str,
     *,
     project_id: str,
-    environment: str,
+    allow_emulator_tokens: bool,
     auth_request: google_requests.Request,
 ) -> str:
     """Firebase ID token -> uid. Emulator tokens (unsigned) accepted only in dev."""
-    if environment != "production" and os.getenv("FIREBASE_AUTH_EMULATOR_HOST"):
+    if allow_emulator_tokens and os.getenv("FIREBASE_AUTH_EMULATOR_HOST"):
         claims = google_jwt.decode(raw_token, verify=False)
     else:
         claims = google_id_token.verify_firebase_token(
@@ -65,9 +65,10 @@ def build_oauth_router(
     provider: FirestoreOAuthProvider,
     *,
     project_id: str,
-    environment: str,
+    allow_emulator_tokens: bool,
     auth_request: google_requests.Request,
     ip_rate_limiter: PerUserRateLimiter,
+    trusted_proxy_hops: int,
     as_metadata: dict,
     resource_metadata: dict,
     access_gate: AccessGate,
@@ -110,7 +111,7 @@ def build_oauth_router(
 
     @router.get("/oauth/txn/{txn_id}")
     async def get_txn(txn_id: str, request: Request):
-        if not await ip_rate_limiter.allow(client_ip(request)):
+        if not await ip_rate_limiter.allow(client_ip(request, trusted_proxy_hops)):
             raise HTTPException(status_code=429, detail="Too many requests")
         try:
             return await provider.get_txn_info(txn_id)
@@ -123,7 +124,7 @@ def build_oauth_router(
 
     @router.post("/oauth/complete")
     async def complete(body: CompleteRequest, request: Request):
-        if not await ip_rate_limiter.allow(client_ip(request)):
+        if not await ip_rate_limiter.allow(client_ip(request, trusted_proxy_hops)):
             raise HTTPException(status_code=429, detail="Too many requests")
 
         if not body.approve:
@@ -146,7 +147,7 @@ def build_oauth_router(
                     _verify_firebase_uid,
                     body.id_token,
                     project_id=project_id,
-                    environment=environment,
+                    allow_emulator_tokens=allow_emulator_tokens,
                     auth_request=auth_request,
                 )
             )

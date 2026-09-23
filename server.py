@@ -1,5 +1,6 @@
 """Unified HTTP server for TheTaleTribe services (agents and optional image generation)."""
 
+import asyncio
 import logging
 import os
 import sys
@@ -80,14 +81,24 @@ def _configure_logging() -> None:
 async def _verify_internal_token(request: Request) -> None:
     """Verify that the request comes from Firebase Functions via Google OIDC token.
 
-    No-op outside production so local dev works without credentials.
+    Skipped only when ALLOW_INSECURE_LOCAL_AUTH is set outside production;
+    otherwise a missing audience rejects every call.
     In production: validates Bearer token signature, expiry, audience (AGENT_SERVICE_URL),
     and requires the token email claim to be on the configured caller allowlist.
     """
     audience: Optional[str] = request.app.state.oidc_audience
     allowed_callers: frozenset = request.app.state.allowed_callers
     if not audience:
-        return
+        if getattr(request.app.state, "insecure_local_auth", False):
+            return
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "UNAUTHORIZED",
+                "message": "Internal authentication is not configured",
+                "details": None,
+            },
+        )
 
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
@@ -312,6 +323,21 @@ def create_app() -> FastAPI:
     app.state.oidc_audience = settings.oidc_audience
     app.state.allowed_callers = settings.allowed_callers
     app.state.google_auth_request = google_requests.Request()
+    app.state.insecure_local_auth = settings.insecure_local_auth
+    app.state.bind_host = settings.bind_host
+
+    if app.state.insecure_local_auth:
+        logger.warning(
+            "insecure_local_auth_enabled",
+            environment=settings.environment,
+            bind_host=app.state.bind_host,
+        )
+    elif not app.state.oidc_audience:
+        logger.warning(
+            "internal_auth_unconfigured",
+            environment=settings.environment,
+            detail="internal routes will reject every call",
+        )
 
     if app.state.oidc_audience:
         logger.info("oidc_audience_set", audience=app.state.oidc_audience)
@@ -340,7 +366,25 @@ def create_app() -> FastAPI:
     )
     app.state.image_generation_available = image_router is not None
     if image_router is not None:
-        app.include_router(image_router, tags=["Image Generation"])
+        image_slots = asyncio.Semaphore(settings.image_generation_max_concurrent)
+
+        async def _image_generation_slot():
+            if image_slots.locked():
+                raise HTTPException(
+                    status_code=429,
+                    detail="Image generation is busy. Try again shortly.",
+                )
+            async with image_slots:
+                yield
+
+        app.include_router(
+            image_router,
+            tags=["Image Generation"],
+            dependencies=[
+                Depends(_verify_internal_token),
+                Depends(_image_generation_slot),
+            ],
+        )
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(_: Request, exc: RequestValidationError):
@@ -742,11 +786,12 @@ def create_app() -> FastAPI:
             build_oauth_router(
                 mcp_bundle.provider,
                 project_id=settings.google_cloud_project,
-                environment=settings.environment,
+                allow_emulator_tokens=settings.insecure_local_auth,
                 auth_request=app.state.google_auth_request,
                 ip_rate_limiter=PerUserRateLimiter(
                     settings.mcp_oauth_requests_per_minute_per_ip
                 ),
+                trusted_proxy_hops=settings.mcp_trusted_proxy_hops,
                 as_metadata=mcp_bundle.as_metadata,
                 resource_metadata=mcp_bundle.resource_metadata,
                 access_gate=mcp_bundle.access_gate,
@@ -761,6 +806,10 @@ def create_app() -> FastAPI:
                 mcp_asgi_app,
                 register_per_minute=settings.mcp_register_requests_per_minute_per_ip,
                 oauth_per_minute=settings.mcp_oauth_requests_per_minute_per_ip,
+                register_total_per_minute=(
+                    settings.mcp_register_requests_per_minute_total
+                ),
+                trusted_proxy_hops=settings.mcp_trusted_proxy_hops,
             ),
         )
         logger.info("mcp_mounted", issuer=settings.resolved_mcp_issuer_url)
@@ -784,4 +833,4 @@ if __name__ == "__main__":
     import uvicorn
 
     port = int(os.getenv("PORT", "8000"))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host=app.state.bind_host, port=port)

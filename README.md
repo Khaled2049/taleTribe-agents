@@ -31,8 +31,8 @@ poetry install --with dev,local-embeddings
 # Install with local image generation (heavy — ~5 GB)
 poetry install --with dev,image-gen
 
-# Run the server
-poetry run python server.py
+# Run the server (local only: see "Internal authentication" below)
+ENVIRONMENT=development ALLOW_INSECURE_LOCAL_AUTH=true poetry run python server.py
 ```
 
 For the PostgreSQL context pipeline, start `story-data`'s pgvector Compose stack
@@ -48,7 +48,7 @@ Local run against the emulators:
 
 ```bash
 # Firestore + Auth emulators (from taleTribe-frontend): firebase emulators:start
-poetry run python server.py
+ENVIRONMENT=development ALLOW_INSECURE_LOCAL_AUTH=true poetry run python server.py
 # MCP endpoint: http://localhost:8000/mcp — test with:
 npx @modelcontextprotocol/inspector
 ```
@@ -58,5 +58,7 @@ Set `ENABLE_MCP=false` to run the service without it. Full connection and tool r
 ## Operational notes
 
 - **Rate limiting** is per-process. The `MAX_REQUESTS_PER_MINUTE_PER_USER` env var caps requests per user *per instance*. On horizontally-scaled deployments (Cloud Run with N instances), the effective ceiling is `N * MAX_REQUESTS_PER_MINUTE_PER_USER`. For a true global cap, back the limiter with Redis/Memorystore. The MCP tools have their own limiter (`MCP_MAX_REQUESTS_PER_MINUTE_PER_USER`, default 60) with the same caveat. Each limiter's bucket table is a fixed-capacity LRU (20 000 keys, ~4 MB) so that IP-keyed instances can't be grown without bound by a flood of distinct source addresses; eviction is fail-open, and a climbing `PerUserRateLimiter.evictions` means the key space is outrunning the table.
-- **Unauthenticated MCP OAuth endpoints** are throttled per client IP, since Cloud Run invoker access is public and `/register` writes a Firestore document with no credential required: `MCP_REGISTER_REQUESTS_PER_MINUTE_PER_IP` (default 5) and `MCP_OAUTH_REQUESTS_PER_MINUTE_PER_IP` (default 30, covering `/authorize`, `/token`, `/revoke` and the consent-handoff routes). Discovery documents are never throttled — a client that can't read them can't start the flow. Client registrations expire after 7 days unused; the window slides out to 90 days once a client is actually used, so an active connection is never collected.
+- **Unauthenticated MCP OAuth endpoints** are throttled per client IP, since Cloud Run invoker access is public and `/register` writes a Firestore document with no credential required: `MCP_REGISTER_REQUESTS_PER_MINUTE_PER_IP` (default 5) and `MCP_OAUTH_REQUESTS_PER_MINUTE_PER_IP` (default 30, covering `/authorize`, `/token`, `/revoke` and the consent-handoff routes). `/register` also has a per-instance total across all callers, `MCP_REGISTER_REQUESTS_PER_MINUTE_TOTAL` (default 20). The client IP is the `X-Forwarded-For` entry `MCP_TRUSTED_PROXY_HOPS` places from the right (default 1, the address Cloud Run's front end appends), so entries a client prepends cannot mint fresh buckets; set it to 2 behind an external HTTPS load balancer, or 0 to ignore the header. Discovery documents are never throttled — a client that can't read them can't start the flow. Client registrations expire after 7 days unused; the window slides out to 90 days once a client is actually used, so an active connection is never collected.
 - **Production env vars**: `AGENT_SERVICE_URL` (OIDC audience) and `FIREBASE_FUNCTIONS_SERVICE_ACCOUNT` (or `ALLOWED_SERVICE_ACCOUNTS`) must be set when `ENVIRONMENT=production`. With `ENABLE_MCP=true` (the default), `MCP_CONSENT_URL` is also required. The app fails fast at startup otherwise.
+- **Internal authentication** fails closed. `ENVIRONMENT` must be `development`, `test` or `production`; any other value, including `prod` or `Production`, stops startup. Outside production there is no OIDC audience, so the internal routes (`/agent/execute`, `/credits/*`, `/assistant/*`, and the image routes when enabled) reject every call unless `ALLOW_INSECURE_LOCAL_AUTH=true` is set. That switch also lets the MCP consent page accept unsigned Firebase emulator tokens, and startup refuses it when `ENVIRONMENT=production` or on Cloud Run (`K_SERVICE` set). Outside production the server binds to `127.0.0.1` unless `HOST` says otherwise; the Docker image sets `HOST=0.0.0.0`.
+- **Local image generation** (`ENABLE_LOCAL_IMAGE_GENERATION`) is off by default. When enabled, `/generate-cover` and `/image-health` sit behind the same internal authentication and run at most `IMAGE_GENERATION_MAX_CONCURRENT` (default 1) generations at once; further requests get 429. The standalone `image-generation` app has no authentication and binds to `127.0.0.1` unless `HOST` is set.

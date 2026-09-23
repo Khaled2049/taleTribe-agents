@@ -430,7 +430,9 @@ class FirestoreOAuthProvider:
         hours means someone kept a copy.
         """
         family_id = record.get("familyId")
-        revoked = await _run_sync(self._store.revoke_token_family, family_id or "")
+        revoked = await _run_sync(
+            self._store.revoke_token_family, family_id or "", self._refresh_ttl
+        )
         age = seconds_since_rotation(record)
         logger.warning(
             "mcp_oauth_refresh_token_reuse",
@@ -501,7 +503,7 @@ class FirestoreOAuthProvider:
     ) -> OAuthToken:
         access = new_secret("mcp_at")
         refresh = new_secret("mcp_rt")
-        await _run_sync(
+        saved = await _run_sync(
             self._store.save_token_pair,
             access_hash=hash_token(access),
             refresh_hash=hash_token(refresh),
@@ -512,6 +514,17 @@ class FirestoreOAuthProvider:
             access_ttl_seconds=self._access_ttl,
             refresh_ttl_seconds=self._refresh_ttl,
         )
+        if not saved:
+            logger.warning(
+                "mcp_oauth_mint_refused_revoked_family",
+                client_id=client_id,
+                uid=uid,
+                family_id=family_id,
+            )
+            raise TokenError(
+                error="invalid_grant",
+                error_description="this authorization has been revoked",
+            )
         return OAuthToken(
             access_token=access,
             token_type="Bearer",

@@ -218,6 +218,43 @@ class FakeCollection(FakeQuery):
         return FakeDocRef(self._db, f"{self._prefix}/{doc_id}")
 
 
+class FakeWriteBatch:
+    def __init__(self, db: "FakeFirestoreClient"):
+        self._db = db
+        self._ops: list[tuple[str, FakeDocRef, dict, Optional[FakeWriteOption]]] = []
+
+    def create(self, ref: FakeDocRef, data: dict) -> None:
+        self._ops.append(("create", ref, data, None))
+
+    def set(self, ref: FakeDocRef, data: dict, merge: bool = False) -> None:
+        self._ops.append(("merge" if merge else "set", ref, data, None))
+
+    def update(
+        self, ref: FakeDocRef, data: dict, option: Optional[FakeWriteOption] = None
+    ) -> None:
+        self._ops.append(("update", ref, data, option))
+
+    def commit(self) -> None:
+        if self._db.before_commit is not None:
+            self._db.before_commit()
+        for kind, ref, _, option in self._ops:
+            entry = self._db.docs.get(ref._path)
+            if kind == "create" and entry is not None:
+                raise gcp_exceptions.AlreadyExists(f"document {ref._path} exists")
+            if kind == "update":
+                if entry is None:
+                    raise gcp_exceptions.NotFound(f"no document {ref._path}")
+                if option is not None and option.last_update_time != entry[1]:
+                    raise gcp_exceptions.FailedPrecondition("stale update_time")
+        for kind, ref, data, _ in self._ops:
+            if kind in ("create", "set"):
+                self._db.docs[ref._path] = (copy.deepcopy(data), next(_versions))
+            else:
+                merged = dict(self._db.docs.get(ref._path, ({}, 0))[0])
+                merged.update(copy.deepcopy(data))
+                self._db.docs[ref._path] = (merged, next(_versions))
+
+
 class FakeFirestoreClient:
     def __init__(self, project: str = "test-project"):
         self.project = project
@@ -225,9 +262,13 @@ class FakeFirestoreClient:
         self.docs: dict[str, tuple[dict, int]] = {}
         # Test hook: called with the doc path at the top of every update().
         self.before_update: Optional[Callable[[str], None]] = None
+        self.before_commit: Optional[Callable[[], None]] = None
 
     def collection(self, name: str) -> FakeCollection:
         return FakeCollection(self, name)
+
+    def batch(self) -> FakeWriteBatch:
+        return FakeWriteBatch(self)
 
     @staticmethod
     def write_option(*, last_update_time) -> FakeWriteOption:

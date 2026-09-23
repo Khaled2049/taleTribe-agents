@@ -163,6 +163,28 @@ variable "mcp_access_cache_ttl_seconds" {
   default     = 60
 }
 
+variable "mcp_trusted_proxy_hops" {
+  description = "How many X-Forwarded-For entries, counted from the right, were appended by Google infrastructure in front of this service. The OAuth throttle keys on the entry at that position and ignores anything a client prepends. 1 for direct Cloud Run ingress; raise it only when adding a proxy such as an external HTTPS load balancer."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.mcp_trusted_proxy_hops >= 0 && var.mcp_trusted_proxy_hops <= 5
+    error_message = "mcp_trusted_proxy_hops must be between 0 and 5."
+  }
+}
+
+variable "mcp_register_requests_per_minute_total" {
+  description = "Per-instance cap on /register across all clients, applied after the per-IP cap. Bounds unauthenticated Firestore writes from callers with many real addresses. 0 disables it."
+  type        = number
+  default     = 20
+
+  validation {
+    condition     = var.mcp_register_requests_per_minute_total >= 0
+    error_message = "mcp_register_requests_per_minute_total must be >= 0."
+  }
+}
+
 variable "mcp_max_writes_per_minute_per_user" {
   description = "Per-user cap on MCP write tool calls, on top of mcp_max_requests_per_minute_per_user. Same per-instance caveat. Deliberately tight: it is what stops a burst outrunning the eventually-consistent story-count cap."
   type        = number
