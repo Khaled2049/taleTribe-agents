@@ -608,8 +608,10 @@ async def run_assistant(
                             normalized = validate_tool_arguments(
                                 call.name, raw_arguments
                             )
-                            parsed = TOOL_SCHEMAS[call.name].model_validate(normalized)
-                            result = await execute_tool(call.name, parsed, runtime)
+                            tool_args = TOOL_SCHEMAS[call.name].model_validate(
+                                normalized
+                            )
+                            result = await execute_tool(call.name, tool_args, runtime)
                     except (ValueError, ValidationError, UnknownToolError, KeyError):
                         code = ErrorCode.PROVIDER_ERROR
                         yield events.emit(

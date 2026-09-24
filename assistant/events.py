@@ -53,7 +53,7 @@ class EventModel(BaseModel):
 
 
 class BaseEvent(EventModel):
-    v: Literal[ASSISTANT_PROTOCOL_VERSION]
+    v: Literal[ASSISTANT_PROTOCOL_VERSION]  # type: ignore[valid-type]  # Runtime schema shares the version constant.
     run_id: str = Field(min_length=1, max_length=MAX_ID_CHARS)
     seq: int = Field(ge=0)
 
@@ -219,12 +219,14 @@ class RunEvents:
     def emit(self, event_cls: type[BaseEvent], **fields: Any) -> BaseEvent:
         if self._terminated:
             raise RuntimeError("run already produced its terminal event")
-        event = event_cls(
-            v=ASSISTANT_PROTOCOL_VERSION,
-            run_id=self.run_id,
-            seq=self._seq,
-            type=get_args(event_cls.model_fields["type"].annotation)[0],
-            **fields,
+        event = event_cls.model_validate(
+            {
+                "v": ASSISTANT_PROTOCOL_VERSION,
+                "run_id": self.run_id,
+                "seq": self._seq,
+                "type": get_args(event_cls.model_fields["type"].annotation)[0],
+                **fields,
+            }
         )
         self._seq += 1
         if event.type in TERMINAL_EVENT_TYPES:  # type: ignore[attr-defined]

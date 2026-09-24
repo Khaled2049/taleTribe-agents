@@ -118,7 +118,7 @@ class EnhanceWizardInputParams(StrictModel):
     user_id: str = _user_id_field(default=...)
 
 
-_ACTION_SCHEMAS = {
+_ACTION_SCHEMAS: Dict[str, type[StrictModel]] = {
     "brainstormIdeas": BrainstormIdeasParams,
     "generateNextLines": GenerateNextLinesParams,
     "enhanceText": EnhanceTextParams,

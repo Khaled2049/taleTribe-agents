@@ -28,3 +28,7 @@ When reporting, please include as much of the following as you can:
 - Once resolved, I'm happy to credit you for the disclosure if you'd like.
 
 Thank you for helping keep taleTribe-agents and its users safe.
+
+## Private vulnerability reporting
+
+You can also use [GitHub private vulnerability reporting](https://github.com/Khaled2049/taleTribe-agents/security/advisories/new). Repository code, dependencies, workflows, and deployment configuration are in scope. Include reproduction steps and the affected commit; redact credentials and personal data.

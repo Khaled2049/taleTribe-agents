@@ -520,6 +520,14 @@ async def test_code_exchange_mints_tokens_bound_to_uid():
     assert access.scopes == ["stories:read"]
 
 
+async def test_code_without_expiry_is_rejected(monkeypatch):
+    store, _ = _store()
+    provider = _provider(store)
+    client = _client()
+    monkeypatch.setattr(store, "load_code", lambda _: {"clientId": client.client_id})
+    assert await provider.load_authorization_code(client, "malformed-code") is None
+
+
 async def test_code_reuse_is_rejected():
     store, _ = _store()
     provider = _provider(store)

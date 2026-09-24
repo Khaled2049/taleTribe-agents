@@ -338,7 +338,7 @@ async def list_entities(story_id: str, uid: str, entity_type: str) -> Page:
     await get_owned_story(story_id, uid)
     rows = await story_data.client().list_entities(uid, story_id, entity_type)
     capped, truncated = _cap(rows if isinstance(rows, list) else [])
-    entities = []
+    entities: list[dict[str, Any]] = []
     for record in capped:
         descriptor = None
         for field in _DESCRIPTOR_FIELDS[entity_type]:
