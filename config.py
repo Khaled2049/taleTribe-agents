@@ -115,7 +115,7 @@ class Settings(BaseSettings):
     @classmethod
     def clamp_rpm(cls, v: object) -> int:
         try:
-            return max(0, int(v))  # type: ignore[arg-type]
+            return max(0, int(v))  # type: ignore[call-overload]
         except (TypeError, ValueError):
             return 20
 
@@ -123,7 +123,7 @@ class Settings(BaseSettings):
     @classmethod
     def clamp_write_rpm(cls, v: object) -> int:
         try:
-            return max(0, int(v))  # type: ignore[arg-type]
+            return max(0, int(v))  # type: ignore[call-overload]
         except (TypeError, ValueError):
             return 6
 

@@ -11,31 +11,29 @@ concurrency:
 
 permissions:
   contents: read
-
 jobs:
   validate:
-    name: Validate Changes
+    name: taleTribe-agents / python-terraform
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.11"
 
       - name: Install Poetry
-        uses: snok/install-poetry@v1
+        uses: snok/install-poetry@a783c322200f0519c7926aa6faa857c4e23e9263  # v1
         with:
-          version: latest
+          version: 2.1.3
           virtualenvs-create: true
           virtualenvs-in-project: true
 
       - name: Cache Poetry virtualenv
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: .venv
           key: venv-${{ runner.os }}-${{ github.repository }}-py3.11-${{ hashFiles('poetry.lock') }}
@@ -56,18 +54,18 @@ jobs:
         run: poetry run ruff check .
 
       - name: Run tests
-        run: poetry run pytest tests/ -v
         env:
           USE_MOCK: "true"
           GOOGLE_CLOUD_PROJECT: "test-project"
 
+        run: poetry run pytest tests/ -v
       - name: Audit locked dependencies
         run: |
           python -m pip install pip-audit==2.10.1
           python scripts/audit_lock.py
 
       - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd  # v3
         with:
           terraform_version: 1.14.4
 
@@ -80,3 +78,37 @@ jobs:
         run: |
           terraform init -backend=false
           terraform validate
+  typecheck:
+    name: taleTribe-agents / typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.11'
+      - uses: snok/install-poetry@a783c322200f0519c7926aa6faa857c4e23e9263  # v1
+        with:
+          version: 2.1.3
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+      - run: poetry install --with dev
+      - run: python -m pip --python .venv/bin/python install mypy==1.19.1
+      - run: poetry run mypy --ignore-missing-imports agents assistant mcp_server config.py server.py
+  package:
+    name: taleTribe-agents / package
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.11'
+      - uses: snok/install-poetry@a783c322200f0519c7926aa6faa857c4e23e9263  # v1
+        with:
+          version: 2.1.3
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+      - run: poetry install --with dev
+      - run: poetry check --lock
+      - run: docker build --tag service:ci .

@@ -65,7 +65,7 @@ def compose_entity_text(kind: str, data: dict) -> str:
             parts.append(_stringify(data["description"]))
         return "\n".join(p for p in parts if p)
 
-    parts: List[str] = [f"{kind.capitalize()}: {name}"]
+    parts = [f"{kind.capitalize()}: {name}"]
     for field, label, _cap in schema:
         value = data.get(field)
         if value:

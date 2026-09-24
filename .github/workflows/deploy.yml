@@ -7,12 +7,11 @@ on:
       - "**.md"
       - "LICENSE"
       - ".gitignore"
-  workflow_dispatch:
+  workflow_dispatch: null
 
 concurrency:
-  group: deploy-${{ github.ref }}
+  group: taleTribe-agents-production
   cancel-in-progress: false
-
 env:
   PROJECT_ID: story-6f89f
   REGION: us-central1
@@ -27,29 +26,28 @@ jobs:
   # merge made before branch protection is configured. Running the suite here
   # too costs ~1 min and removes the "green PR, untested deploy" gap.
   test:
-    name: Tests
+    name: taleTribe-agents / deploy-test
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.11"
 
       - name: Install Poetry
-        uses: snok/install-poetry@v1
+        uses: snok/install-poetry@a783c322200f0519c7926aa6faa857c4e23e9263  # v1
         with:
-          version: latest
+          version: 2.1.3
           virtualenvs-create: true
           virtualenvs-in-project: true
 
       - name: Cache Poetry virtualenv
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: .venv
           key: venv-${{ runner.os }}-${{ github.repository }}-py3.11-${{ hashFiles('poetry.lock') }}
@@ -58,13 +56,13 @@ jobs:
         run: poetry install --with dev
 
       - name: Run tests
-        run: poetry run pytest tests/
         env:
           USE_MOCK: "true"
           GOOGLE_CLOUD_PROJECT: "test-project"
 
+        run: poetry run pytest tests/
   deploy:
-    name: Build and Deploy
+    name: taleTribe-agents / deploy-deploy
     needs: test
     runs-on: ubuntu-latest
     environment: production
@@ -73,29 +71,26 @@ jobs:
     permissions:
       contents: read
       id-token: write
-
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
       - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed  # v2
         with:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
+        uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f  # v2
       - name: Create Artifact Registry repository if needed
         run: |
           # Check if repository exists, if not create it
-          if ! gcloud artifacts repositories describe ${{ env.ARTIFACT_REGISTRY_REPO }} \
-            --location=${{ env.REGION }} >/dev/null 2>&1; then
+          if ! gcloud artifacts repositories describe ${ARTIFACT_REGISTRY_REPO} \
+            --location=${REGION} >/dev/null 2>&1; then
             echo "Creating Artifact Registry repository..."
-            gcloud artifacts repositories create ${{ env.ARTIFACT_REGISTRY_REPO }} \
+            gcloud artifacts repositories create ${ARTIFACT_REGISTRY_REPO} \
               --repository-format=docker \
-              --location=${{ env.REGION }} \
+              --location=${REGION} \
               --description="Docker repository for TheTaleTribe Agents"
           else
             echo "Repository already exists"
@@ -112,7 +107,7 @@ jobs:
             {
               "name": "keep-recent",
               "action": {"type": "Keep"},
-              "mostRecentVersions": {"keepCount": ${{ env.KEEP_IMAGE_COUNT }}}
+              "mostRecentVersions": {"keepCount": ${KEEP_IMAGE_COUNT}}
             },
             {
               "name": "delete-stale",
@@ -121,62 +116,68 @@ jobs:
             }
           ]
           EOF
-          gcloud artifacts repositories set-cleanup-policies ${{ env.ARTIFACT_REGISTRY_REPO }} \
-            --location=${{ env.REGION }} \
+          gcloud artifacts repositories set-cleanup-policies ${ARTIFACT_REGISTRY_REPO} \
+            --location=${REGION} \
             --policy=/tmp/cleanup-policy.json \
             --no-dry-run
 
       - name: Create Firestore database if needed
         run: |
-          if ! gcloud firestore databases describe --database="(default)" --project=${{ env.PROJECT_ID }} >/dev/null 2>&1; then
+          if ! gcloud firestore databases describe --database="(default)" --project=${PROJECT_ID} >/dev/null 2>&1; then
             echo "Creating Firestore (default) database..."
-            gcloud firestore databases create --location=${{ env.REGION }} --type=firestore-native --project=${{ env.PROJECT_ID }}
+            gcloud firestore databases create --location=${REGION} --type=firestore-native --project=${PROJECT_ID}
           else
             echo "Firestore database already exists"
           fi
 
       - name: Configure Docker for Artifact Registry
         run: |
-          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
+          gcloud auth configure-docker ${REGION}-docker.pkg.dev
 
       - name: Build Docker image
         run: |
           docker build \
-            -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/app:${{ github.sha }} \
-            -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/app:latest \
+            -t ${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}/app:${INPUT_GITHUB_SHA} \
+            -t ${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}/app:latest \
             .
 
+        env:
+          INPUT_GITHUB_SHA: ${{ github.sha }}
       - name: Push Docker image to Artifact Registry
         run: |
-          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/app:${{ github.sha }}
-          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/app:latest
+          docker push ${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}/app:${INPUT_GITHUB_SHA}
+          docker push ${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}/app:latest
 
+        env:
+          INPUT_GITHUB_SHA: ${{ github.sha }}
       - name: Create or update secret in Secret Manager
         run: |
-          if gcloud secrets describe google-ai-studio-api-key --project=${{ env.PROJECT_ID }} >/dev/null 2>&1; then
+          if gcloud secrets describe google-ai-studio-api-key --project=${PROJECT_ID} >/dev/null 2>&1; then
             # Only add a new version if the value has changed
-            CURRENT=$(gcloud secrets versions access latest --secret=google-ai-studio-api-key --project=${{ env.PROJECT_ID }} 2>/dev/null || echo "")
-            if [ "$CURRENT" != "${{ secrets.GOOGLE_AI_STUDIO_API_KEY }}" ]; then
+            CURRENT=$(gcloud secrets versions access latest --secret=google-ai-studio-api-key --project=${PROJECT_ID} 2>/dev/null || echo "")
+            if [ "$CURRENT" != "${INPUT_SECRETS_GOOGLE_AI_STUDIO_API_KEY}" ]; then
               echo "Secret value changed, adding new version..."
-              echo "${{ secrets.GOOGLE_AI_STUDIO_API_KEY }}" | \
+              echo "${INPUT_SECRETS_GOOGLE_AI_STUDIO_API_KEY}" | \
                 gcloud secrets versions add google-ai-studio-api-key --data-file=-
             else
               echo "Secret value unchanged, skipping"
             fi
           else
-            echo "${{ secrets.GOOGLE_AI_STUDIO_API_KEY }}" | \
+            echo "${INPUT_SECRETS_GOOGLE_AI_STUDIO_API_KEY}" | \
               gcloud secrets create google-ai-studio-api-key \
               --data-file=- \
               --replication-policy=automatic
           fi
 
+        env:
+          INPUT_SECRETS_GOOGLE_AI_STUDIO_API_KEY: ${{ secrets.GOOGLE_AI_STUDIO_API_KEY }}
       - name: Create Terraform state bucket if needed
         run: |
           BUCKET=story-6f89f-tfstate
           if ! gcloud storage buckets describe gs://$BUCKET >/dev/null 2>&1; then
             echo "Creating GCS bucket for Terraform state..."
             gcloud storage buckets create gs://$BUCKET \
-              --location=${{ env.REGION }} \
+              --location=${REGION} \
               --uniform-bucket-level-access
             gcloud storage buckets update gs://$BUCKET --versioning
           else
@@ -184,7 +185,7 @@ jobs:
           fi
 
       - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd  # v3
         with:
           terraform_version: 1.14.4
           terraform_wrapper: false
@@ -203,29 +204,35 @@ jobs:
           fi
 
           echo "Empty state detected — importing existing resources..."
-          IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/app:${{ github.sha }}"
-          SA="novelsync-agents-run@${{ env.PROJECT_ID }}.iam.gserviceaccount.com"
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}/app:${INPUT_GITHUB_SHA}"
+          SA="novelsync-agents-run@${PROJECT_ID}.iam.gserviceaccount.com"
           IMPORT="terraform import -var=image=$IMAGE"
 
-          $IMPORT google_project_service.run "${{ env.PROJECT_ID }}/run.googleapis.com" || true
-          $IMPORT google_project_service.firestore "${{ env.PROJECT_ID }}/firestore.googleapis.com" || true
-          $IMPORT google_project_service.secretmanager "${{ env.PROJECT_ID }}/secretmanager.googleapis.com" || true
-          $IMPORT google_project_service.artifactregistry "${{ env.PROJECT_ID }}/artifactregistry.googleapis.com" || true
-          $IMPORT google_cloud_run_v2_service.app "projects/${{ env.PROJECT_ID }}/locations/${{ env.REGION }}/services/${{ env.SERVICE_NAME }}" || true
-          $IMPORT google_secret_manager_secret_iam_member.secret_access "projects/${{ env.PROJECT_ID }}/secrets/google-ai-studio-api-key roles/secretmanager.secretAccessor serviceAccount:$SA" || true
-          $IMPORT google_project_iam_member.firestore_user "${{ env.PROJECT_ID }} roles/datastore.user serviceAccount:$SA" || true
-          $IMPORT 'google_cloud_run_v2_service_iam_member.public_access[0]' "projects/${{ env.PROJECT_ID }}/locations/${{ env.REGION }}/services/${{ env.SERVICE_NAME }} roles/run.invoker allUsers" || true
+          $IMPORT google_project_service.run "${PROJECT_ID}/run.googleapis.com" || true
+          $IMPORT google_project_service.firestore "${PROJECT_ID}/firestore.googleapis.com" || true
+          $IMPORT google_project_service.secretmanager "${PROJECT_ID}/secretmanager.googleapis.com" || true
+          $IMPORT google_project_service.artifactregistry "${PROJECT_ID}/artifactregistry.googleapis.com" || true
+          $IMPORT google_cloud_run_v2_service.app "projects/${PROJECT_ID}/locations/${REGION}/services/${SERVICE_NAME}" || true
+          $IMPORT google_secret_manager_secret_iam_member.secret_access "projects/${PROJECT_ID}/secrets/google-ai-studio-api-key roles/secretmanager.secretAccessor serviceAccount:$SA" || true
+          $IMPORT google_project_iam_member.firestore_user "${PROJECT_ID} roles/datastore.user serviceAccount:$SA" || true
+          $IMPORT 'google_cloud_run_v2_service_iam_member.public_access[0]' "projects/${PROJECT_ID}/locations/${REGION}/services/${SERVICE_NAME} roles/run.invoker allUsers" || true
 
+        env:
+          INPUT_GITHUB_SHA: ${{ github.sha }}
       - name: Terraform Plan
         working-directory: ./terraform
         run: |
           terraform plan \
-            -var="image=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/app:${{ github.sha }}" \
-            -var="firebase_functions_service_account=${{ env.FIREBASE_FUNCTIONS_SA }}" \
-            -var="assistant_api_enabled=${{ vars.ASSISTANT_API_ENABLED || 'true' }}" \
-            -var="assistant_edit_proposals_enabled=${{ vars.ASSISTANT_EDIT_PROPOSALS_ENABLED || 'true' }}" \
+            -var="image=${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}/app:${INPUT_GITHUB_SHA}" \
+            -var="firebase_functions_service_account=${FIREBASE_FUNCTIONS_SA}" \
+            -var="assistant_api_enabled=${INPUT_VARS_ASSISTANT_API_ENABLED_TRUE}" \
+            -var="assistant_edit_proposals_enabled=${INPUT_VARS_ASSISTANT_EDIT_PROPOSALS_ENABLED_TRUE}" \
             -out=tfplan
 
+        env:
+          INPUT_GITHUB_SHA: ${{ github.sha }}
+          INPUT_VARS_ASSISTANT_API_ENABLED_TRUE: ${{ vars.ASSISTANT_API_ENABLED || 'true' }}
+          INPUT_VARS_ASSISTANT_EDIT_PROPOSALS_ENABLED_TRUE: ${{ vars.ASSISTANT_EDIT_PROPOSALS_ENABLED || 'true' }}
       - name: Terraform Apply
         working-directory: ./terraform
         run: terraform apply -auto-approve tfplan
@@ -239,7 +246,7 @@ jobs:
 
       - name: Authenticate for health check
         id: auth_health_check
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed  # v2
         with:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
@@ -249,8 +256,9 @@ jobs:
       - name: Test deployment health check
         env:
           HEALTH_CHECK_TOKEN: ${{ steps.auth_health_check.outputs.id_token }}
+          INPUT_STEPS_GET_URL_OUTPUTS_SERVICE_URL: ${{ steps.get_url.outputs.service_url }}
         run: |
-          URL="${{ steps.get_url.outputs.service_url }}/health"
+          URL="${INPUT_STEPS_GET_URL_OUTPUTS_SERVICE_URL}/health"
           for i in 1 2 3 4 5; do
             if curl -sf --max-time 10 -H "Authorization: Bearer $HEALTH_CHECK_TOKEN" "$URL" > /dev/null; then
               echo "Health check passed on attempt $i"
@@ -264,7 +272,7 @@ jobs:
 
       - name: Test MCP discovery endpoints (unauthenticated)
         run: |
-          BASE="${{ steps.get_url.outputs.service_url }}"
+          BASE="${INPUT_STEPS_GET_URL_OUTPUTS_SERVICE_URL}"
           # The MCP server must be reachable without IAM auth: OAuth discovery
           # documents are public, and /mcp must answer 401 (not 403) so MCP
           # clients start the OAuth flow. Failing here usually means the
@@ -283,11 +291,20 @@ jobs:
           fi
           echo "MCP discovery checks passed"
 
+        env:
+          INPUT_STEPS_GET_URL_OUTPUTS_SERVICE_URL: ${{ steps.get_url.outputs.service_url }}
       - name: Deployment Summary
         run: |
           echo "## Deployment Successful! 🚀" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Service URL:** [${{ steps.get_url.outputs.service_url }}](${{ steps.get_url.outputs.service_url }})" >> $GITHUB_STEP_SUMMARY
-          echo "- **Image Tag:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Region:** ${{ env.REGION }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Commit:** [${{ github.sha }}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})" >> $GITHUB_STEP_SUMMARY
+          echo "- **Service URL:** [${INPUT_STEPS_GET_URL_OUTPUTS_SERVICE_URL}](${INPUT_STEPS_GET_URL_OUTPUTS_SERVICE_URL})" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image Tag:** \`${INPUT_GITHUB_SHA}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Region:** ${REGION}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** [${INPUT_GITHUB_SHA}](${INPUT_GITHUB_SERVER_URL}/${INPUT_GITHUB_REPOSITORY}/commit/${INPUT_GITHUB_SHA})" >> $GITHUB_STEP_SUMMARY
+        env:
+          INPUT_STEPS_GET_URL_OUTPUTS_SERVICE_URL: ${{ steps.get_url.outputs.service_url }}
+          INPUT_GITHUB_SHA: ${{ github.sha }}
+          INPUT_GITHUB_SERVER_URL: ${{ github.server_url }}
+          INPUT_GITHUB_REPOSITORY: ${{ github.repository }}
+permissions:
+  contents: read

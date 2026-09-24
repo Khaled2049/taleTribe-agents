@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import functools
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Final, Optional
 from urllib.parse import urlparse
 
 import anyio.to_thread
@@ -75,7 +75,7 @@ async def _run_sync(fn, *args, **kwargs):
     return await anyio.to_thread.run_sync(functools.partial(fn, *args, **kwargs))
 
 
-PUBLIC_CLIENT_AUTH_METHOD = "none"
+PUBLIC_CLIENT_AUTH_METHOD: Final = "none"
 
 
 def _downgrade_to_public_client(client_info: OAuthClientInformationFull) -> None:
@@ -336,10 +336,13 @@ class FirestoreOAuthProvider:
         record = await _run_sync(self._store.load_code, hash_token(authorization_code))
         if record is None or record.get("clientId") != client.client_id:
             return None
+        expires_at = self._epoch(record)
+        if expires_at is None:
+            return None
         return AuthorizationCode(
             code=authorization_code,
             scopes=record.get("scopes") or [],
-            expires_at=self._epoch(record),
+            expires_at=expires_at,
             client_id=record["clientId"],
             code_challenge=record["codeChallenge"],
             redirect_uri=AnyUrl(record["redirectUri"]),

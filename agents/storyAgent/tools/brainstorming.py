@@ -122,7 +122,7 @@ For each theme, provide:
         # Simple parsing - split by numbered items or dashes
         lines = text.split("\n")
         ideas = []
-        current_idea = {}
+        current_idea: dict = {}
 
         for line in lines:
             line = line.strip()

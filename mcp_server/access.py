@@ -50,7 +50,7 @@ class AccessGate:
         try:
             snap = self._db.collection(ACCESS_COLLECTION).document(uid).get()
             record = snap.to_dict() if snap.exists else None
-            allowed = bool(record) and record.get("status") == STATUS_GRANTED
+            allowed = record is not None and record.get("status") == STATUS_GRANTED
         except Exception as exc:
             # Fail closed. Note this cannot mass-disconnect an active trial:
             # anyone already in the cache keeps their live entry (checked

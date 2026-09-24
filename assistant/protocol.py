@@ -222,7 +222,7 @@ class UserMessage(StrictModel):
 class RunRequest(StrictModel):
     """What the browser sends. Carries no identity -- see the module docstring."""
 
-    v: Literal[ASSISTANT_PROTOCOL_VERSION]
+    v: Literal[ASSISTANT_PROTOCOL_VERSION]  # type: ignore[valid-type]  # Runtime schema shares the version constant.
     story_id: str = Field(min_length=1, max_length=MAX_ID_CHARS)
     thread_id: Optional[str] = Field(
         default=None, min_length=1, max_length=MAX_ID_CHARS
