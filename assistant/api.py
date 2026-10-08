@@ -93,6 +93,7 @@ def register_assistant(
                     limits=limits,
                     edits_enabled=settings.assistant_edit_proposals_enabled,
                     entity_proposals_enabled=settings.assistant_entity_proposals_enabled,
+                    specialists_enabled=settings.assistant_specialists_enabled,
                     history_limits=history_limits,
                 ):
                     yield encode_sse(event)

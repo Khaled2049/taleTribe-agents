@@ -48,6 +48,7 @@ CAPABILITY_TOOLS: dict[str, CapabilityTools] = {
         assistant=("propose_story_changes", "apply_story_changes"),
         browser_extension=True,
     ),
+    "consult_specialist": CapabilityTools(assistant=("consult_specialist",)),
     "research_web": CapabilityTools(assistant=("research_web",)),
     "create_story": CapabilityTools(mcp_write=("create_story",)),
     "create_chapter": CapabilityTools(mcp_write=("create_chapter",)),

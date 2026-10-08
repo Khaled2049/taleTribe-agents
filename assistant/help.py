@@ -31,7 +31,7 @@ from typing import Any, Literal, Optional
 
 from capability_catalog import assistant_tools
 
-Gate = Literal["always", "edits", "entities", "research"]
+Gate = Literal["always", "edits", "entities", "specialists", "research"]
 
 
 @dataclass(frozen=True)
@@ -163,6 +163,19 @@ HELP_CATALOG: tuple[Capability, ...] = (
         ),
         example="Add an abandoned hospital as a location.",
         limits="Up to 5 changes at a time. I cannot delete anything.",
+    ),
+    Capability(
+        id="consult_specialist",
+        tools=assistant_tools("consult_specialist"),
+        gate="specialists",
+        title="Get a specialist's judgement",
+        summary=(
+            "Bring in a story architect for structure and pacing, or a "
+            "character editor for motivation and consistency, and fold what "
+            "they find into one answer."
+        ),
+        example="The middle of my story feels slow. Why?",
+        limits="Up to 2 specialists per reply. They advise; they never change anything.",
     ),
     Capability(
         id="research_web",

@@ -1,0 +1,99 @@
+{
+  "name": "specialist-consult",
+  "description": "The director consults a specialist and folds the findings into a reply.",
+  "protocolVersion": 1,
+  "events": [
+    {
+      "v": 1,
+      "runId": "run-specialist-consult",
+      "seq": 0,
+      "type": "run.started",
+      "provider": "mock",
+      "model": "mock-1"
+    },
+    {
+      "v": 1,
+      "runId": "run-specialist-consult",
+      "seq": 1,
+      "type": "tool.started",
+      "toolCallId": "call-1",
+      "name": "consult_specialist"
+    },
+    {
+      "v": 1,
+      "runId": "run-specialist-consult",
+      "seq": 2,
+      "type": "usage",
+      "provider": "mock",
+      "model": "mock-1",
+      "promptTokens": 900,
+      "completionTokens": 140,
+      "credits": 11,
+      "billing": "mock"
+    },
+    {
+      "v": 1,
+      "runId": "run-specialist-consult",
+      "seq": 3,
+      "type": "tool.completed",
+      "part": {
+        "type": "tool_call",
+        "toolCallId": "call-1",
+        "name": "consult_specialist",
+        "arguments": {
+          "specialist": "character_editor",
+          "brief": "Is Mina's caution consistent with what she does in the storm?",
+          "focus": [
+            {
+              "kind": "character",
+              "ref": "Mina"
+            }
+          ]
+        },
+        "result": {
+          "accepted": true,
+          "specialist": "character_editor",
+          "name": "Character Editor",
+          "degraded": false,
+          "findings": {
+            "analysis": "Mina is written as guarded, but in the storm she trusts a stranger without a reason.",
+            "recommendations": [
+              {
+                "title": "Give the trust a cost",
+                "detail": "Let her hesitate, then pay for it."
+              }
+            ],
+            "suggestedChanges": [],
+            "risks": [],
+            "confidence": 0.7
+          }
+        }
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-specialist-consult",
+      "seq": 4,
+      "type": "text.delta",
+      "text": "Mina's caution slips in the storm. "
+    },
+    {
+      "v": 1,
+      "runId": "run-specialist-consult",
+      "seq": 5,
+      "type": "text.done",
+      "part": {
+        "type": "text",
+        "text": "Mina's caution slips in the storm. "
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-specialist-consult",
+      "seq": 6,
+      "type": "run.completed",
+      "finishReason": "stop"
+    }
+  ],
+  "sse": "data: {\"v\":1,\"runId\":\"run-specialist-consult\",\"seq\":0,\"type\":\"run.started\",\"provider\":\"mock\",\"model\":\"mock-1\"}\n\ndata: {\"v\":1,\"runId\":\"run-specialist-consult\",\"seq\":1,\"type\":\"tool.started\",\"toolCallId\":\"call-1\",\"name\":\"consult_specialist\"}\n\ndata: {\"v\":1,\"runId\":\"run-specialist-consult\",\"seq\":2,\"type\":\"usage\",\"provider\":\"mock\",\"model\":\"mock-1\",\"promptTokens\":900,\"completionTokens\":140,\"credits\":11,\"billing\":\"mock\"}\n\ndata: {\"v\":1,\"runId\":\"run-specialist-consult\",\"seq\":3,\"type\":\"tool.completed\",\"part\":{\"type\":\"tool_call\",\"toolCallId\":\"call-1\",\"name\":\"consult_specialist\",\"arguments\":{\"specialist\":\"character_editor\",\"brief\":\"Is Mina's caution consistent with what she does in the storm?\",\"focus\":[{\"kind\":\"character\",\"ref\":\"Mina\"}]},\"result\":{\"accepted\":true,\"specialist\":\"character_editor\",\"name\":\"Character Editor\",\"degraded\":false,\"findings\":{\"analysis\":\"Mina is written as guarded, but in the storm she trusts a stranger without a reason.\",\"recommendations\":[{\"title\":\"Give the trust a cost\",\"detail\":\"Let her hesitate, then pay for it.\"}],\"suggestedChanges\":[],\"risks\":[],\"confidence\":0.7}}}}\n\ndata: {\"v\":1,\"runId\":\"run-specialist-consult\",\"seq\":4,\"type\":\"text.delta\",\"text\":\"Mina's caution slips in the storm. \"}\n\ndata: {\"v\":1,\"runId\":\"run-specialist-consult\",\"seq\":5,\"type\":\"text.done\",\"part\":{\"type\":\"text\",\"text\":\"Mina's caution slips in the storm. \"}}\n\ndata: {\"v\":1,\"runId\":\"run-specialist-consult\",\"seq\":6,\"type\":\"run.completed\",\"finishReason\":\"stop\"}\n\n"
+}

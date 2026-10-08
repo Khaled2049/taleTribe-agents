@@ -36,11 +36,15 @@ from assistant.protocol import (
     StoryChangeDraft,
     StrictModel,
 )
+from assistant.specialists.base import FocusKind, SpecialistId
 
 MAX_QUERY_CHARS = 500
 MAX_TOOL_RESULTS = 20
 MAX_CHAPTER_WINDOW_CHARS = 20_000
 MAX_RESEARCH_RESULTS = 5
+MAX_BRIEF_CHARS = 1_000
+MAX_FOCUS_REFS = 6
+MAX_FOCUS_REF_CHARS = 500
 
 EntityKind = Literal["character", "place", "plot"]
 
@@ -140,6 +144,37 @@ class ApplyStoryChangesArgs(StrictModel):
     proposal_id: str = Field(min_length=1, max_length=MAX_ID_CHARS)
 
 
+class FocusRef(StrictModel):
+    kind: FocusKind
+    ref: str = Field(
+        min_length=1,
+        max_length=MAX_FOCUS_REF_CHARS,
+        description=(
+            "The entity's exact name as the story roster shows it, or its id. "
+            "For a chapter, its title or its number."
+        ),
+    )
+
+
+class ConsultSpecialistArgs(StrictModel):
+    """Ask one specialist for a judgement on this story.
+
+    The specialist sees only the brief and the story material the server
+    gathers for what focus names, so name every character, place, plot line or
+    chapter the question is about. Names from the roster work; you do not need
+    to look ids up first. Its answer is advice for you to weigh, not something
+    to forward verbatim.
+    """
+
+    specialist: SpecialistId
+    brief: str = Field(
+        min_length=1,
+        max_length=MAX_BRIEF_CHARS,
+        description="What you want judged, in your own words. One question.",
+    )
+    focus: list[FocusRef] = Field(default_factory=list, max_length=MAX_FOCUS_REFS)
+
+
 class ResearchWebArgs(StrictModel):
     query: str = Field(min_length=1, max_length=MAX_QUERY_CHARS)
     max_results: int = Field(default=3, ge=1, le=MAX_RESEARCH_RESULTS)
@@ -179,6 +214,10 @@ MODEL_ENTITY_TOOLS: dict[str, type[BaseModel]] = {
     "propose_story_changes": ProposeStoryChangesDraft,
 }
 
+SPECIALIST_TOOLS: dict[str, type[BaseModel]] = {
+    "consult_specialist": ConsultSpecialistArgs,
+}
+
 RESEARCH_TOOLS: dict[str, type[BaseModel]] = {
     "research_web": ResearchWebArgs,
 }
@@ -191,6 +230,7 @@ TOOL_SCHEMAS: dict[str, type[BaseModel]] = {
     **READ_TOOLS,
     **EDIT_TOOLS,
     **ENTITY_TOOLS,
+    **SPECIALIST_TOOLS,
     **RESEARCH_TOOLS,
 }
 
@@ -208,6 +248,7 @@ def available_tools(
     edits_enabled: bool,
     research_enabled: bool,
     entity_proposals_enabled: bool = False,
+    specialists_enabled: bool = False,
 ) -> dict[str, type[BaseModel]]:
     """The allowlist for one run. Server-owned; a model cannot widen it."""
     tools = dict(READ_TOOLS)
@@ -215,6 +256,8 @@ def available_tools(
         tools.update(MODEL_EDIT_TOOLS)
     if entity_proposals_enabled:
         tools.update(MODEL_ENTITY_TOOLS)
+    if specialists_enabled:
+        tools.update(SPECIALIST_TOOLS)
     if research_enabled:
         tools.update(RESEARCH_TOOLS)
     return tools

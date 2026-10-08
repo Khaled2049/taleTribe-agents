@@ -228,6 +228,7 @@ jobs:
             -var="assistant_api_enabled=${INPUT_VARS_ASSISTANT_API_ENABLED_TRUE}" \
             -var="assistant_edit_proposals_enabled=${INPUT_VARS_ASSISTANT_EDIT_PROPOSALS_ENABLED_TRUE}" \
             -var="assistant_entity_proposals_enabled=${INPUT_VARS_ASSISTANT_ENTITY_PROPOSALS_ENABLED_FALSE}" \
+            -var="assistant_specialists_enabled=${INPUT_VARS_ASSISTANT_SPECIALISTS_ENABLED_FALSE}" \
             -out=tfplan
 
         env:
@@ -235,6 +236,7 @@ jobs:
           INPUT_VARS_ASSISTANT_API_ENABLED_TRUE: ${{ vars.ASSISTANT_API_ENABLED || 'true' }}
           INPUT_VARS_ASSISTANT_EDIT_PROPOSALS_ENABLED_TRUE: ${{ vars.ASSISTANT_EDIT_PROPOSALS_ENABLED || 'true' }}
           INPUT_VARS_ASSISTANT_ENTITY_PROPOSALS_ENABLED_FALSE: ${{ vars.ASSISTANT_ENTITY_PROPOSALS_ENABLED || 'false' }}
+          INPUT_VARS_ASSISTANT_SPECIALISTS_ENABLED_FALSE: ${{ vars.ASSISTANT_SPECIALISTS_ENABLED || 'false' }}
       - name: Terraform Apply
         working-directory: ./terraform
         run: terraform apply -auto-approve tfplan

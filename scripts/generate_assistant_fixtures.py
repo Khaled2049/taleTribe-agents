@@ -325,6 +325,64 @@ def entity_approval_partial() -> list[Any]:
     ]
 
 
+def specialist_consult() -> list[Any]:
+    r = RunEvents("run-specialist-consult")
+    consult_arguments = {
+        "specialist": "character_editor",
+        "brief": "Is Mina's caution consistent with what she does in the storm?",
+        "focus": [{"kind": "character", "ref": "Mina"}],
+    }
+    return [
+        r.emit(RunStarted, provider="mock", model="mock-1"),
+        r.emit(ToolStarted, tool_call_id="call-1", name="consult_specialist"),
+        r.emit(
+            Usage,
+            provider="mock",
+            model="mock-1",
+            prompt_tokens=900,
+            completion_tokens=140,
+            credits=11,
+            billing="mock",
+        ),
+        r.emit(
+            ToolCompleted,
+            part=ToolCallPart(
+                type="tool_call",
+                tool_call_id="call-1",
+                name="consult_specialist",
+                arguments=consult_arguments,
+                result={
+                    "accepted": True,
+                    "specialist": "character_editor",
+                    "name": "Character Editor",
+                    "degraded": False,
+                    "findings": {
+                        "analysis": (
+                            "Mina is written as guarded, but in the storm she "
+                            "trusts a stranger without a reason."
+                        ),
+                        "recommendations": [
+                            {
+                                "title": "Give the trust a cost",
+                                "detail": "Let her hesitate, then pay for it.",
+                            }
+                        ],
+                        "suggestedChanges": [],
+                        "risks": [],
+                        "confidence": 0.7,
+                    },
+                },
+            ),
+        ),
+        r.emit(TextDelta, text="Mina's caution slips in the storm. "),
+        r.emit(
+            TextDone,
+            part=TextPart(type="text", text="Mina's caution slips in the storm. "),
+        ),
+        r.emit(RunCompleted, finish_reason="stop"),
+    ]
+
+
 def research_citations() -> list[Any]:
     r = RunEvents("run-research")
     return [
@@ -497,6 +555,10 @@ FIXTURES = {
     "entity-approval-partial": (
         "A stale change stopped the apply; the reply says what did not save.",
         entity_approval_partial,
+    ),
+    "specialist-consult": (
+        "The director consults a specialist and folds the findings into a reply.",
+        specialist_consult,
     ),
     "research-citations": (
         "Web and story references emitted as parts.",

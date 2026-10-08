@@ -141,6 +141,17 @@
         "limits": "Up to 5 changes at a time. I cannot delete anything."
       },
       {
+        "id": "consult_specialist",
+        "tools": [
+          "consult_specialist"
+        ],
+        "gate": "specialists",
+        "title": "Get a specialist's judgement",
+        "summary": "Bring in a story architect for structure and pacing, or a character editor for motivation and consistency, and fold what they find into one answer.",
+        "example": "The middle of my story feels slow. Why?",
+        "limits": "Up to 2 specialists per reply. They advise; they never change anything."
+      },
+      {
         "id": "research_web",
         "tools": [
           "research_web"
@@ -3270,6 +3281,71 @@
           "proposalId"
         ],
         "title": "ApplyStoryChangesArgs",
+        "type": "object"
+      },
+      "consult_specialist": {
+        "$defs": {
+          "FocusRef": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "character",
+                  "place",
+                  "plot",
+                  "chapter"
+                ],
+                "title": "Kind",
+                "type": "string"
+              },
+              "ref": {
+                "description": "The entity's exact name as the story roster shows it, or its id. For a chapter, its title or its number.",
+                "maxLength": 500,
+                "minLength": 1,
+                "title": "Ref",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "ref"
+            ],
+            "title": "FocusRef",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Ask one specialist for a judgement on this story.\n\nThe specialist sees only the brief and the story material the server\ngathers for what focus names, so name every character, place, plot line or\nchapter the question is about. Names from the roster work; you do not need\nto look ids up first. Its answer is advice for you to weigh, not something\nto forward verbatim.",
+        "properties": {
+          "specialist": {
+            "enum": [
+              "story_architect",
+              "character_editor"
+            ],
+            "title": "Specialist",
+            "type": "string"
+          },
+          "brief": {
+            "description": "What you want judged, in your own words. One question.",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Brief",
+            "type": "string"
+          },
+          "focus": {
+            "items": {
+              "$ref": "#/$defs/FocusRef"
+            },
+            "maxItems": 6,
+            "title": "Focus",
+            "type": "array"
+          }
+        },
+        "required": [
+          "specialist",
+          "brief"
+        ],
+        "title": "ConsultSpecialistArgs",
         "type": "object"
       },
       "get_story_entity": {

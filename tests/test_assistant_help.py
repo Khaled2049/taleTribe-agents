@@ -64,6 +64,9 @@ def test_gate_matches_what_a_run_would_actually_offer(capability):
         "entities": available_tools(
             edits_enabled=False, research_enabled=False, entity_proposals_enabled=True
         ),
+        "specialists": available_tools(
+            edits_enabled=False, research_enabled=False, specialists_enabled=True
+        ),
         "research": available_tools(edits_enabled=False, research_enabled=True),
     }[capability.gate]
     for name in capability.tools:

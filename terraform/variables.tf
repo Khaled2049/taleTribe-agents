@@ -121,6 +121,12 @@ variable "assistant_entity_proposals_enabled" {
   default     = false
 }
 
+variable "assistant_specialists_enabled" {
+  description = "Let the assistant consult the Story Architect and Character Editor. Off by default; each consult is an extra model call against the platform daily cap."
+  type        = bool
+  default     = false
+}
+
 variable "firebase_functions_service_account" {
   description = "Service account email used by Firebase Functions to invoke the agent (e.g. story-6f89f@appspot.gserviceaccount.com). Granted roles/run.invoker on the Cloud Run service."
   type        = string
