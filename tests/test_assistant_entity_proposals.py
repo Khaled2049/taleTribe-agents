@@ -210,6 +210,14 @@ async def test_binding_an_event_update_uses_the_events_own_revision(story):
         (
             {
                 "operation": "event.create",
+                "plotLineId": "The Wreck",
+                "fields": {"name": " THE STORM "},
+            },
+            "already exists in plot line",
+        ),
+        (
+            {
+                "operation": "event.create",
                 "plotLineId": "plot-404",
                 "fields": {"name": "Landfall"},
             },
@@ -250,6 +258,23 @@ async def test_unbindable_changes_are_rejected_with_a_reason(story, change, frag
 async def test_two_updates_to_one_entity_are_rejected(story):
     with pytest.raises(ProposalRejected, match="twice"):
         await bind(UPDATE_MINA, {**UPDATE_MINA, "fields": {"voice": "Low."}})
+
+
+async def test_event_create_names_are_unique_per_resolved_plot(story):
+    create = {
+        "operation": "event.create",
+        "plotLineId": "plot-1",
+        "fields": {"name": "Landfall"},
+    }
+    with pytest.raises(ProposalRejected, match="same name in the same plot line"):
+        await bind(
+            create,
+            {**create, "plotLineId": "The Wreck", "fields": {"name": " LANDFALL "}},
+        )
+
+    story.seed_entity("story-1", "plots", "plot-2", name="The Rescue", events=[])
+    bound = await bind(create, {**create, "plotLineId": "The Rescue"})
+    assert [change.plot_line_id for change in bound.changes] == ["plot-1", "plot-2"]
 
 
 async def test_an_event_cannot_reference_a_character_the_proposal_creates(story):

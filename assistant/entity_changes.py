@@ -165,9 +165,18 @@ async def _bind_change(change: StoryChangeDraft, reader: _StoryReader) -> StoryC
             )
         plot_line_id = str(plot.get("id"))
         await _check_event_references(change, reader)
-        if not change.is_create:
+        events = [e for e in plot.get("events") or [] if isinstance(e, dict)]
+        if change.is_create:
+            if any(
+                str(event.get("name") or "").strip().casefold() == label.casefold()
+                for event in events
+            ):
+                raise ProposalRejected(
+                    f"An event named {label!r} already exists in plot line "
+                    f"{_label(plot.get('name'))!r}. Propose an update to it instead."
+                )
+        else:
             assert entity_id is not None
-            events = [e for e in plot.get("events") or [] if isinstance(e, dict)]
             event = _one(events, entity_id, "event")
             if event is None:
                 raise ProposalRejected(
@@ -228,22 +237,20 @@ async def bind_story_changes(
     await data.get_owned_story(ctx.story_id, ctx.user_id)
     reader = _StoryReader(ctx)
 
-    created: set[tuple[str, str]] = set()
-    for change in draft.changes:
-        if change.is_create and change.kind != "event":
-            key = (change.kind, _label(change.fields.name).casefold())
-            if key in created:
-                raise ProposalRejected(
-                    f"The proposal creates two {change.kind}s with the same name."
-                )
-            created.add(key)
-
     changes = [await _bind_change(change, reader) for change in draft.changes]
 
     # Checked on resolved ids, so a name and an id for one row still collide.
+    created: set[tuple[str, str, str]] = set()
     targets: set[tuple[str, str]] = set()
     for bound in changes:
         if bound.is_create:
+            create_key = (bound.kind, bound.plot_line_id or "", bound.label.casefold())
+            if create_key in created:
+                scope = " in the same plot line" if bound.kind == "event" else ""
+                raise ProposalRejected(
+                    f"The proposal creates two {bound.kind}s with the same name{scope}."
+                )
+            created.add(create_key)
             continue
         key = (bound.kind, str(bound.entity_id))
         if key in targets:

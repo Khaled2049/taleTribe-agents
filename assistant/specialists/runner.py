@@ -101,17 +101,20 @@ def _parse_findings(arguments_text: str, text: str) -> tuple[Optional[dict], boo
     if not fallback and isinstance(candidate, dict):
         # Take whatever prose it did give: a small model sometimes fills the
         # lists and leaves the one required field empty.
-        pieces = [str(candidate.get("analysis") or "").strip()]
-        for item in candidate.get("recommendations") or []:
+        analysis = candidate.get("analysis")
+        pieces = [analysis.strip()] if isinstance(analysis, str) else []
+        recommendations = candidate.get("recommendations")
+        for item in recommendations if isinstance(recommendations, list) else []:
             if isinstance(item, dict):
                 pieces.append(
                     " — ".join(
-                        str(item.get(key) or "").strip()
+                        value.strip()
                         for key in ("title", "detail")
-                        if str(item.get(key) or "").strip()
+                        if isinstance(value := item.get(key), str) and value.strip()
                     )
                 )
-        for item in candidate.get("risks") or []:
+        risks = candidate.get("risks")
+        for item in risks if isinstance(risks, list) else []:
             if isinstance(item, str):
                 pieces.append(item.strip())
         fallback = "\n".join(piece for piece in pieces if piece)
@@ -235,6 +238,8 @@ async def consult_stream(
 
             text = ""
             chunks: list[str] = []
+            submitted = False
+            invalid_submission = False
             finish_reason: Optional[str] = None
             called_model = True
             async for event in provider.chat_stream(
@@ -251,7 +256,20 @@ async def consult_stream(
                         draft = text
                         yield event["text"]
                 elif kind == "tool_call_delta":
-                    delta = (event.get("tool_call") or {}).get("arguments_delta")
+                    fragment = event.get("tool_call")
+                    if not isinstance(fragment, dict):
+                        invalid_submission = True
+                        continue
+                    # Findings have one allowed submission tool. A drafter
+                    # has none; neither can introduce executable tool calls.
+                    if drafting or fragment.get("index", 0) != 0:
+                        invalid_submission = True
+                    if "name" in fragment:
+                        if fragment["name"] == SUBMIT_TOOL:
+                            submitted = True
+                        else:
+                            invalid_submission = True
+                    delta = fragment.get("arguments_delta")
                     if isinstance(delta, str):
                         chunks.append(delta)
                 elif kind == "usage":
@@ -274,6 +292,16 @@ async def consult_stream(
                     arguments,
                     usage=tuple(usage),
                     error=ErrorCode.PROVIDER_UNAVAILABLE,
+                    draft_text=draft,
+                )
+                return
+
+            if invalid_submission or (chunks and not submitted):
+                outcome = "invalid_tool"
+                yield ConsultOutcome(
+                    arguments,
+                    usage=tuple(usage),
+                    error=ErrorCode.PROVIDER_ERROR,
                     draft_text=draft,
                 )
                 return
@@ -349,6 +377,22 @@ async def consult_stream(
     except story_data.StoryDataError:
         outcome = "story_data_unavailable"
         yield ConsultOutcome(arguments, error=ErrorCode.INTERNAL_ERROR)
+    except Exception as exc:
+        # Isolate unexpected provider/context/parser failures too. Cancellation
+        # is a BaseException and must still propagate to stop model work.
+        outcome = type(exc).__name__
+        logger.warning(
+            "assistant_consult_failed run_id=%s specialist=%s error_type=%s",
+            run_id,
+            specialist.id,
+            outcome,
+        )
+        yield ConsultOutcome(
+            arguments,
+            usage=tuple(usage),
+            error=ErrorCode.INTERNAL_ERROR,
+            draft_text=draft,
+        )
     finally:
         if not called_model:
             # Nothing was spent, so a bad reference does not cost the run a consult.
@@ -405,12 +449,12 @@ def declined_call(arguments_text: str, reason: str) -> ConsultOutcome:
 
 
 def specialist_of(arguments_text: str) -> Optional[str]:
-    """Which specialist a raw call names, without validating the rest."""
+    """Route only validated calls; malformed ones cannot affect deduplication."""
     try:
-        raw = json.loads(arguments_text or "{}")
-    except ValueError:
+        args = ConsultSpecialistArgs.model_validate(json.loads(arguments_text or "{}"))
+    except (ValueError, ValidationError):
         return None
-    return raw.get("specialist") if isinstance(raw, dict) else None
+    return args.specialist
 
 
 def wants_review(arguments_text: str) -> bool:

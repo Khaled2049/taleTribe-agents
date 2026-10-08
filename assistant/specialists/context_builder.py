@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
-from assistant.executors import _fit
+from assistant.executors import _encode, _fit
 from assistant.specialists.base import Specialist
 from assistant.tools import FocusRef, ToolContext
 from mcp_server import data, story_data
@@ -284,6 +284,73 @@ async def _scene_material(
     )
 
 
+def _clip_prose(node: Any, width: int, key: str = "") -> Any:
+    """Shorten prose without changing record identities or dropping focus rows."""
+    if isinstance(node, dict):
+        return {k: _clip_prose(v, width, k) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_clip_prose(item, width, key) for item in node]
+    if (
+        isinstance(node, str)
+        and key
+        not in {"id", "name", "title", "specialist", "plotLine", "operation", "target"}
+        and not key.endswith(("Id", "Ids"))
+    ):
+        return node if len(node) <= width else node[:width] + "…"
+    return node
+
+
+def _fit_context(context: dict[str, Any], cap: int, character_editor: bool) -> dict:
+    if len(_encode(context)) <= cap:
+        return context
+
+    # Spend on explicit focus and colleagues' reasoning before broad rosters.
+    keys = {
+        "focusCharacters",
+        "focusPlotLines",
+        "focusEvents",
+        "chapters",
+        "places",
+        "events",
+        "charactersInScene",
+        "setting",
+        "priorFindings",
+        "focusNotFound",
+    }
+    if character_editor:
+        keys.add("characters")
+    primary = {key: value for key, value in context.items() if key in keys}
+    primary["story"] = {"title": context["story"].get("title")}
+    primary["truncated"] = True
+    background = {key: value for key, value in context.items() if key not in keys}
+    background.pop("story")
+    background["storyOverview"] = context["story"]
+
+    if len(_encode(primary)) > cap:
+        # Keep all focused rows and their names/IDs, even when prose must shrink.
+        lo, hi, fitted = 0, cap, None
+        while lo <= hi:
+            width = (lo + hi) // 2
+            candidate = _clip_prose(primary, width)
+            if len(_encode(candidate)) <= cap:
+                fitted, lo = candidate, width + 1
+            else:
+                hi = width - 1
+        if fitted is None:
+            raise ConsultRejected(
+                "The focused material is too large for one consult. "
+                "Focus on fewer entities or a single event instead of a whole plot."
+            )
+        primary = fitted
+
+    remaining = cap - len(_encode(primary))
+    if remaining >= 128:
+        # Two nonempty JSON objects merge with no additional encoded overhead.
+        extra, _ = _fit(background, remaining)
+        primary = {**extra, **primary}
+    return primary
+
+
 async def build_context(
     specialist: Specialist,
     focus: list[FocusRef],
@@ -395,9 +462,9 @@ async def build_context(
         if focused.get("character"):
             context["focusCharacters"] = _clean(focused["character"])
         if focused.get("plot"):
-            context["focusPlotLines"] = [str(row.get("id")) for row in focused["plot"]]
+            context["focusPlotLines"] = _clean(focused["plot"])
         if focused.get("event"):
-            context["focusEvents"] = [str(row.get("name")) for row in focused["event"]]
+            context["focusEvents"] = _clean(focused["event"])
 
     for kind, key in (("place", "places"), ("chapter", "chapters")):
         if focused.get(kind):
@@ -406,8 +473,9 @@ async def build_context(
     if prior_findings:
         context["priorFindings"] = prior_findings
 
-    fitted, _ = _fit(context, specialist.context_chars)
-    return fitted if isinstance(fitted, dict) else {"truncated": True}
+    return _fit_context(
+        context, specialist.context_chars, specialist.id == "character_editor"
+    )
 
 
 def context_size(context: Optional[dict[str, Any]]) -> int:

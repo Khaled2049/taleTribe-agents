@@ -145,6 +145,52 @@ async def test_context_is_clipped_to_the_specialists_ceiling(story):
     assert context["truncated"] is True
 
 
+async def test_large_context_keeps_focused_event_chapter_and_review(story):
+    events = [
+        {
+            "id": f"event-{n}",
+            "name": f"Beat {n}",
+            "content": "Background action. " * 200,
+            "characterIds": ["char-1"],
+            "orderIndex": n,
+            "tensionLevel": 5,
+            "pacing": "moderate",
+            "storyBeat": "rising_action",
+        }
+        for n in range(200)
+    ]
+    events[-1]["content"] = "Mina discovers the wreck's cause. " * 40
+    story.entities[("story-1", "plots")][0]["events"] = events
+    chapter = story.chapters["story-1"][0]
+    chapter["content"] = "The lamp flickered. " * 300
+    prior = [
+        {
+            "specialist": "Character Editor",
+            "findings": {"analysis": "Mina needs a motive. " * 70},
+        }
+    ]
+    critic = SPECIALISTS["critic"]
+    refs = focus(("event", "event-199"), ("chapter", "chapter-1"))
+    context = await build_context(critic, refs, CTX, prior)
+    assert len(json.dumps(context)) <= critic.context_chars
+    assert context["truncated"] is True
+    assert context["focusEvents"][0]["id"] == "event-199"
+    assert context["focusEvents"][0]["name"] == "Beat 199"
+    assert context["focusEvents"][0]["content"] == events[-1]["content"]
+    assert context["chapters"][0]["text"] == chapter["content"]
+    assert context["priorFindings"] == prior
+
+    # When focus itself overflows, shorten prose while retaining its identity.
+    events[-1]["content"] *= 20
+    context = await build_context(critic, refs, CTX, prior)
+    assert len(json.dumps(context)) <= critic.context_chars
+    assert context["focusEvents"][0]["id"] == "event-199"
+    assert context["focusEvents"][0]["name"] == "Beat 199"
+    assert context["focusEvents"][0]["content"].startswith("Mina discovers")
+    assert context["chapters"][0]["id"] == "chapter-1"
+    assert context["priorFindings"][0]["specialist"] == "Character Editor"
+
+
 @pytest.mark.parametrize("ref", ["char-1", "Mina", "  mina "])
 async def test_focus_resolves_an_id_or_an_exact_name(story, ref):
     context = await build_context(
@@ -494,6 +540,77 @@ async def test_one_specialist_failing_leaves_the_other_and_the_answer(story):
     assert "run.failed" not in [event.type for event in events]
 
 
+async def test_malformed_specialist_ids_fail_only_the_tool(story):
+    specialist = ["critic"]
+    provider = RoutingProvider(
+        [
+            consult_step(
+                ("call-bad", {"specialist": specialist, "brief": "Assess this."}),
+                ("call-good", EDITOR),
+            ),
+            FINAL_ROUND,
+        ]
+    )
+    events = await collect(provider)
+    validate_event_sequence(events)
+    failed = next(event for event in events if event.type == "tool.failed")
+    assert failed.tool_call_id == "call-bad"
+    assert failed.code.value == "provider_error"
+    assert completed(events, "call-good").result["accepted"] is True
+    assert len(provider.specialist_requests()) == 1
+    assert events[-1].type == "run.completed"
+
+
+async def test_malformed_findings_lists_fail_only_the_consult(story):
+    provider = RoutingProvider(
+        [consult_step(("call-bad", ARCHITECT), ("call-good", EDITOR)), FINAL_ROUND],
+        specialists={
+            "Story Architect": findings_reply(
+                {"analysis": "", "recommendations": 42, "risks": True}
+            )
+        },
+    )
+    events = await collect(provider)
+    validate_event_sequence(events)
+    failed = next(event for event in events if event.type == "tool.failed")
+    assert failed.tool_call_id == "call-bad"
+    assert failed.code.value == "provider_error"
+    assert completed(events, "call-good").result["accepted"] is True
+    # Malformed output still incurred a model call: preserve all four usage events.
+    assert sum(event.type == "usage" for event in events) == 4
+    assert len(provider.specialist_requests()) == 2
+    assert events[-1].type == "run.completed"
+
+
+async def test_unexpected_specialist_errors_preserve_siblings_usage_and_privacy(
+    story, caplog
+):
+    class Broken(RoutingProvider):
+        async def chat_stream(self, messages, tools, **kwargs):
+            if (
+                kwargs.get("required_tool") == "submit_findings"
+                and "Story Architect" in messages[0]["parts"][0]["text"]
+            ):
+                yield USAGE
+                raise RuntimeError(SECRET)
+            async for event in super().chat_stream(messages, tools, **kwargs):
+                yield event
+
+    provider = Broken(
+        [consult_step(("call-bad", ARCHITECT), ("call-good", EDITOR)), FINAL_ROUND]
+    )
+    events = await collect(provider)
+    validate_event_sequence(events)
+    failed = next(event for event in events if event.type == "tool.failed")
+    assert failed.tool_call_id == "call-bad" and failed.code.value == "internal_error"
+    assert completed(events, "call-good").result["accepted"] is True
+    assert sum(event.type == "usage" for event in events) == 4
+    assert events[-1].type == "run.completed"
+    assert "error_type=RuntimeError" in caplog.text
+    assert SECRET not in caplog.text
+    assert SECRET not in json.dumps([event.model_dump(mode="json") for event in events])
+
+
 async def test_a_slow_specialist_times_out_without_failing_the_run(story):
     class Slow(RoutingProvider):
         async def chat_stream(self, messages, tools, **kwargs):
@@ -516,6 +633,10 @@ async def test_a_slow_specialist_times_out_without_failing_the_run(story):
             "Plain words.",
         ),
         (findings_reply('{"analysis": "Kept.", "confidence": 9}'), "Kept."),
+        (
+            findings_reply({"analysis": "Kept.", "recommendations": 42, "risks": True}),
+            "Kept.",
+        ),
         (findings_reply("{not json", text="Still useful."), "Still useful."),
     ],
 )
@@ -533,10 +654,29 @@ async def test_an_answer_in_the_wrong_shape_degrades_to_plain_analysis(
     assert len(provider.specialist_requests()) == 1  # no repair round
 
 
-async def test_an_empty_answer_is_a_failed_consult(story):
+@pytest.mark.parametrize(
+    "reply",
+    [
+        findings_reply(None),
+        [
+            {
+                "type": "tool_call_delta",
+                "tool_call": {
+                    "index": 0,
+                    "name": "apply_story_changes",
+                    "arguments_delta": json.dumps(FINDINGS),
+                },
+            },
+            USAGE,
+            {"type": "done", "finish_reason": "tool_calls"},
+        ],
+    ],
+    ids=["empty", "forbidden-tool"],
+)
+async def test_an_unusable_answer_is_a_failed_consult(story, reply):
     provider = RoutingProvider(
         [consult_step(("call-1", ARCHITECT)), FINAL_ROUND],
-        specialists={"Story Architect": findings_reply(None)},
+        specialists={"Story Architect": reply},
     )
     events = await collect(provider)
     assert any(event.type == "tool.failed" for event in events)

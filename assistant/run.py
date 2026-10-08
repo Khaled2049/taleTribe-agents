@@ -708,6 +708,7 @@ async def run_assistant(
                     if required_tool
                     else model_tools
                 )
+                allowed_tool_names = {tool["name"] for tool in step_tools}
 
                 try:
                     async for raw in provider.chat_stream(
@@ -830,7 +831,11 @@ async def run_assistant(
                     outcome = "failed"
                     return
                 if (
-                    any(call.name == "propose_editor_edit" for call in calls)
+                    any(
+                        call.name == "propose_editor_edit"
+                        and call.name in allowed_tool_names
+                        for call in calls
+                    )
                     and len(calls) != 1
                 ):
                     code = ErrorCode.PROVIDER_ERROR
@@ -878,6 +883,19 @@ async def run_assistant(
                 settled: dict[str, Any] = {}
                 access_denied = False
 
+                # The provider schema is guidance, not authorization. Reject
+                # excluded calls before either parallel consults or dispatch.
+                for call in calls:
+                    if call.name not in allowed_tool_names:
+                        code = ErrorCode.PROVIDER_ERROR
+                        yield events.emit(
+                            ToolFailed,
+                            tool_call_id=call.tool_call_id,
+                            code=code,
+                            message=safe_message(code),
+                        )
+                        settled[call.tool_call_id] = _tool_error_message(code)
+
                 async def _settle(
                     call: _PendingToolCall, consult: ConsultOutcome
                 ) -> AsyncIterator[BaseEvent]:
@@ -922,7 +940,10 @@ async def run_assistant(
                     asked: set[str] = set()
                     consult_calls = []
                     for call in calls:
-                        if call.name != "consult_specialist":
+                        if (
+                            call.name != "consult_specialist"
+                            or call.tool_call_id in settled
+                        ):
                             continue
                         refusal: Optional[str] = None
                         who = specialist_of(call.arguments_text) or ""
