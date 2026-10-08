@@ -93,14 +93,40 @@ def _parse_findings(arguments_text: str, text: str) -> tuple[Optional[dict], boo
     except (ValueError, ValidationError):
         pass
     fallback = text.strip()
+    candidate: Any = None
+    try:
+        candidate = json.loads(arguments_text or "{}")
+    except ValueError:
+        pass
+    if not fallback and isinstance(candidate, dict):
+        # Take whatever prose it did give: a small model sometimes fills the
+        # lists and leaves the one required field empty.
+        pieces = [str(candidate.get("analysis") or "").strip()]
+        for item in candidate.get("recommendations") or []:
+            if isinstance(item, dict):
+                pieces.append(
+                    " — ".join(
+                        str(item.get(key) or "").strip()
+                        for key in ("title", "detail")
+                        if str(item.get(key) or "").strip()
+                    )
+                )
+        for item in candidate.get("risks") or []:
+            if isinstance(item, str):
+                pieces.append(item.strip())
+        fallback = "\n".join(piece for piece in pieces if piece)
     if not fallback:
-        try:
-            candidate = json.loads(arguments_text or "{}")
-            if isinstance(candidate, dict):
-                fallback = str(candidate.get("analysis") or "").strip()
-        except ValueError:
-            fallback = ""
-    if not fallback:
+        # Shape only, never content: enough to tell "empty call" from "wrong keys".
+        logger.warning(
+            "assistant_consult_unusable args_chars=%d text_chars=%d keys=%s",
+            len(arguments_text or ""),
+            len(text),
+            (
+                sorted(candidate)
+                if isinstance(candidate, dict)
+                else type(candidate).__name__
+            ),
+        )
         return None, True
     return {"analysis": fallback[:MAX_ANALYSIS_CHARS]}, True
 

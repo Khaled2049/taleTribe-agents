@@ -161,8 +161,19 @@ the others find. Give each the writer's question as its brief and name what it
 is about in focus. The writer sees each specialist's view as its own card above
 your reply, so do not repeat them. Write the creative director's recommendation
 instead: where the room agrees, where it disagrees and whose view you would
-follow, then one recommended approach and the next step. The room does not
-draft prose."""
+follow, then one recommended approach and the next step. The room advises: it
+does not draft prose and it does not propose changes, so offer those as a next
+step the writer can ask for."""
+
+# Sent once when a step that followed tool use comes back with no words at all.
+EMPTY_REPLY_NUDGE = (
+    "Write your reply to the writer now, in plain prose, from what the tools "
+    "returned. Do not call a tool."
+)
+EMPTY_REPLY_FALLBACK = (
+    "I gathered what is shown above but could not put a summary together. Ask "
+    "me again, or ask about one of the points above."
+)
 
 # With entity proposals on, an edit verb alone no longer means "rewrite my
 # selection": "make the villain more interesting" is about the story.
@@ -572,8 +583,10 @@ async def run_assistant(
     )
     consulting = budget.max_consults > 0
     model_tools = _model_tools(
-        edits_enabled=editor_can_propose,
-        entity_proposals_enabled=entity_proposals_enabled,
+        # The room advises. Withholding the proposal tools is what stops a
+        # small model answering "how could I..." by drafting a change unasked.
+        edits_enabled=editor_can_propose and not room,
+        entity_proposals_enabled=entity_proposals_enabled and not room,
         specialists_enabled=consulting,
     )
     runtime = ToolRuntime(
@@ -587,6 +600,7 @@ async def run_assistant(
     editor_snapshot_read = False
     # What specialists have found so far this run, for a later review round.
     run_findings: list[dict[str, Any]] = []
+    nudged_for_empty_reply = False
 
     try:
         async with asyncio.timeout(limits.timeout_seconds):
@@ -783,6 +797,27 @@ async def run_assistant(
                     assistant_parts.append({"type": "text", "text": text})
 
                 if finish_reason != "tool_calls":
+                    if not text.strip() and tool_calls_used > 0:
+                        # The model did the work and then said nothing. Ask
+                        # once more; failing that, say so rather than leave the
+                        # writer looking at tool cards and a blank reply.
+                        if not nudged_for_empty_reply and (
+                            budget.model_calls_used < budget.max_model_calls
+                        ):
+                            nudged_for_empty_reply = True
+                            messages.append(
+                                {
+                                    "role": "user",
+                                    "parts": [
+                                        {"type": "text", "text": EMPTY_REPLY_NUDGE}
+                                    ],
+                                }
+                            )
+                            continue
+                        yield events.emit(
+                            TextDone,
+                            part=TextPart(type="text", text=EMPTY_REPLY_FALLBACK),
+                        )
                     terminal_reason = "length" if finish_reason == "length" else "stop"
                     yield events.emit(RunCompleted, finish_reason=terminal_reason)
                     outcome = "completed"

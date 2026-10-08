@@ -162,20 +162,27 @@ async def test_a_chapter_resolves_by_id_title_or_number(story, ref):
 
 
 @pytest.mark.parametrize(
-    "refs, fragment",
+    "refs",
     [
-        ([], "needs a character in focus. This story's characters: Mina"),
-        ([("character", "char-404")], "No character is called 'char-404'"),
+        [],
+        [("character", "char-404")],
         # Another owner's character is indistinguishable from a missing one.
-        ([("character", "char-9")], "No character is called 'char-9'"),
-        ([("character", "Outsider")], "No character is called 'Outsider'"),
+        [("character", "char-9")],
+        [("character", "Outsider")],
     ],
 )
-async def test_a_missing_required_focus_is_rejected_with_who_exists(
-    story, refs, fragment
-):
-    with pytest.raises(ConsultRejected, match=fragment):
-        await build_context(SPECIALISTS["character_editor"], focus(*refs), CTX)
+async def test_without_a_named_character_the_editor_gets_the_whole_cast(story, refs):
+    context = await build_context(
+        SPECIALISTS["character_editor"],
+        focus(*refs),
+        CTX,
+        brief="How could I introduce a new character?",
+    )
+    assert {c["name"] for c in context["characters"]} == {"Mina", "Tobias", "Unrelated"}
+    assert "No single character was named" in context["castNote"]
+    # Only the caller's own echoed reference may mention it, never a record.
+    assert "char-9" not in json.dumps({**context, "focusNotFound": []})
+    assert ("focusNotFound" in context) == bool(refs)
 
 
 async def test_an_ambiguous_name_asks_for_an_id(story):
@@ -186,10 +193,11 @@ async def test_an_ambiguous_name_asks_for_an_id(story):
         )
 
 
-async def test_a_story_with_no_characters_says_so(story):
+async def test_a_story_with_no_characters_still_gets_an_answer(story):
     story.entities[("story-1", "characters")] = []
-    with pytest.raises(ConsultRejected, match="no characters recorded yet"):
-        await build_context(SPECIALISTS["character_editor"], [], CTX)
+    context = await build_context(SPECIALISTS["character_editor"], [], CTX)
+    assert context["characters"] == []
+    assert "no characters recorded yet" in context["castNote"]
 
 
 async def test_a_wrong_optional_focus_narrows_the_consult_instead_of_stopping_it(
@@ -450,13 +458,13 @@ async def test_a_consult_cannot_take_the_directors_last_call(story):
     assert events[-1].type == "run.completed" and events[-1].finish_reason == "stop"
 
 
-async def test_a_bad_focus_is_declined_and_does_not_cost_a_consult(story):
+async def test_a_declined_consult_does_not_cost_one(story):
     bad = {
-        "specialist": "character_editor",
-        "brief": "Is the lead consistent?",
-        "focus": [{"kind": "character", "ref": "the protagonist"}],
+        "specialist": "drafter",
+        "brief": "Write the confrontation.",
+        "focus": [{"kind": "event", "ref": "The confrontation"}],
     }
-    provider = RoutingProvider(
+    provider = CastProvider(
         [
             consult_step(("call-1", bad)),
             consult_step(("call-2", EDITOR), ("call-3", ARCHITECT)),
@@ -465,10 +473,12 @@ async def test_a_bad_focus_is_declined_and_does_not_cost_a_consult(story):
     )
     events = await collect(provider)
     reason = completed(events, "call-1").result["reason"]
-    # The refusal names who does exist, so the retry needs no lookup.
-    assert "No character is called 'the protagonist'" in reason
-    assert "Mina, Tobias, Unrelated" in reason
-    assert len(provider.specialist_requests()) == 2
+    # The refusal names what does exist, so the retry needs no lookup.
+    assert "is called 'The confrontation'" in reason and "The storm" in reason
+    assert provider.calls_to("Drafting Agent") == []
+    # Both consults in the next step still fit under the cap of two.
+    assert len(provider.calls_to("Character Editor")) == 1
+    assert len(provider.calls_to("Story Architect")) == 1
 
 
 async def test_one_specialist_failing_leaves_the_other_and_the_answer(story):
@@ -1036,28 +1046,25 @@ def test_only_a_known_mode_is_accepted():
     [
         ("Is Mina consistent in the storm?", ["char-1"]),
         ("Why is TOBIAS so passive?", ["char-2"]),
-        ("Is the protagonist consistent?", None),
+        ("Is the protagonist consistent?", ["char-1", "char-2", "char-3"]),
     ],
 )
 async def test_a_character_named_only_in_the_brief_is_put_in_focus(
     story, brief, expected
 ):
-    editor = SPECIALISTS["character_editor"]
-    if expected is None:
-        with pytest.raises(ConsultRejected, match="needs a character in focus"):
-            await build_context(editor, [], CTX, brief=brief)
-        return
-    context = await build_context(editor, [], CTX, brief=brief)
-    assert [c["id"] for c in context["characters"]] == expected
+    context = await build_context(SPECIALISTS["character_editor"], [], CTX, brief=brief)
+    assert sorted(c["id"] for c in context["characters"]) == expected
+    assert ("castNote" in context) == (len(expected) > 1)
 
 
 async def test_a_shared_first_name_is_not_guessed(story):
     story.entities[("story-1", "characters")][0]["name"] = "Mina Stone"
     story.seed_entity("story-1", "characters", "char-7", name="Mina Vale")
-    with pytest.raises(ConsultRejected, match="needs a character in focus"):
-        await build_context(
-            SPECIALISTS["character_editor"], [], CTX, brief="What does Mina want?"
-        )
+    context = await build_context(
+        SPECIALISTS["character_editor"], [], CTX, brief="What does Mina want?"
+    )
+    # Two Minas: neither is picked, so the editor sees the cast and says so.
+    assert len(context["characters"]) == 4 and "castNote" in context
 
 
 async def test_the_rooms_critic_reviews_even_when_not_asked_to(story):
@@ -1070,3 +1077,76 @@ async def test_the_rooms_critic_reviews_even_when_not_asked_to(story):
     ordinary = CastProvider([step, FINAL_ROUND])
     plain = await collect(ordinary)
     assert completed(plain, "call-2").result["reviewed"] is False
+
+
+# -- answering well, and always answering ---------------------------------
+
+
+def test_specialists_are_told_to_advise_on_what_does_not_exist_yet():
+    for specialist in SPECIALISTS.values():
+        prompt = specialist.system_prompt
+        assert "does not exist yet" in prompt
+        assert "Never answer that the material" in prompt
+
+
+async def test_the_room_withholds_the_proposal_tools(story):
+    provider = CastProvider([ROOM_STEP, FINAL_ROUND])
+    await collect_room(provider, edits_enabled=True)
+    synthesis_tools = provider.requests[-1]["tools"]
+    assert "consult_specialist" in synthesis_tools
+    assert "propose_story_changes" not in synthesis_tools
+    # An ordinary run still offers them.
+    ordinary = CastProvider([FINAL_ROUND])
+    await collect(ordinary)
+    assert "propose_story_changes" in ordinary.requests[0]["tools"]
+
+
+EMPTY_ROUND = [USAGE, {"type": "done", "finish_reason": "stop"}]
+
+
+async def test_an_empty_reply_after_tool_use_is_asked_for_once_more(story):
+    provider = CastProvider(
+        [consult_step(("call-1", ARCHITECT)), EMPTY_ROUND, FINAL_ROUND]
+    )
+    events = await collect(provider)
+    director = [r for r in provider.requests if r["specialist"] is None]
+    assert len(director) == 3
+    nudge = director[-1]["messages"][-1]
+    assert nudge["role"] == "user" and "Write your reply" in nudge["parts"][0]["text"]
+    texts = [e.part.text for e in events if e.type == "text.done"]
+    assert texts == ["Saltmarsh has one chapter."]
+    assert events[-1].finish_reason == "stop"
+
+
+async def test_a_reply_that_stays_empty_says_so_instead_of_nothing(story):
+    provider = CastProvider([consult_step(("call-1", ARCHITECT)), EMPTY_ROUND])
+    events = await collect(provider)
+    texts = [e.part.text for e in events if e.type == "text.done"]
+    assert len(texts) == 1 and "could not put a summary together" in texts[0]
+    # Asked once, not in a loop.
+    assert len([r for r in provider.requests if r["specialist"] is None]) == 3
+    assert events[-1].type == "run.completed"
+
+
+async def test_an_empty_reply_with_no_tool_use_is_left_alone(story):
+    provider = CastProvider([EMPTY_ROUND])
+    events = await collect(provider)
+    assert len(provider.requests) == 1
+    assert not any(e.type == "text.done" for e in events)
+
+
+async def test_findings_without_an_analysis_are_salvaged_from_the_rest(story):
+    partial = {
+        "analysis": "",
+        "recommendations": [{"title": "Raise the inquest", "detail": "Cost Mina."}],
+        "risks": ["May crowd the ending."],
+    }
+    provider = CastProvider(
+        [consult_step(("call-1", ARCHITECT)), FINAL_ROUND],
+        specialists={"Story Architect": findings_reply(partial)},
+    )
+    events = await collect(provider)
+    result = completed(events, "call-1").result
+    assert result["degraded"] is True
+    assert "Raise the inquest — Cost Mina." in result["findings"]["analysis"]
+    assert "May crowd the ending." in result["findings"]["analysis"]

@@ -28,6 +28,7 @@ COLLECTION_BY_KIND = {"character": "characters", "place": "places", "plot": "plo
 CHAPTER_WINDOW_CHARS = 6_000
 MAX_LISTED_NAMES = 12
 MAX_INFERRED_FOCUS = 2
+MAX_CAST_WITHOUT_FOCUS = 8
 
 # Fields that are noise to a specialist: media, bookkeeping, back-references.
 _DROPPED = frozenset(
@@ -330,13 +331,6 @@ async def build_context(
         raise ConsultRejected(f"{problem} This story's {'; '.join(listed)}.")
 
     for kind in specialist.required_focus:
-        if not focused.get(kind):
-            # The director named them in the brief but left focus empty: a
-            # common slip, and cheaper to repair here than to bounce back.
-            inferred = _named_in(brief, await story.roster(COLLECTION_BY_KIND[kind]))
-            if inferred:
-                focused[kind] = inferred
-    for kind in specialist.required_focus:
         if focused.get(kind):
             continue
         # Tell the director what does exist, so it can retry without a lookup.
@@ -364,6 +358,17 @@ async def build_context(
         plots = await story.roster("plots")
         characters = await story.roster("characters")
         by_id = {str(row.get("id")): row for row in characters}
+        # Nobody in focus: use whoever the brief names, else the whole cast.
+        # A question about a new character has no existing one to point at.
+        chosen = focused.get("character") or _named_in(brief, characters)
+        if not chosen:
+            chosen = characters[:MAX_CAST_WITHOUT_FOCUS]
+            context["castNote"] = (
+                "No single character was named, so this is the cast as recorded."
+                if chosen
+                else "This story has no characters recorded yet."
+            )
+        focused["character"] = chosen
         focus_ids = {str(row.get("id")) for row in focused["character"]}
         related: dict[str, dict[str, Any]] = {}
         appearances: list[dict[str, Any]] = []
