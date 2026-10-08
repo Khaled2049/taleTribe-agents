@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, model_validator
 from pydantic.alias_generators import to_camel
 
 from agents.storyAgent.action_schemas import (
@@ -45,6 +45,14 @@ MAX_SUMMARY_CHARS = 500
 MAX_API_KEY_CHARS = 512
 MAX_URL_CHARS = 2048
 MAX_EDIT_OPERATIONS = 20
+# Entity proposals. Tighter than story-data's own ceilings (200 / 20 000): a
+# proposal has to fit in one bounded tool call, and five changes at story-data's
+# prose limit would not.
+MAX_STORY_CHANGES = 5
+MAX_ENTITY_NAME_CHARS = 200
+MAX_ENTITY_SHORT_CHARS = 100
+MAX_ENTITY_PROSE_CHARS = 4_000
+MAX_EVENT_CHARACTERS = 20
 
 
 class StrictModel(BaseModel):
@@ -194,6 +202,232 @@ class EditorContinuation(StrictModel):
     )
 
 
+StoryChangeOperation = Literal[
+    "character.create",
+    "character.update",
+    "place.create",
+    "place.update",
+    "plot.create",
+    "plot.update",
+    "event.create",
+    "event.update",
+]
+
+# What a proposal may set, per entity kind. Deliberately narrower than
+# story-data's inputs: no image URLs, no relationships, no event ordering or
+# dependencies. The browser merges these onto the full current record.
+STORY_CHANGE_FIELDS: dict[str, frozenset[str]] = {
+    "character": frozenset(
+        {
+            "name",
+            "age",
+            "soul",
+            "personality",
+            "voice",
+            "backstory",
+            "affiliations",
+            "notes",
+        }
+    ),
+    "place": frozenset(
+        {
+            "name",
+            "description",
+            "atmosphere",
+            "geography",
+            "history",
+            "significance",
+            "notes",
+        }
+    ),
+    "plot": frozenset({"name", "description"}),
+    "event": frozenset(
+        {
+            "name",
+            "content",
+            "tension_level",
+            "pacing",
+            "story_beat",
+            "emotional_tone",
+            "character_ids",
+            "location_id",
+            "notes",
+        }
+    ),
+}
+
+
+def _prose() -> Any:
+    return Field(default=None, min_length=1, max_length=MAX_ENTITY_PROSE_CHARS)
+
+
+def _short() -> Any:
+    return Field(default=None, min_length=1, max_length=MAX_ENTITY_SHORT_CHARS)
+
+
+class StoryChangeFields(StrictModel):
+    """Only the fields being set. Which ones apply depends on the entity kind."""
+
+    name: Optional[str] = Field(
+        default=None, min_length=1, max_length=MAX_ENTITY_NAME_CHARS
+    )
+    age: Optional[int] = Field(default=None, ge=0, le=100_000)
+    soul: Optional[str] = _prose()
+    personality: Optional[str] = _prose()
+    voice: Optional[str] = _prose()
+    backstory: Optional[str] = _prose()
+    affiliations: Optional[str] = _prose()
+    description: Optional[str] = _prose()
+    atmosphere: Optional[str] = _prose()
+    geography: Optional[str] = _prose()
+    history: Optional[str] = _prose()
+    significance: Optional[str] = _prose()
+    content: Optional[str] = _prose()
+    tension_level: Optional[int] = Field(default=None, ge=1, le=10)
+    # The plot board renders these as fixed choices, so free text would not show.
+    pacing: Optional[Literal["slow", "moderate", "fast"]] = None
+    story_beat: Optional[
+        Literal[
+            "exposition",
+            "inciting_incident",
+            "rising_action",
+            "midpoint",
+            "climax",
+            "falling_action",
+            "resolution",
+        ]
+    ] = None
+    emotional_tone: Optional[str] = _short()
+    character_ids: Optional[
+        list[Annotated[str, Field(min_length=1, max_length=MAX_ID_CHARS)]]
+    ] = Field(default=None, max_length=MAX_EVENT_CHARACTERS)
+    location_id: Optional[str] = Field(
+        default=None, min_length=1, max_length=MAX_ID_CHARS
+    )
+    notes: Optional[str] = _prose()
+
+    def set_names(self) -> frozenset[str]:
+        return frozenset(
+            name for name in self.model_fields_set if getattr(self, name) is not None
+        )
+
+
+class StoryChangeDraft(StrictModel):
+    """One create or update, as the model writes it. No revision: the server binds it."""
+
+    operation: StoryChangeOperation
+    entity_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=MAX_ID_CHARS,
+        description="Required for an update, as returned by a read tool. Omit for a create.",
+    )
+    plot_line_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=MAX_ID_CHARS,
+        description="Required for event.create and event.update: the plot line the event belongs to.",
+    )
+    fields: StoryChangeFields
+
+    @property
+    def kind(self) -> str:
+        return self.operation.split(".", 1)[0]
+
+    @property
+    def is_create(self) -> bool:
+        return self.operation.endswith(".create")
+
+    @model_validator(mode="after")
+    def _check_shape(self) -> "StoryChangeDraft":
+        # Providers often emit explicit nulls for optional fields; treat as unset.
+        set_fields = self.fields.set_names()
+        if not set_fields:
+            raise ValueError("a change must set at least one field")
+        unexpected = set_fields - STORY_CHANGE_FIELDS[self.kind]
+        if unexpected:
+            raise ValueError(
+                f"{self.kind} changes cannot set: {', '.join(sorted(unexpected))}"
+            )
+        if self.is_create:
+            if self.entity_id is not None:
+                raise ValueError("a create cannot name an existing entity")
+            if self.fields.name is None:
+                raise ValueError("a create requires a name")
+        elif self.entity_id is None:
+            raise ValueError("an update requires entityId")
+        if (self.kind == "event") != (self.plot_line_id is not None):
+            raise ValueError("plotLineId is required for events and only for events")
+        return self
+
+
+class StoryChange(StoryChangeDraft):
+    """A draft plus what the server bound: the target's revision and a label."""
+
+    base_revision: Optional[int] = Field(default=None, ge=0)
+    label: str = Field(min_length=1, max_length=MAX_ENTITY_NAME_CHARS)
+
+    @model_validator(mode="after")
+    def _check_revision(self) -> "StoryChange":
+        if self.is_create != (self.base_revision is None):
+            raise ValueError(
+                "baseRevision is required for updates and only for updates"
+            )
+        return self
+
+
+class ProposeStoryChangesArgs(StrictModel):
+    summary: str = Field(min_length=1, max_length=MAX_SUMMARY_CHARS)
+    reason: Optional[str] = Field(
+        default=None, min_length=1, max_length=MAX_SUMMARY_CHARS
+    )
+    changes: list[StoryChange] = Field(min_length=1, max_length=MAX_STORY_CHANGES)
+
+
+class StoryChangeResult(StrictModel):
+    """Bounded browser report for one change. It never authorizes a server write."""
+
+    index: int = Field(ge=0, lt=MAX_STORY_CHANGES)
+    status: Literal["applied", "stale", "failed", "skipped"]
+    entity_id: Optional[str] = Field(
+        default=None, min_length=1, max_length=MAX_ID_CHARS
+    )
+
+
+class EntityContinuation(StrictModel):
+    """Stateless second request after the writer decides on a story-change proposal."""
+
+    kind: Literal["entity_approval"]
+    previous_run_id: str = Field(min_length=1, max_length=MAX_ID_CHARS)
+    approval_id: str = Field(min_length=1, max_length=MAX_ID_CHARS)
+    tool_call_id: str = Field(min_length=1, max_length=MAX_ID_CHARS)
+    proposal_id: str = Field(min_length=1, max_length=MAX_ID_CHARS)
+    decision: Literal["applied", "rejected", "revision_requested", "apply_failed"]
+    proposal: ProposeStoryChangesArgs
+    results: Optional[list[StoryChangeResult]] = Field(
+        default=None, min_length=1, max_length=MAX_STORY_CHANGES
+    )
+    feedback: Optional[str] = Field(
+        default=None, min_length=1, max_length=MAX_SUMMARY_CHARS
+    )
+
+
+def _continuation_kind(value: Any) -> str:
+    # Editor continuations predate the tag and may omit it.
+    if isinstance(value, dict):
+        return str(value.get("kind", "editor_approval"))
+    return str(getattr(value, "kind", "editor_approval"))
+
+
+Continuation = Annotated[
+    Union[
+        Annotated[EditorContinuation, Tag("editor_approval")],
+        Annotated[EntityContinuation, Tag("entity_approval")],
+    ],
+    Discriminator(_continuation_kind),
+]
+
+
 class EditorContext(StrictModel):
     """Freshness for the active buffer. Optional, and unused until Phase 5.
 
@@ -230,7 +464,7 @@ class RunRequest(StrictModel):
     client_message_id: str = Field(min_length=1, max_length=MAX_ID_CHARS)
     message: UserMessage
     editor_context: Optional[EditorContext] = None
-    continuation: Optional[EditorContinuation] = None
+    continuation: Optional[Continuation] = None
 
 
 class ProviderConfig(StrictModel):

@@ -1,0 +1,41 @@
+{
+  "name": "entity-approval-partial",
+  "description": "A stale change stopped the apply; the reply says what did not save.",
+  "protocolVersion": 1,
+  "events": [
+    {
+      "v": 1,
+      "runId": "run-entity-partial",
+      "seq": 0,
+      "type": "run.started",
+      "provider": "mock",
+      "model": "mock-1"
+    },
+    {
+      "v": 1,
+      "runId": "run-entity-partial",
+      "seq": 1,
+      "type": "approval.resolved",
+      "approvalId": "approval-1",
+      "approved": false
+    },
+    {
+      "v": 1,
+      "runId": "run-entity-partial",
+      "seq": 2,
+      "type": "text.done",
+      "part": {
+        "type": "text",
+        "text": "Not saved: character Mina (it changed since I proposed this); place Abandoned Hospital (an earlier change did not save)."
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-entity-partial",
+      "seq": 3,
+      "type": "run.completed",
+      "finishReason": "stop"
+    }
+  ],
+  "sse": "data: {\"v\":1,\"runId\":\"run-entity-partial\",\"seq\":0,\"type\":\"run.started\",\"provider\":\"mock\",\"model\":\"mock-1\"}\n\ndata: {\"v\":1,\"runId\":\"run-entity-partial\",\"seq\":1,\"type\":\"approval.resolved\",\"approvalId\":\"approval-1\",\"approved\":false}\n\ndata: {\"v\":1,\"runId\":\"run-entity-partial\",\"seq\":2,\"type\":\"text.done\",\"part\":{\"type\":\"text\",\"text\":\"Not saved: character Mina (it changed since I proposed this); place Abandoned Hospital (an earlier change did not save).\"}}\n\ndata: {\"v\":1,\"runId\":\"run-entity-partial\",\"seq\":3,\"type\":\"run.completed\",\"finishReason\":\"stop\"}\n\n"
+}

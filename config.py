@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     image_generation_max_concurrent: int = Field(default=1, ge=1, le=8)
     assistant_api_enabled: bool = False
     assistant_edit_proposals_enabled: bool = True
+    assistant_entity_proposals_enabled: bool = False
     assistant_research_enabled: bool = False
 
     # Independent ceilings for one streamed run. They are deliberately settings,

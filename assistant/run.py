@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Optional
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from agents.storyAgent.llm_provider import (
     BackendUnavailableError,
@@ -28,6 +28,12 @@ from agents.storyAgent.llm_provider import (
     ProviderAuthError,
     ProviderNotFoundError,
     RateLimitedError,
+)
+from assistant.entity_changes import (
+    ProposalRejected,
+    bind_story_changes,
+    resolution_text,
+    validate_entity_continuation,
 )
 from assistant.errors import ErrorCode, safe_message
 from assistant.events import (
@@ -57,6 +63,7 @@ from assistant.history import HistoryLimits, prior_turns
 from assistant.protocol import (
     AgentRunRequest,
     EditorContext,
+    EntityContinuation,
     ProposeEditorEditArgs,
     ReplaceOperation,
     TextPart,
@@ -65,6 +72,7 @@ from assistant.protocol import (
 from assistant.tools import (
     TOOL_SCHEMAS,
     ProposeEditorEditDraft,
+    ProposeStoryChangesDraft,
     ToolContext,
     UnknownToolError,
     available_tools,
@@ -97,6 +105,35 @@ binds the chapter, revision, range, and original text from its trusted editor
 snapshot. Replacement text must be plain text in a single paragraph. A proposal
 never applies itself; the writer reviews it in the editor."""
 
+ENTITY_RULES = """
+You may propose creating or updating this story's characters, places, plot
+lines, and plot events with propose_story_changes, when the writer asks for a
+change or accepts one you suggested. Read an entity before proposing an update
+to it and use ids exactly as the tools returned them; never invent an id.
+Include only the fields that change and keep each one concise. An event may
+only reference characters and places that already exist. You cannot delete
+anything. Call propose_story_changes alone, never alongside another tool. A
+proposal never applies itself: the writer reviews it, so never say a change was
+made unless a later message reports it was saved."""
+
+# With entity proposals on, an edit verb alone no longer means "rewrite my
+# selection": "make the villain more interesting" is about the story.
+_SELECTION_REFERENCES = frozenset(
+    {
+        "this",
+        "it",
+        "selection",
+        "selected",
+        "highlighted",
+        "sentence",
+        "paragraph",
+        "passage",
+        "line",
+        "text",
+    }
+)
+_BARE_EDIT_MAX_WORDS = 3
+
 _EDIT_REQUEST_VERBS = (
     "edit",
     "expand",
@@ -113,9 +150,14 @@ _EDIT_REQUEST_VERBS = (
 )
 
 
-def _is_edit_request(text: str) -> bool:
-    words = set(re.findall(r"[a-z]+", text.casefold()))
-    return any(term in words for term in _EDIT_REQUEST_VERBS)
+def _is_edit_request(text: str, *, require_selection_reference: bool = False) -> bool:
+    found = re.findall(r"[a-z]+", text.casefold())
+    words = set(found)
+    if not any(term in words for term in _EDIT_REQUEST_VERBS):
+        return False
+    if not require_selection_reference:
+        return True
+    return len(found) <= _BARE_EDIT_MAX_WORDS or bool(words & _SELECTION_REFERENCES)
 
 
 @dataclass(frozen=True)
@@ -152,11 +194,44 @@ class _PendingToolCall:
         return "".join(self.argument_chunks) or "{}"
 
 
-def _model_tools(*, edits_enabled: bool) -> list[dict[str, Any]]:
-    tools = available_tools(edits_enabled=edits_enabled, research_enabled=False)
+def _without_null_branches(node: Any) -> Any:
+    """Render ``Optional[X]`` as plain ``X`` that is simply not required.
+
+    Pydantic emits ``anyOf: [X, {"type": "null"}]`` with ``default: null``.
+    Function-calling schemas are a JSON Schema subset and not every provider
+    accepts a null type, so the provider-facing copy drops it. Validation still
+    runs against the real model, which accepts both an absent and a null value.
+    """
+    if isinstance(node, list):
+        return [_without_null_branches(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+    out = {key: _without_null_branches(value) for key, value in node.items()}
+    branches = out.get("anyOf")
+    if isinstance(branches, list):
+        kept = [branch for branch in branches if branch != {"type": "null"}]
+        if len(kept) != len(branches):
+            if out.get("default", "") is None:
+                del out["default"]
+            if len(kept) == 1 and isinstance(kept[0], dict):
+                del out["anyOf"]
+                out = {**kept[0], **out}
+            else:
+                out["anyOf"] = kept
+    return out
+
+
+def _model_tools(
+    *, edits_enabled: bool, entity_proposals_enabled: bool = False
+) -> list[dict[str, Any]]:
+    tools = available_tools(
+        edits_enabled=edits_enabled,
+        research_enabled=False,
+        entity_proposals_enabled=entity_proposals_enabled,
+    )
     result = []
     for name, schema in tools.items():
-        parameters = schema.model_json_schema(by_alias=True)
+        parameters = _without_null_branches(schema.model_json_schema(by_alias=True))
         description = str(parameters.pop("description", "")).strip()
         result.append(
             {"name": name, "description": description, "parameters": parameters}
@@ -164,14 +239,24 @@ def _model_tools(*, edits_enabled: bool) -> list[dict[str, Any]]:
     return result
 
 
-async def _system_prompt(postgres: Any, story_id: str, *, edits_enabled: bool) -> str:
+async def _system_prompt(
+    postgres: Any,
+    story_id: str,
+    *,
+    edits_enabled: bool,
+    entity_proposals_enabled: bool = False,
+) -> str:
     slim = ""
     if postgres is not None and getattr(postgres, "pool", None) is not None:
         try:
             slim = await postgres.slim_context(story_id)
         except Exception:
             logger.warning("assistant_slim_context_unavailable story_scoped=1")
-    rules = SYSTEM_RULES + (EDIT_RULES if edits_enabled else "")
+    rules = (
+        SYSTEM_RULES
+        + (EDIT_RULES if edits_enabled else "")
+        + (ENTITY_RULES if entity_proposals_enabled else "")
+    )
     if not slim:
         return rules
     return (
@@ -185,7 +270,7 @@ async def _system_prompt(postgres: Any, story_id: str, *, edits_enabled: bool) -
     )
 
 
-def _proposal_id(run_id: str, proposal: ProposeEditorEditArgs) -> str:
+def _proposal_id(run_id: str, proposal: BaseModel) -> str:
     canonical = proposal.model_dump_json(by_alias=True, exclude_none=True)
     digest = hashlib.sha256(f"{run_id}:{canonical}".encode()).hexdigest()[:32]
     return f"proposal-{digest}"
@@ -274,6 +359,11 @@ def _validated_continuation(request: AgentRunRequest) -> Optional[str]:
         raise ValueError("apply linkage is invalid")
     if continuation.approval_id != _approval_id(expected_proposal_id):
         raise ValueError("approval linkage is invalid")
+    if isinstance(continuation, EntityContinuation):
+        validate_entity_continuation(
+            continuation, expected_proposal_id=expected_proposal_id
+        )
+        return expected_proposal_id
     if continuation.decision == "applied":
         if continuation.result is None or continuation.result.status != "saved":
             raise ValueError("applied continuation requires a saved result")
@@ -337,6 +427,7 @@ async def run_assistant(
     limits: RunLimits,
     billing: str = "platform",
     edits_enabled: bool = False,
+    entity_proposals_enabled: bool = False,
     history_limits: Optional[HistoryLimits] = None,
 ) -> AsyncIterator[BaseEvent]:
     """Run one assistant turn and yield normalized protocol events."""
@@ -357,7 +448,10 @@ async def run_assistant(
         and editor.selection.from_ < editor.selection.to
         and editor.selection.text
     )
-    model_tools = _model_tools(edits_enabled=editor_can_propose)
+    model_tools = _model_tools(
+        edits_enabled=editor_can_propose,
+        entity_proposals_enabled=entity_proposals_enabled,
+    )
     runtime = ToolRuntime(
         ctx=ToolContext(user_id=request.user_id, story_id=request.story_id),
         postgres=postgres,
@@ -371,14 +465,26 @@ async def run_assistant(
     try:
         async with asyncio.timeout(limits.timeout_seconds):
             if continuation is not None:
-                if not edits_enabled:
-                    raise ValueError("editor continuations are disabled")
+                is_entity = isinstance(continuation, EntityContinuation)
+                if not (entity_proposals_enabled if is_entity else edits_enabled):
+                    raise ValueError("this continuation kind is disabled")
                 _validated_continuation(request)
                 yield events.emit(
                     ApprovalResolved,
                     approval_id=continuation.approval_id,
                     approved=continuation.decision == "applied",
                 )
+                if (
+                    isinstance(continuation, EntityContinuation)
+                    and continuation.decision != "revision_requested"
+                ):
+                    yield events.emit(
+                        TextDone,
+                        part=TextPart(type="text", text=resolution_text(continuation)),
+                    )
+                    yield events.emit(RunCompleted, finish_reason="stop")
+                    outcome = continuation.decision
+                    return
                 if continuation.decision != "revision_requested":
                     response_text = {
                         "applied": "Applied and saved in the current chapter.",
@@ -395,7 +501,10 @@ async def run_assistant(
                     return
 
             prompt = await _system_prompt(
-                postgres, request.story_id, edits_enabled=editor_can_propose
+                postgres,
+                request.story_id,
+                edits_enabled=editor_can_propose,
+                entity_proposals_enabled=entity_proposals_enabled,
             )
             user_text = "\n".join(part.text for part in request.message.parts)
             if continuation is not None:
@@ -424,7 +533,9 @@ async def run_assistant(
             direct_editor_proposal = bool(
                 continuation is None
                 and editor_can_propose
-                and _is_edit_request(user_text)
+                and _is_edit_request(
+                    user_text, require_selection_reference=entity_proposals_enabled
+                )
             )
             if direct_editor_proposal and editor is not None and editor.selection:
                 user_message["parts"].append(
@@ -589,11 +700,40 @@ async def run_assistant(
 
                 for call in calls:
                     tool_calls_used += 1
+                    story_proposal_id: Optional[str] = None
                     try:
                         raw_arguments = json.loads(call.arguments_text)
                         if not isinstance(raw_arguments, dict):
                             raise ValueError("tool arguments must be an object")
-                        if call.name == "propose_editor_edit":
+                        if call.name == "propose_story_changes":
+                            if not entity_proposals_enabled:
+                                raise UnknownToolError(call.name)
+                            story_draft = ProposeStoryChangesDraft.model_validate(
+                                raw_arguments
+                            )
+                            normalized = story_draft.model_dump(
+                                by_alias=True, exclude_none=True
+                            )
+                            try:
+                                if len(calls) != 1:
+                                    raise ProposalRejected(
+                                        "Call propose_story_changes alone, as the "
+                                        "only tool call in its step."
+                                    )
+                                bound = await bind_story_changes(
+                                    story_draft, runtime.ctx
+                                )
+                            except ProposalRejected as rejected:
+                                result = ToolResult(
+                                    {"accepted": False, "reason": str(rejected)}
+                                )
+                            else:
+                                normalized = bound.model_dump(
+                                    by_alias=True, exclude_none=True
+                                )
+                                story_proposal_id = _proposal_id(run_id, bound)
+                                result = ToolResult({"proposalId": story_proposal_id})
+                        elif call.name == "propose_editor_edit":
                             draft = ProposeEditorEditDraft.model_validate(raw_arguments)
                             parsed = _bind_editor_proposal(
                                 draft, request.editor_context
@@ -674,6 +814,36 @@ async def run_assistant(
                                 tool_call_id=apply_call_id,
                                 summary=(
                                     f"Apply this replacement to {parsed.chapter_id}?"
+                                ),
+                            )
+                            yield events.emit(RunCompleted, finish_reason="tool_calls")
+                            outcome = "approval_required"
+                            return
+
+                        if story_proposal_id is not None:
+                            apply_call_id = _apply_call_id(story_proposal_id)
+                            yield events.emit(
+                                ToolStarted,
+                                tool_call_id=apply_call_id,
+                                name="apply_story_changes",
+                            )
+                            yield events.emit(
+                                ToolArgsDelta,
+                                tool_call_id=apply_call_id,
+                                delta=json.dumps(
+                                    {"proposalId": story_proposal_id},
+                                    separators=(",", ":"),
+                                ),
+                            )
+                            count = len(bound.changes)
+                            yield events.emit(
+                                ApprovalRequested,
+                                approval_id=_approval_id(story_proposal_id),
+                                tool_call_id=apply_call_id,
+                                summary=(
+                                    "Save this change to the story?"
+                                    if count == 1
+                                    else f"Save these {count} changes to the story?"
                                 ),
                             )
                             yield events.emit(RunCompleted, finish_reason="tool_calls")

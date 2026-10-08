@@ -92,6 +92,7 @@ def register_assistant(
                     embedder=agent.embedding_provider,
                     limits=limits,
                     edits_enabled=settings.assistant_edit_proposals_enabled,
+                    entity_proposals_enabled=settings.assistant_entity_proposals_enabled,
                     history_limits=history_limits,
                 ):
                     yield encode_sse(event)

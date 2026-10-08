@@ -31,7 +31,7 @@ from typing import Any, Literal, Optional
 
 from capability_catalog import assistant_tools
 
-Gate = Literal["always", "edits", "research"]
+Gate = Literal["always", "edits", "entities", "research"]
 
 
 @dataclass(frozen=True)
@@ -150,6 +150,19 @@ HELP_CATALOG: tuple[Capability, ...] = (
         ),
         example="Suggest a tighter revision for the text I selected in the editor.",
         limits="One selection at a time, as plain text in a single paragraph.",
+    ),
+    Capability(
+        id="propose_story_changes",
+        tools=assistant_tools("propose_story_changes"),
+        gate="entities",
+        title="Suggest changes to your cast, places and plot",
+        summary=(
+            "Draft a new character, place, plot line or plot event, or changes "
+            "to one you have. You review each change and nothing is saved "
+            "until you accept it."
+        ),
+        example="Add an abandoned hospital as a location.",
+        limits="Up to 5 changes at a time. I cannot delete anything.",
     ),
     Capability(
         id="research_web",

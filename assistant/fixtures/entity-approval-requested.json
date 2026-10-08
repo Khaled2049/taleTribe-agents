@@ -1,0 +1,93 @@
+{
+  "name": "entity-approval-requested",
+  "description": "A story-change proposal pauses for the writer's approval.",
+  "protocolVersion": 1,
+  "events": [
+    {
+      "v": 1,
+      "runId": "run-entity-approval",
+      "seq": 0,
+      "type": "run.started",
+      "provider": "mock",
+      "model": "mock-1"
+    },
+    {
+      "v": 1,
+      "runId": "run-entity-approval",
+      "seq": 1,
+      "type": "tool.started",
+      "toolCallId": "call-1",
+      "name": "propose_story_changes"
+    },
+    {
+      "v": 1,
+      "runId": "run-entity-approval",
+      "seq": 2,
+      "type": "tool.completed",
+      "part": {
+        "type": "tool_call",
+        "toolCallId": "call-1",
+        "name": "propose_story_changes",
+        "arguments": {
+          "summary": "Give Mina a guarded edge and add the hospital.",
+          "reason": "Her caution needs a place that justifies it.",
+          "changes": [
+            {
+              "operation": "character.update",
+              "entityId": "ent-1",
+              "fields": {
+                "personality": "Guarded; slow to trust strangers."
+              },
+              "baseRevision": 4,
+              "label": "Mina"
+            },
+            {
+              "operation": "place.create",
+              "fields": {
+                "name": "Abandoned Hospital",
+                "atmosphere": "Damp, silent, smelling of iodine."
+              },
+              "label": "Abandoned Hospital"
+            }
+          ]
+        },
+        "result": {
+          "proposalId": "proposal-1"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-entity-approval",
+      "seq": 3,
+      "type": "tool.started",
+      "toolCallId": "apply-1",
+      "name": "apply_story_changes"
+    },
+    {
+      "v": 1,
+      "runId": "run-entity-approval",
+      "seq": 4,
+      "type": "tool.args.delta",
+      "toolCallId": "apply-1",
+      "delta": "{\"proposalId\":\"proposal-1\"}"
+    },
+    {
+      "v": 1,
+      "runId": "run-entity-approval",
+      "seq": 5,
+      "type": "approval.requested",
+      "approvalId": "approval-1",
+      "toolCallId": "apply-1",
+      "summary": "Save these 2 changes to the story?"
+    },
+    {
+      "v": 1,
+      "runId": "run-entity-approval",
+      "seq": 6,
+      "type": "run.completed",
+      "finishReason": "tool_calls"
+    }
+  ],
+  "sse": "data: {\"v\":1,\"runId\":\"run-entity-approval\",\"seq\":0,\"type\":\"run.started\",\"provider\":\"mock\",\"model\":\"mock-1\"}\n\ndata: {\"v\":1,\"runId\":\"run-entity-approval\",\"seq\":1,\"type\":\"tool.started\",\"toolCallId\":\"call-1\",\"name\":\"propose_story_changes\"}\n\ndata: {\"v\":1,\"runId\":\"run-entity-approval\",\"seq\":2,\"type\":\"tool.completed\",\"part\":{\"type\":\"tool_call\",\"toolCallId\":\"call-1\",\"name\":\"propose_story_changes\",\"arguments\":{\"summary\":\"Give Mina a guarded edge and add the hospital.\",\"reason\":\"Her caution needs a place that justifies it.\",\"changes\":[{\"operation\":\"character.update\",\"entityId\":\"ent-1\",\"fields\":{\"personality\":\"Guarded; slow to trust strangers.\"},\"baseRevision\":4,\"label\":\"Mina\"},{\"operation\":\"place.create\",\"fields\":{\"name\":\"Abandoned Hospital\",\"atmosphere\":\"Damp, silent, smelling of iodine.\"},\"label\":\"Abandoned Hospital\"}]},\"result\":{\"proposalId\":\"proposal-1\"}}}\n\ndata: {\"v\":1,\"runId\":\"run-entity-approval\",\"seq\":3,\"type\":\"tool.started\",\"toolCallId\":\"apply-1\",\"name\":\"apply_story_changes\"}\n\ndata: {\"v\":1,\"runId\":\"run-entity-approval\",\"seq\":4,\"type\":\"tool.args.delta\",\"toolCallId\":\"apply-1\",\"delta\":\"{\\\"proposalId\\\":\\\"proposal-1\\\"}\"}\n\ndata: {\"v\":1,\"runId\":\"run-entity-approval\",\"seq\":5,\"type\":\"approval.requested\",\"approvalId\":\"approval-1\",\"toolCallId\":\"apply-1\",\"summary\":\"Save these 2 changes to the story?\"}\n\ndata: {\"v\":1,\"runId\":\"run-entity-approval\",\"seq\":6,\"type\":\"run.completed\",\"finishReason\":\"tool_calls\"}\n\n"
+}

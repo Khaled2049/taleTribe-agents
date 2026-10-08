@@ -1,0 +1,41 @@
+{
+  "name": "entity-approval-applied",
+  "description": "A separate continuation records the story changes that were saved.",
+  "protocolVersion": 1,
+  "events": [
+    {
+      "v": 1,
+      "runId": "run-entity-applied",
+      "seq": 0,
+      "type": "run.started",
+      "provider": "mock",
+      "model": "mock-1"
+    },
+    {
+      "v": 1,
+      "runId": "run-entity-applied",
+      "seq": 1,
+      "type": "approval.resolved",
+      "approvalId": "approval-1",
+      "approved": true
+    },
+    {
+      "v": 1,
+      "runId": "run-entity-applied",
+      "seq": 2,
+      "type": "text.done",
+      "part": {
+        "type": "text",
+        "text": "Saved: updated character Mina; created place Abandoned Hospital."
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-entity-applied",
+      "seq": 3,
+      "type": "run.completed",
+      "finishReason": "stop"
+    }
+  ],
+  "sse": "data: {\"v\":1,\"runId\":\"run-entity-applied\",\"seq\":0,\"type\":\"run.started\",\"provider\":\"mock\",\"model\":\"mock-1\"}\n\ndata: {\"v\":1,\"runId\":\"run-entity-applied\",\"seq\":1,\"type\":\"approval.resolved\",\"approvalId\":\"approval-1\",\"approved\":true}\n\ndata: {\"v\":1,\"runId\":\"run-entity-applied\",\"seq\":2,\"type\":\"text.done\",\"part\":{\"type\":\"text\",\"text\":\"Saved: updated character Mina; created place Abandoned Hospital.\"}}\n\ndata: {\"v\":1,\"runId\":\"run-entity-applied\",\"seq\":3,\"type\":\"run.completed\",\"finishReason\":\"stop\"}\n\n"
+}

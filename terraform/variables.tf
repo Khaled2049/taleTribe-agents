@@ -115,6 +115,12 @@ variable "assistant_edit_proposals_enabled" {
   default     = true
 }
 
+variable "assistant_entity_proposals_enabled" {
+  description = "Allow the assistant to propose browser-approved changes to characters, places, plot lines and events. Off by default; enable only after the frontend that renders the approval card is deployed."
+  type        = bool
+  default     = false
+}
+
 variable "firebase_functions_service_account" {
   description = "Service account email used by Firebase Functions to invoke the agent (e.g. story-6f89f@appspot.gserviceaccount.com). Granted roles/run.invoker on the Cloud Run service."
   type        = string

@@ -177,6 +177,11 @@ resource "google_cloud_run_v2_service" "app" {
         value = tostring(var.assistant_edit_proposals_enabled)
       }
 
+      env {
+        name  = "ASSISTANT_ENTITY_PROPOSALS_ENABLED"
+        value = tostring(var.assistant_entity_proposals_enabled)
+      }
+
       # Browser origins: the MCP consent page (frontend) calls /oauth/txn and
       # /oauth/complete cross-origin. /agent/execute remains server-to-server.
       env {

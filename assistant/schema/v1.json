@@ -19,7 +19,8 @@
     "internal_error"
   ],
   "approvalRequiredTools": [
-    "apply_editor_edit"
+    "apply_editor_edit",
+    "apply_story_changes"
   ],
   "limits": {
     "contentChars": 100000,
@@ -35,7 +36,12 @@
     "toolResults": 20,
     "chapterWindowChars": 20000,
     "editOperations": 20,
-    "researchResults": 5
+    "researchResults": 5,
+    "storyChanges": 5,
+    "entityNameChars": 200,
+    "entityShortChars": 100,
+    "entityProseChars": 4000,
+    "eventCharacters": 20
   },
   "capabilities": {
     "preamble": "I read this story and answer questions about it. Here is what I can do.",
@@ -121,6 +127,18 @@
         "summary": "Draft a replacement for the text you have selected. You see it first and nothing changes until you accept it.",
         "example": "Suggest a tighter revision for the text I selected in the editor.",
         "limits": "One selection at a time, as plain text in a single paragraph."
+      },
+      {
+        "id": "propose_story_changes",
+        "tools": [
+          "propose_story_changes",
+          "apply_story_changes"
+        ],
+        "gate": "entities",
+        "title": "Suggest changes to your cast, places and plot",
+        "summary": "Draft a new character, place, plot line or plot event, or changes to one you have. You review each change and nothing is saved until you accept it.",
+        "example": "Add an abandoned hospital as a location.",
+        "limits": "Up to 5 changes at a time. I cannot delete anything."
       },
       {
         "id": "research_web",
@@ -367,6 +385,96 @@
           "title": "EditorTextWindow",
           "type": "object"
         },
+        "EntityContinuation": {
+          "additionalProperties": false,
+          "description": "Stateless second request after the writer decides on a story-change proposal.",
+          "properties": {
+            "kind": {
+              "const": "entity_approval",
+              "title": "Kind",
+              "type": "string"
+            },
+            "previousRunId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Previousrunid",
+              "type": "string"
+            },
+            "approvalId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Approvalid",
+              "type": "string"
+            },
+            "toolCallId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Toolcallid",
+              "type": "string"
+            },
+            "proposalId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Proposalid",
+              "type": "string"
+            },
+            "decision": {
+              "enum": [
+                "applied",
+                "rejected",
+                "revision_requested",
+                "apply_failed"
+              ],
+              "title": "Decision",
+              "type": "string"
+            },
+            "proposal": {
+              "$ref": "#/$defs/ProposeStoryChangesArgs"
+            },
+            "results": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/StoryChangeResult"
+                  },
+                  "maxItems": 5,
+                  "minItems": 1,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Results"
+            },
+            "feedback": {
+              "anyOf": [
+                {
+                  "maxLength": 500,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Feedback"
+            }
+          },
+          "required": [
+            "kind",
+            "previousRunId",
+            "approvalId",
+            "toolCallId",
+            "proposalId",
+            "decision",
+            "proposal"
+          ],
+          "title": "EntityContinuation",
+          "type": "object"
+        },
         "InsertOperation": {
           "additionalProperties": false,
           "description": "Reserved for a later editor phase; Phase 5 rejects it at execution.",
@@ -455,6 +563,46 @@
           "title": "ProposeEditorEditArgs",
           "type": "object"
         },
+        "ProposeStoryChangesArgs": {
+          "additionalProperties": false,
+          "properties": {
+            "summary": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Summary",
+              "type": "string"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "maxLength": 500,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reason"
+            },
+            "changes": {
+              "items": {
+                "$ref": "#/$defs/StoryChange"
+              },
+              "maxItems": 5,
+              "minItems": 1,
+              "title": "Changes",
+              "type": "array"
+            }
+          },
+          "required": [
+            "summary",
+            "changes"
+          ],
+          "title": "ProposeStoryChangesArgs",
+          "type": "object"
+        },
         "ReplaceOperation": {
           "additionalProperties": false,
           "description": "The Phase 5 editor operation. An empty replacement is a deletion.",
@@ -523,6 +671,429 @@
             "text"
           ],
           "title": "Selection",
+          "type": "object"
+        },
+        "StoryChange": {
+          "additionalProperties": false,
+          "description": "A draft plus what the server bound: the target's revision and a label.",
+          "properties": {
+            "operation": {
+              "enum": [
+                "character.create",
+                "character.update",
+                "place.create",
+                "place.update",
+                "plot.create",
+                "plot.update",
+                "event.create",
+                "event.update"
+              ],
+              "title": "Operation",
+              "type": "string"
+            },
+            "entityId": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Required for an update, as returned by a read tool. Omit for a create.",
+              "title": "Entityid"
+            },
+            "plotLineId": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Required for event.create and event.update: the plot line the event belongs to.",
+              "title": "Plotlineid"
+            },
+            "fields": {
+              "$ref": "#/$defs/StoryChangeFields"
+            },
+            "baseRevision": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Baserevision"
+            },
+            "label": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "fields",
+            "label"
+          ],
+          "title": "StoryChange",
+          "type": "object"
+        },
+        "StoryChangeFields": {
+          "additionalProperties": false,
+          "description": "Only the fields being set. Which ones apply depends on the entity kind.",
+          "properties": {
+            "name": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Name"
+            },
+            "age": {
+              "anyOf": [
+                {
+                  "maximum": 100000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Age"
+            },
+            "soul": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Soul"
+            },
+            "personality": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Personality"
+            },
+            "voice": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Voice"
+            },
+            "backstory": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Backstory"
+            },
+            "affiliations": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Affiliations"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Description"
+            },
+            "atmosphere": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Atmosphere"
+            },
+            "geography": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Geography"
+            },
+            "history": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "History"
+            },
+            "significance": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Significance"
+            },
+            "content": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content"
+            },
+            "tensionLevel": {
+              "anyOf": [
+                {
+                  "maximum": 10,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Tensionlevel"
+            },
+            "pacing": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "slow",
+                    "moderate",
+                    "fast"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Pacing"
+            },
+            "storyBeat": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "exposition",
+                    "inciting_incident",
+                    "rising_action",
+                    "midpoint",
+                    "climax",
+                    "falling_action",
+                    "resolution"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Storybeat"
+            },
+            "emotionalTone": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Emotionaltone"
+            },
+            "characterIds": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 20,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Characterids"
+            },
+            "locationId": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Locationid"
+            },
+            "notes": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Notes"
+            }
+          },
+          "title": "StoryChangeFields",
+          "type": "object"
+        },
+        "StoryChangeResult": {
+          "additionalProperties": false,
+          "description": "Bounded browser report for one change. It never authorizes a server write.",
+          "properties": {
+            "index": {
+              "exclusiveMaximum": 5,
+              "minimum": 0,
+              "title": "Index",
+              "type": "integer"
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "stale",
+                "failed",
+                "skipped"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "entityId": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Entityid"
+            }
+          },
+          "required": [
+            "index",
+            "status"
+          ],
+          "title": "StoryChangeResult",
           "type": "object"
         },
         "UserMessage": {
@@ -626,13 +1197,21 @@
         "continuation": {
           "anyOf": [
             {
-              "$ref": "#/$defs/EditorContinuation"
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/EditorContinuation"
+                },
+                {
+                  "$ref": "#/$defs/EntityContinuation"
+                }
+              ]
             },
             {
               "type": "null"
             }
           ],
-          "default": null
+          "default": null,
+          "title": "Continuation"
         }
       },
       "required": [
@@ -875,6 +1454,96 @@
           "title": "EditorTextWindow",
           "type": "object"
         },
+        "EntityContinuation": {
+          "additionalProperties": false,
+          "description": "Stateless second request after the writer decides on a story-change proposal.",
+          "properties": {
+            "kind": {
+              "const": "entity_approval",
+              "title": "Kind",
+              "type": "string"
+            },
+            "previousRunId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Previousrunid",
+              "type": "string"
+            },
+            "approvalId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Approvalid",
+              "type": "string"
+            },
+            "toolCallId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Toolcallid",
+              "type": "string"
+            },
+            "proposalId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Proposalid",
+              "type": "string"
+            },
+            "decision": {
+              "enum": [
+                "applied",
+                "rejected",
+                "revision_requested",
+                "apply_failed"
+              ],
+              "title": "Decision",
+              "type": "string"
+            },
+            "proposal": {
+              "$ref": "#/$defs/ProposeStoryChangesArgs"
+            },
+            "results": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/StoryChangeResult"
+                  },
+                  "maxItems": 5,
+                  "minItems": 1,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Results"
+            },
+            "feedback": {
+              "anyOf": [
+                {
+                  "maxLength": 500,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Feedback"
+            }
+          },
+          "required": [
+            "kind",
+            "previousRunId",
+            "approvalId",
+            "toolCallId",
+            "proposalId",
+            "decision",
+            "proposal"
+          ],
+          "title": "EntityContinuation",
+          "type": "object"
+        },
         "InsertOperation": {
           "additionalProperties": false,
           "description": "Reserved for a later editor phase; Phase 5 rejects it at execution.",
@@ -961,6 +1630,46 @@
             "operations"
           ],
           "title": "ProposeEditorEditArgs",
+          "type": "object"
+        },
+        "ProposeStoryChangesArgs": {
+          "additionalProperties": false,
+          "properties": {
+            "summary": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Summary",
+              "type": "string"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "maxLength": 500,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reason"
+            },
+            "changes": {
+              "items": {
+                "$ref": "#/$defs/StoryChange"
+              },
+              "maxItems": 5,
+              "minItems": 1,
+              "title": "Changes",
+              "type": "array"
+            }
+          },
+          "required": [
+            "summary",
+            "changes"
+          ],
+          "title": "ProposeStoryChangesArgs",
           "type": "object"
         },
         "ProviderConfig": {
@@ -1074,6 +1783,429 @@
           "title": "Selection",
           "type": "object"
         },
+        "StoryChange": {
+          "additionalProperties": false,
+          "description": "A draft plus what the server bound: the target's revision and a label.",
+          "properties": {
+            "operation": {
+              "enum": [
+                "character.create",
+                "character.update",
+                "place.create",
+                "place.update",
+                "plot.create",
+                "plot.update",
+                "event.create",
+                "event.update"
+              ],
+              "title": "Operation",
+              "type": "string"
+            },
+            "entityId": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Required for an update, as returned by a read tool. Omit for a create.",
+              "title": "Entityid"
+            },
+            "plotLineId": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Required for event.create and event.update: the plot line the event belongs to.",
+              "title": "Plotlineid"
+            },
+            "fields": {
+              "$ref": "#/$defs/StoryChangeFields"
+            },
+            "baseRevision": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Baserevision"
+            },
+            "label": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "fields",
+            "label"
+          ],
+          "title": "StoryChange",
+          "type": "object"
+        },
+        "StoryChangeFields": {
+          "additionalProperties": false,
+          "description": "Only the fields being set. Which ones apply depends on the entity kind.",
+          "properties": {
+            "name": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Name"
+            },
+            "age": {
+              "anyOf": [
+                {
+                  "maximum": 100000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Age"
+            },
+            "soul": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Soul"
+            },
+            "personality": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Personality"
+            },
+            "voice": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Voice"
+            },
+            "backstory": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Backstory"
+            },
+            "affiliations": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Affiliations"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Description"
+            },
+            "atmosphere": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Atmosphere"
+            },
+            "geography": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Geography"
+            },
+            "history": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "History"
+            },
+            "significance": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Significance"
+            },
+            "content": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content"
+            },
+            "tensionLevel": {
+              "anyOf": [
+                {
+                  "maximum": 10,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Tensionlevel"
+            },
+            "pacing": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "slow",
+                    "moderate",
+                    "fast"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Pacing"
+            },
+            "storyBeat": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "exposition",
+                    "inciting_incident",
+                    "rising_action",
+                    "midpoint",
+                    "climax",
+                    "falling_action",
+                    "resolution"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Storybeat"
+            },
+            "emotionalTone": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Emotionaltone"
+            },
+            "characterIds": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 20,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Characterids"
+            },
+            "locationId": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Locationid"
+            },
+            "notes": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Notes"
+            }
+          },
+          "title": "StoryChangeFields",
+          "type": "object"
+        },
+        "StoryChangeResult": {
+          "additionalProperties": false,
+          "description": "Bounded browser report for one change. It never authorizes a server write.",
+          "properties": {
+            "index": {
+              "exclusiveMaximum": 5,
+              "minimum": 0,
+              "title": "Index",
+              "type": "integer"
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "stale",
+                "failed",
+                "skipped"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "entityId": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Entityid"
+            }
+          },
+          "required": [
+            "index",
+            "status"
+          ],
+          "title": "StoryChangeResult",
+          "type": "object"
+        },
         "UserMessage": {
           "additionalProperties": false,
           "description": "v1 user input is text-only; the list is for forward room, not features.",
@@ -1175,13 +2307,21 @@
         "continuation": {
           "anyOf": [
             {
-              "$ref": "#/$defs/EditorContinuation"
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/EditorContinuation"
+                },
+                {
+                  "$ref": "#/$defs/EntityContinuation"
+                }
+              ]
             },
             {
               "type": "null"
             }
           ],
-          "default": null
+          "default": null,
+          "title": "Continuation"
         },
         "userId": {
           "maxLength": 128,
@@ -2116,6 +3256,22 @@
         "title": "ApplyEditorEditArgs",
         "type": "object"
       },
+      "apply_story_changes": {
+        "additionalProperties": false,
+        "properties": {
+          "proposalId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Proposalid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "proposalId"
+        ],
+        "title": "ApplyStoryChangesArgs",
+        "type": "object"
+      },
       "get_story_entity": {
         "additionalProperties": false,
         "properties": {
@@ -2305,6 +3461,429 @@
           "operations"
         ],
         "title": "ProposeEditorEditArgs",
+        "type": "object"
+      },
+      "propose_story_changes": {
+        "$defs": {
+          "StoryChange": {
+            "additionalProperties": false,
+            "description": "A draft plus what the server bound: the target's revision and a label.",
+            "properties": {
+              "operation": {
+                "enum": [
+                  "character.create",
+                  "character.update",
+                  "place.create",
+                  "place.update",
+                  "plot.create",
+                  "plot.update",
+                  "event.create",
+                  "event.update"
+                ],
+                "title": "Operation",
+                "type": "string"
+              },
+              "entityId": {
+                "anyOf": [
+                  {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Required for an update, as returned by a read tool. Omit for a create.",
+                "title": "Entityid"
+              },
+              "plotLineId": {
+                "anyOf": [
+                  {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Required for event.create and event.update: the plot line the event belongs to.",
+                "title": "Plotlineid"
+              },
+              "fields": {
+                "$ref": "#/$defs/StoryChangeFields"
+              },
+              "baseRevision": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Baserevision"
+              },
+              "label": {
+                "maxLength": 200,
+                "minLength": 1,
+                "title": "Label",
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation",
+              "fields",
+              "label"
+            ],
+            "title": "StoryChange",
+            "type": "object"
+          },
+          "StoryChangeFields": {
+            "additionalProperties": false,
+            "description": "Only the fields being set. Which ones apply depends on the entity kind.",
+            "properties": {
+              "name": {
+                "anyOf": [
+                  {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Name"
+              },
+              "age": {
+                "anyOf": [
+                  {
+                    "maximum": 100000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Age"
+              },
+              "soul": {
+                "anyOf": [
+                  {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Soul"
+              },
+              "personality": {
+                "anyOf": [
+                  {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Personality"
+              },
+              "voice": {
+                "anyOf": [
+                  {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Voice"
+              },
+              "backstory": {
+                "anyOf": [
+                  {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Backstory"
+              },
+              "affiliations": {
+                "anyOf": [
+                  {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Affiliations"
+              },
+              "description": {
+                "anyOf": [
+                  {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Description"
+              },
+              "atmosphere": {
+                "anyOf": [
+                  {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Atmosphere"
+              },
+              "geography": {
+                "anyOf": [
+                  {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Geography"
+              },
+              "history": {
+                "anyOf": [
+                  {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "History"
+              },
+              "significance": {
+                "anyOf": [
+                  {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Significance"
+              },
+              "content": {
+                "anyOf": [
+                  {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Content"
+              },
+              "tensionLevel": {
+                "anyOf": [
+                  {
+                    "maximum": 10,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Tensionlevel"
+              },
+              "pacing": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "slow",
+                      "moderate",
+                      "fast"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Pacing"
+              },
+              "storyBeat": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "exposition",
+                      "inciting_incident",
+                      "rising_action",
+                      "midpoint",
+                      "climax",
+                      "falling_action",
+                      "resolution"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Storybeat"
+              },
+              "emotionalTone": {
+                "anyOf": [
+                  {
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Emotionaltone"
+              },
+              "characterIds": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 20,
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Characterids"
+              },
+              "locationId": {
+                "anyOf": [
+                  {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Locationid"
+              },
+              "notes": {
+                "anyOf": [
+                  {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Notes"
+              }
+            },
+            "title": "StoryChangeFields",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "summary": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Summary",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/$defs/StoryChange"
+            },
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Changes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "summary",
+          "changes"
+        ],
+        "title": "ProposeStoryChangesArgs",
         "type": "object"
       },
       "read_chapter": {

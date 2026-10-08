@@ -237,6 +237,94 @@ def approval_rejected() -> list[Any]:
     ]
 
 
+STORY_PROPOSAL = {
+    "summary": "Give Mina a guarded edge and add the hospital.",
+    "reason": "Her caution needs a place that justifies it.",
+    "changes": [
+        {
+            "operation": "character.update",
+            "entityId": "ent-1",
+            "fields": {"personality": "Guarded; slow to trust strangers."},
+            "baseRevision": 4,
+            "label": "Mina",
+        },
+        {
+            "operation": "place.create",
+            "fields": {
+                "name": "Abandoned Hospital",
+                "atmosphere": "Damp, silent, smelling of iodine.",
+            },
+            "label": "Abandoned Hospital",
+        },
+    ],
+}
+
+
+def entity_approval_requested() -> list[Any]:
+    r = RunEvents("run-entity-approval")
+    return [
+        r.emit(RunStarted, provider="mock", model="mock-1"),
+        r.emit(ToolStarted, tool_call_id="call-1", name="propose_story_changes"),
+        r.emit(
+            ToolCompleted,
+            part=ToolCallPart(
+                type="tool_call",
+                tool_call_id="call-1",
+                name="propose_story_changes",
+                arguments=STORY_PROPOSAL,
+                result={"proposalId": "proposal-1"},
+            ),
+        ),
+        r.emit(ToolStarted, tool_call_id="apply-1", name="apply_story_changes"),
+        r.emit(
+            ToolArgsDelta, tool_call_id="apply-1", delta='{"proposalId":"proposal-1"}'
+        ),
+        r.emit(
+            ApprovalRequested,
+            approval_id="approval-1",
+            tool_call_id="apply-1",
+            summary="Save these 2 changes to the story?",
+        ),
+        r.emit(RunCompleted, finish_reason="tool_calls"),
+    ]
+
+
+def entity_approval_applied() -> list[Any]:
+    r = RunEvents("run-entity-applied")
+    return [
+        r.emit(RunStarted, provider="mock", model="mock-1"),
+        r.emit(ApprovalResolved, approval_id="approval-1", approved=True),
+        r.emit(
+            TextDone,
+            part=TextPart(
+                type="text",
+                text="Saved: updated character Mina; created place Abandoned Hospital.",
+            ),
+        ),
+        r.emit(RunCompleted, finish_reason="stop"),
+    ]
+
+
+def entity_approval_partial() -> list[Any]:
+    r = RunEvents("run-entity-partial")
+    return [
+        r.emit(RunStarted, provider="mock", model="mock-1"),
+        r.emit(ApprovalResolved, approval_id="approval-1", approved=False),
+        r.emit(
+            TextDone,
+            part=TextPart(
+                type="text",
+                text=(
+                    "Not saved: character Mina (it changed since I proposed "
+                    "this); place Abandoned Hospital (an earlier change did "
+                    "not save)."
+                ),
+            ),
+        ),
+        r.emit(RunCompleted, finish_reason="stop"),
+    ]
+
+
 def research_citations() -> list[Any]:
     r = RunEvents("run-research")
     return [
@@ -397,6 +485,18 @@ FIXTURES = {
     "approval-rejected": (
         "A separate continuation confirms a rejected editor proposal.",
         approval_rejected,
+    ),
+    "entity-approval-requested": (
+        "A story-change proposal pauses for the writer's approval.",
+        entity_approval_requested,
+    ),
+    "entity-approval-applied": (
+        "A separate continuation records the story changes that were saved.",
+        entity_approval_applied,
+    ),
+    "entity-approval-partial": (
+        "A stale change stopped the apply; the reply says what did not save.",
+        entity_approval_partial,
     ),
     "research-citations": (
         "Web and story references emitted as parts.",
