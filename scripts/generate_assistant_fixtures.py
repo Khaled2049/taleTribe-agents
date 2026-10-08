@@ -237,6 +237,264 @@ def approval_rejected() -> list[Any]:
     ]
 
 
+STORY_PROPOSAL = {
+    "summary": "Give Mina a guarded edge and add the hospital.",
+    "reason": "Her caution needs a place that justifies it.",
+    "changes": [
+        {
+            "operation": "character.update",
+            "entityId": "ent-1",
+            "fields": {"personality": "Guarded; slow to trust strangers."},
+            "baseRevision": 4,
+            "label": "Mina",
+        },
+        {
+            "operation": "place.create",
+            "fields": {
+                "name": "Abandoned Hospital",
+                "atmosphere": "Damp, silent, smelling of iodine.",
+            },
+            "label": "Abandoned Hospital",
+        },
+    ],
+}
+
+
+def entity_approval_requested() -> list[Any]:
+    r = RunEvents("run-entity-approval")
+    return [
+        r.emit(RunStarted, provider="mock", model="mock-1"),
+        r.emit(ToolStarted, tool_call_id="call-1", name="propose_story_changes"),
+        r.emit(
+            ToolCompleted,
+            part=ToolCallPart(
+                type="tool_call",
+                tool_call_id="call-1",
+                name="propose_story_changes",
+                arguments=STORY_PROPOSAL,
+                result={"proposalId": "proposal-1"},
+            ),
+        ),
+        r.emit(ToolStarted, tool_call_id="apply-1", name="apply_story_changes"),
+        r.emit(
+            ToolArgsDelta, tool_call_id="apply-1", delta='{"proposalId":"proposal-1"}'
+        ),
+        r.emit(
+            ApprovalRequested,
+            approval_id="approval-1",
+            tool_call_id="apply-1",
+            summary="Save these 2 changes to the story?",
+        ),
+        r.emit(RunCompleted, finish_reason="tool_calls"),
+    ]
+
+
+def entity_approval_applied() -> list[Any]:
+    r = RunEvents("run-entity-applied")
+    return [
+        r.emit(RunStarted, provider="mock", model="mock-1"),
+        r.emit(ApprovalResolved, approval_id="approval-1", approved=True),
+        r.emit(
+            TextDone,
+            part=TextPart(
+                type="text",
+                text="Saved: updated character Mina; created place Abandoned Hospital.",
+            ),
+        ),
+        r.emit(RunCompleted, finish_reason="stop"),
+    ]
+
+
+def entity_approval_partial() -> list[Any]:
+    r = RunEvents("run-entity-partial")
+    return [
+        r.emit(RunStarted, provider="mock", model="mock-1"),
+        r.emit(ApprovalResolved, approval_id="approval-1", approved=False),
+        r.emit(
+            TextDone,
+            part=TextPart(
+                type="text",
+                text=(
+                    "Not saved: character Mina (it changed since I proposed "
+                    "this); place Abandoned Hospital (an earlier change did "
+                    "not save)."
+                ),
+            ),
+        ),
+        r.emit(RunCompleted, finish_reason="stop"),
+    ]
+
+
+def specialist_consult() -> list[Any]:
+    r = RunEvents("run-specialist-consult")
+    consult_arguments = {
+        "specialist": "character_editor",
+        "brief": "Is Mina's caution consistent with what she does in the storm?",
+        "focus": [{"kind": "character", "ref": "Mina"}],
+        "review": False,
+    }
+    return [
+        r.emit(RunStarted, provider="mock", model="mock-1"),
+        r.emit(ToolStarted, tool_call_id="call-1", name="consult_specialist"),
+        r.emit(
+            Usage,
+            provider="mock",
+            model="mock-1",
+            prompt_tokens=900,
+            completion_tokens=140,
+            credits=11,
+            billing="mock",
+        ),
+        r.emit(
+            ToolCompleted,
+            part=ToolCallPart(
+                type="tool_call",
+                tool_call_id="call-1",
+                name="consult_specialist",
+                arguments=consult_arguments,
+                result={
+                    "accepted": True,
+                    "specialist": "character_editor",
+                    "name": "Character Editor",
+                    "degraded": False,
+                    "reviewed": False,
+                    "room": False,
+                    "findings": {
+                        "analysis": (
+                            "Mina is written as guarded, but in the storm she "
+                            "trusts a stranger without a reason."
+                        ),
+                        "recommendations": [
+                            {
+                                "title": "Give the trust a cost",
+                                "detail": "Let her hesitate, then pay for it.",
+                            }
+                        ],
+                        "suggestedChanges": [],
+                        "risks": [],
+                        "confidence": 0.7,
+                    },
+                },
+            ),
+        ),
+        r.emit(TextDelta, text="Mina's caution slips in the storm. "),
+        r.emit(
+            TextDone,
+            part=TextPart(type="text", text="Mina's caution slips in the storm. "),
+        ),
+        r.emit(RunCompleted, finish_reason="stop"),
+    ]
+
+
+def specialist_draft() -> list[Any]:
+    r = RunEvents("run-specialist-draft")
+    draft = "The lamp guttered. Mina counted the seconds between the waves."
+    return [
+        r.emit(RunStarted, provider="mock", model="mock-1"),
+        r.emit(ToolStarted, tool_call_id="call-1", name="consult_specialist"),
+        r.emit(TextDelta, text="The lamp guttered. "),
+        r.emit(TextDelta, text="Mina counted the seconds between the waves."),
+        r.emit(TextDone, part=TextPart(type="text", text=draft)),
+        r.emit(
+            Usage,
+            provider="mock",
+            model="mock-1",
+            prompt_tokens=1100,
+            completion_tokens=420,
+            credits=16,
+            billing="mock",
+        ),
+        r.emit(
+            ToolCompleted,
+            part=ToolCallPart(
+                type="tool_call",
+                tool_call_id="call-1",
+                name="consult_specialist",
+                arguments={
+                    "specialist": "drafter",
+                    "brief": "Write the storm from Mina's point of view.",
+                    "focus": [{"kind": "event", "ref": "The storm"}],
+                    "review": False,
+                },
+                result={
+                    "accepted": True,
+                    "specialist": "drafter",
+                    "name": "Drafting Agent",
+                    "delivered": True,
+                    "words": 10,
+                    "truncated": False,
+                },
+            ),
+        ),
+        r.emit(RunCompleted, finish_reason="stop"),
+    ]
+
+
+def writers_room() -> list[Any]:
+    r = RunEvents("run-writers-room")
+
+    def view(call_id: str, specialist: str, name: str, analysis: str, reviewed: bool):
+        return r.emit(
+            ToolCompleted,
+            part=ToolCallPart(
+                type="tool_call",
+                tool_call_id=call_id,
+                name="consult_specialist",
+                arguments={
+                    "specialist": specialist,
+                    "brief": "Why does the ending feel weak?",
+                    "focus": [],
+                    "review": reviewed,
+                },
+                result={
+                    "accepted": True,
+                    "specialist": specialist,
+                    "name": name,
+                    "degraded": False,
+                    "reviewed": reviewed,
+                    "room": True,
+                    "findings": {
+                        "analysis": analysis,
+                        "recommendations": [
+                            {
+                                "title": "Pay off the lamp",
+                                "detail": "Use it at the end.",
+                            }
+                        ],
+                        "suggestedChanges": [],
+                        "risks": [],
+                    },
+                },
+            ),
+        )
+
+    return [
+        r.emit(RunStarted, provider="mock", model="mock-1"),
+        r.emit(ToolStarted, tool_call_id="call-1", name="consult_specialist"),
+        r.emit(ToolStarted, tool_call_id="call-2", name="consult_specialist"),
+        view(
+            "call-1",
+            "story_architect",
+            "Story Architect",
+            "The inquest resolves nothing the storm set up.",
+            False,
+        ),
+        view(
+            "call-2",
+            "critic",
+            "Critic",
+            "I disagree: the setup is there, but the ending explains it away.",
+            True,
+        ),
+        r.emit(TextDelta, text="The room splits on the cause. "),
+        r.emit(
+            TextDone,
+            part=TextPart(type="text", text="The room splits on the cause. "),
+        ),
+        r.emit(RunCompleted, finish_reason="stop"),
+    ]
+
+
 def research_citations() -> list[Any]:
     r = RunEvents("run-research")
     return [
@@ -397,6 +655,30 @@ FIXTURES = {
     "approval-rejected": (
         "A separate continuation confirms a rejected editor proposal.",
         approval_rejected,
+    ),
+    "entity-approval-requested": (
+        "A story-change proposal pauses for the writer's approval.",
+        entity_approval_requested,
+    ),
+    "entity-approval-applied": (
+        "A separate continuation records the story changes that were saved.",
+        entity_approval_applied,
+    ),
+    "entity-approval-partial": (
+        "A stale change stopped the apply; the reply says what did not save.",
+        entity_approval_partial,
+    ),
+    "specialist-consult": (
+        "The director consults a specialist and folds the findings into a reply.",
+        specialist_consult,
+    ),
+    "specialist-draft": (
+        "A drafted scene streams to the writer while its tool call is open.",
+        specialist_draft,
+    ),
+    "writers-room": (
+        "Room mode: each specialist's view is its own card, then one recommendation.",
+        writers_room,
     ),
     "research-citations": (
         "Web and story references emitted as parts.",

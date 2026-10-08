@@ -1,0 +1,128 @@
+{
+  "name": "writers-room",
+  "description": "Room mode: each specialist's view is its own card, then one recommendation.",
+  "protocolVersion": 1,
+  "events": [
+    {
+      "v": 1,
+      "runId": "run-writers-room",
+      "seq": 0,
+      "type": "run.started",
+      "provider": "mock",
+      "model": "mock-1"
+    },
+    {
+      "v": 1,
+      "runId": "run-writers-room",
+      "seq": 1,
+      "type": "tool.started",
+      "toolCallId": "call-1",
+      "name": "consult_specialist"
+    },
+    {
+      "v": 1,
+      "runId": "run-writers-room",
+      "seq": 2,
+      "type": "tool.started",
+      "toolCallId": "call-2",
+      "name": "consult_specialist"
+    },
+    {
+      "v": 1,
+      "runId": "run-writers-room",
+      "seq": 3,
+      "type": "tool.completed",
+      "part": {
+        "type": "tool_call",
+        "toolCallId": "call-1",
+        "name": "consult_specialist",
+        "arguments": {
+          "specialist": "story_architect",
+          "brief": "Why does the ending feel weak?",
+          "focus": [],
+          "review": false
+        },
+        "result": {
+          "accepted": true,
+          "specialist": "story_architect",
+          "name": "Story Architect",
+          "degraded": false,
+          "reviewed": false,
+          "room": true,
+          "findings": {
+            "analysis": "The inquest resolves nothing the storm set up.",
+            "recommendations": [
+              {
+                "title": "Pay off the lamp",
+                "detail": "Use it at the end."
+              }
+            ],
+            "suggestedChanges": [],
+            "risks": []
+          }
+        }
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-writers-room",
+      "seq": 4,
+      "type": "tool.completed",
+      "part": {
+        "type": "tool_call",
+        "toolCallId": "call-2",
+        "name": "consult_specialist",
+        "arguments": {
+          "specialist": "critic",
+          "brief": "Why does the ending feel weak?",
+          "focus": [],
+          "review": true
+        },
+        "result": {
+          "accepted": true,
+          "specialist": "critic",
+          "name": "Critic",
+          "degraded": false,
+          "reviewed": true,
+          "room": true,
+          "findings": {
+            "analysis": "I disagree: the setup is there, but the ending explains it away.",
+            "recommendations": [
+              {
+                "title": "Pay off the lamp",
+                "detail": "Use it at the end."
+              }
+            ],
+            "suggestedChanges": [],
+            "risks": []
+          }
+        }
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-writers-room",
+      "seq": 5,
+      "type": "text.delta",
+      "text": "The room splits on the cause. "
+    },
+    {
+      "v": 1,
+      "runId": "run-writers-room",
+      "seq": 6,
+      "type": "text.done",
+      "part": {
+        "type": "text",
+        "text": "The room splits on the cause. "
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-writers-room",
+      "seq": 7,
+      "type": "run.completed",
+      "finishReason": "stop"
+    }
+  ],
+  "sse": "data: {\"v\":1,\"runId\":\"run-writers-room\",\"seq\":0,\"type\":\"run.started\",\"provider\":\"mock\",\"model\":\"mock-1\"}\n\ndata: {\"v\":1,\"runId\":\"run-writers-room\",\"seq\":1,\"type\":\"tool.started\",\"toolCallId\":\"call-1\",\"name\":\"consult_specialist\"}\n\ndata: {\"v\":1,\"runId\":\"run-writers-room\",\"seq\":2,\"type\":\"tool.started\",\"toolCallId\":\"call-2\",\"name\":\"consult_specialist\"}\n\ndata: {\"v\":1,\"runId\":\"run-writers-room\",\"seq\":3,\"type\":\"tool.completed\",\"part\":{\"type\":\"tool_call\",\"toolCallId\":\"call-1\",\"name\":\"consult_specialist\",\"arguments\":{\"specialist\":\"story_architect\",\"brief\":\"Why does the ending feel weak?\",\"focus\":[],\"review\":false},\"result\":{\"accepted\":true,\"specialist\":\"story_architect\",\"name\":\"Story Architect\",\"degraded\":false,\"reviewed\":false,\"room\":true,\"findings\":{\"analysis\":\"The inquest resolves nothing the storm set up.\",\"recommendations\":[{\"title\":\"Pay off the lamp\",\"detail\":\"Use it at the end.\"}],\"suggestedChanges\":[],\"risks\":[]}}}}\n\ndata: {\"v\":1,\"runId\":\"run-writers-room\",\"seq\":4,\"type\":\"tool.completed\",\"part\":{\"type\":\"tool_call\",\"toolCallId\":\"call-2\",\"name\":\"consult_specialist\",\"arguments\":{\"specialist\":\"critic\",\"brief\":\"Why does the ending feel weak?\",\"focus\":[],\"review\":true},\"result\":{\"accepted\":true,\"specialist\":\"critic\",\"name\":\"Critic\",\"degraded\":false,\"reviewed\":true,\"room\":true,\"findings\":{\"analysis\":\"I disagree: the setup is there, but the ending explains it away.\",\"recommendations\":[{\"title\":\"Pay off the lamp\",\"detail\":\"Use it at the end.\"}],\"suggestedChanges\":[],\"risks\":[]}}}}\n\ndata: {\"v\":1,\"runId\":\"run-writers-room\",\"seq\":5,\"type\":\"text.delta\",\"text\":\"The room splits on the cause. \"}\n\ndata: {\"v\":1,\"runId\":\"run-writers-room\",\"seq\":6,\"type\":\"text.done\",\"part\":{\"type\":\"text\",\"text\":\"The room splits on the cause. \"}}\n\ndata: {\"v\":1,\"runId\":\"run-writers-room\",\"seq\":7,\"type\":\"run.completed\",\"finishReason\":\"stop\"}\n\n"
+}

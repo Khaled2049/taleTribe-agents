@@ -52,6 +52,12 @@ class Settings(BaseSettings):
     assistant_max_output_tokens: int = Field(default=2048, ge=1, le=8192)
     assistant_run_timeout_seconds: float = Field(default=240, gt=0, le=300)
     assistant_max_tool_result_chars: int = Field(default=8000, ge=256)
+    # Consults share assistant_max_model_calls; one call is always held back
+    # for the director's own answer.
+    assistant_max_consults_per_run: int = Field(default=2, ge=0, le=4)
+    # Writers' Room mode: a deliberate multi-specialist run, so a higher cap.
+    assistant_room_max_consults: int = Field(default=4, ge=2, le=4)
+    assistant_specialist_timeout_seconds: float = Field(default=90, gt=0, le=120)
     assistant_history_max_messages: int = Field(default=10, ge=0, le=50)
     assistant_history_max_chars: int = Field(default=4000, ge=0, le=32000)
 

@@ -48,18 +48,31 @@ def test_tool_context_is_not_constructible_from_model_output():
 
 
 def test_read_tools_are_always_available_and_others_are_gated():
-    assert set(available_tools(edits_enabled=False, research_enabled=False)) == set(
-        READ_TOOLS
-    )
-    both = available_tools(edits_enabled=True, research_enabled=True)
-    assert set(both) == set(READ_TOOLS) | set(MODEL_EDIT_TOOLS) | set(RESEARCH_TOOLS)
+    def offered(**flags):
+        # Story changes and specialists are on by default; switched off here so
+        # the two flags under test are the only thing that varies.
+        return set(
+            available_tools(
+                entity_proposals_enabled=False, specialists_enabled=False, **flags
+            )
+        )
+
+    assert offered(edits_enabled=False, research_enabled=False) == set(READ_TOOLS)
+    both = offered(edits_enabled=True, research_enabled=True)
+    assert both == set(READ_TOOLS) | set(MODEL_EDIT_TOOLS) | set(RESEARCH_TOOLS)
     assert "apply_editor_edit" not in both
-    assert set(available_tools(edits_enabled=True, research_enabled=False)) == set(
-        READ_TOOLS
-    ) | set(MODEL_EDIT_TOOLS)
-    assert set(available_tools(edits_enabled=False, research_enabled=True)) == set(
-        READ_TOOLS
-    ) | set(RESEARCH_TOOLS)
+    assert offered(edits_enabled=True, research_enabled=False) == set(READ_TOOLS) | set(
+        MODEL_EDIT_TOOLS
+    )
+    assert offered(edits_enabled=False, research_enabled=True) == set(READ_TOOLS) | set(
+        RESEARCH_TOOLS
+    )
+
+
+def test_story_changes_and_specialists_are_offered_by_default():
+    default = set(available_tools(edits_enabled=False, research_enabled=False))
+    assert {"propose_story_changes", "consult_specialist"} <= default
+    assert "apply_story_changes" not in default
 
 
 def test_applying_an_edit_requires_approval_but_proposing_does_not():

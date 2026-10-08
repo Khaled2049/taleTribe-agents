@@ -22,22 +22,29 @@ result sizes these arguments imply are also capped.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
 from assistant.protocol import (
     MAX_ID_CHARS,
     MAX_SELECTION_CHARS,
+    MAX_STORY_CHANGES,
     MAX_SUMMARY_CHARS,
     ProposeEditorEditArgs,
+    ProposeStoryChangesArgs,
+    StoryChangeDraft,
     StrictModel,
 )
+from assistant.specialists.base import FocusKind, SpecialistId
 
 MAX_QUERY_CHARS = 500
 MAX_TOOL_RESULTS = 20
 MAX_CHAPTER_WINDOW_CHARS = 20_000
 MAX_RESEARCH_RESULTS = 5
+MAX_BRIEF_CHARS = 1_000
+MAX_FOCUS_REFS = 6
+MAX_FOCUS_REF_CHARS = 500
 
 EntityKind = Literal["character", "place", "plot"]
 
@@ -118,6 +125,63 @@ class ProposeEditorEditDraft(StrictModel):
     )
 
 
+class ProposeStoryChangesDraft(StrictModel):
+    """Propose creating or updating characters, places, plot lines or plot events.
+
+    Nothing is saved until the writer approves. Include only the fields that
+    change and keep each one concise. Use ids exactly as a read tool returned
+    them. Call this tool alone, never alongside another tool.
+    """
+
+    summary: str = Field(min_length=1, max_length=MAX_SUMMARY_CHARS)
+    reason: Optional[str] = Field(
+        default=None, min_length=1, max_length=MAX_SUMMARY_CHARS
+    )
+    changes: list[StoryChangeDraft] = Field(min_length=1, max_length=MAX_STORY_CHANGES)
+
+
+class ApplyStoryChangesArgs(StrictModel):
+    proposal_id: str = Field(min_length=1, max_length=MAX_ID_CHARS)
+
+
+class FocusRef(StrictModel):
+    kind: FocusKind
+    ref: str = Field(
+        min_length=1,
+        max_length=MAX_FOCUS_REF_CHARS,
+        description=(
+            "The entity's exact name as the story roster shows it, or its id. "
+            "For a chapter, its title or its number. For an event, its name."
+        ),
+    )
+
+
+class ConsultSpecialistArgs(StrictModel):
+    """Ask one specialist for a judgement on this story.
+
+    The specialist sees only the brief and the story material the server
+    gathers for what focus names, so name every character, place, plot line or
+    chapter the question is about. Names from the roster work; you do not need
+    to look ids up first. Its answer is advice for you to weigh, not something
+    to forward verbatim.
+    """
+
+    specialist: SpecialistId
+    brief: str = Field(
+        min_length=1,
+        max_length=MAX_BRIEF_CHARS,
+        description="What you want judged, in your own words. One question.",
+    )
+    focus: list[FocusRef] = Field(default_factory=list, max_length=MAX_FOCUS_REFS)
+    review: bool = Field(
+        default=False,
+        description=(
+            "True to also show this specialist what other specialists found "
+            "earlier in this reply, so it can agree or disagree. Once per reply."
+        ),
+    )
+
+
 class ResearchWebArgs(StrictModel):
     query: str = Field(min_length=1, max_length=MAX_QUERY_CHARS)
     max_results: int = Field(default=3, ge=1, le=MAX_RESEARCH_RESULTS)
@@ -146,6 +210,21 @@ MODEL_EDIT_TOOLS: dict[str, type[BaseModel]] = {
     "propose_editor_edit": ProposeEditorEditDraft,
 }
 
+# Same split as the editor tools: the model drafts, the server binds revisions,
+# and the apply half is synthesized for the browser's approval round.
+ENTITY_TOOLS: dict[str, type[BaseModel]] = {
+    "propose_story_changes": ProposeStoryChangesArgs,
+    "apply_story_changes": ApplyStoryChangesArgs,
+}
+
+MODEL_ENTITY_TOOLS: dict[str, type[BaseModel]] = {
+    "propose_story_changes": ProposeStoryChangesDraft,
+}
+
+SPECIALIST_TOOLS: dict[str, type[BaseModel]] = {
+    "consult_specialist": ConsultSpecialistArgs,
+}
+
 RESEARCH_TOOLS: dict[str, type[BaseModel]] = {
     "research_web": ResearchWebArgs,
 }
@@ -157,12 +236,14 @@ RESEARCH_TOOLS: dict[str, type[BaseModel]] = {
 TOOL_SCHEMAS: dict[str, type[BaseModel]] = {
     **READ_TOOLS,
     **EDIT_TOOLS,
+    **ENTITY_TOOLS,
+    **SPECIALIST_TOOLS,
     **RESEARCH_TOOLS,
 }
 
 # Tools whose effect requires explicit user approval before it is applied.
-# propose_editor_edit is absent on purpose: producing a proposal changes nothing.
-APPROVAL_REQUIRED = frozenset({"apply_editor_edit"})
+# The propose_* tools are absent on purpose: producing a proposal changes nothing.
+APPROVAL_REQUIRED = frozenset({"apply_editor_edit", "apply_story_changes"})
 
 
 class UnknownToolError(ValueError):
@@ -170,12 +251,20 @@ class UnknownToolError(ValueError):
 
 
 def available_tools(
-    *, edits_enabled: bool, research_enabled: bool
+    *,
+    edits_enabled: bool,
+    research_enabled: bool,
+    entity_proposals_enabled: bool = True,
+    specialists_enabled: bool = True,
 ) -> dict[str, type[BaseModel]]:
     """The allowlist for one run. Server-owned; a model cannot widen it."""
     tools = dict(READ_TOOLS)
     if edits_enabled:
         tools.update(MODEL_EDIT_TOOLS)
+    if entity_proposals_enabled:
+        tools.update(MODEL_ENTITY_TOOLS)
+    if specialists_enabled:
+        tools.update(SPECIALIST_TOOLS)
     if research_enabled:
         tools.update(RESEARCH_TOOLS)
     return tools

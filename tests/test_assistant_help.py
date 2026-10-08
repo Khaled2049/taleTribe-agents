@@ -40,7 +40,11 @@ def test_browser_only_capabilities_are_explicit_channel_extensions():
         for capability_id, tools in CAPABILITY_TOOLS.items()
         if tools.browser_extension
     }
-    assert browser_only == {"read_current_editor", "propose_edit"}
+    assert browser_only == {
+        "read_current_editor",
+        "propose_edit",
+        "propose_story_changes",
+    }
     assert all(not CAPABILITY_TOOLS[name].mcp_read for name in browser_only)
     assert all(not CAPABILITY_TOOLS[name].mcp_write for name in browser_only)
 
@@ -60,7 +64,7 @@ def test_gate_matches_what_a_run_would_actually_offer(capability):
         "research": available_tools(edits_enabled=False, research_enabled=True),
     }[capability.gate]
     for name in capability.tools:
-        if name == "apply_editor_edit":
+        if name in ("apply_editor_edit", "apply_story_changes"):
             assert name not in ungated and name in APPROVAL_REQUIRED
             continue
         assert name in ungated
@@ -109,7 +113,11 @@ def test_read_tools_are_all_described_as_always_available():
         if capability.gate == "always"
         for name in capability.tools
     }
-    assert always == set(READ_TOOLS)
+    assert always == set(READ_TOOLS) | {
+        "propose_story_changes",
+        "apply_story_changes",
+        "consult_specialist",
+    }
 
 
 def test_payload_is_json_ready_and_drops_absent_limits():

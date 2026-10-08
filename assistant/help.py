@@ -152,6 +152,37 @@ HELP_CATALOG: tuple[Capability, ...] = (
         limits="One selection at a time, as plain text in a single paragraph.",
     ),
     Capability(
+        id="propose_story_changes",
+        tools=assistant_tools("propose_story_changes"),
+        gate="always",
+        title="Suggest changes to your cast, places and plot",
+        summary=(
+            "Draft a new character, place, plot line or plot event, or changes "
+            "to one you have. You review each change and nothing is saved "
+            "until you accept it."
+        ),
+        example="Add an abandoned hospital as a location.",
+        limits="Up to 5 changes at a time. I cannot delete anything.",
+    ),
+    Capability(
+        id="consult_specialist",
+        tools=assistant_tools("consult_specialist"),
+        gate="always",
+        title="Get a specialist's judgement",
+        summary=(
+            "Bring in a story architect for structure and pacing, a character "
+            "editor for motivation and consistency, or a critic for an "
+            "editorial read, and fold what they find into one answer. A "
+            "drafting agent can write a scene for an event you have planned."
+        ),
+        example="The middle of my story feels slow. Why?",
+        limits=(
+            "Up to 2 specialists per reply, or type /room and your question "
+            "to hear from several at once. They advise or draft in chat; they "
+            "never change your story."
+        ),
+    ),
+    Capability(
         id="research_web",
         tools=assistant_tools("research_web"),
         gate="research",

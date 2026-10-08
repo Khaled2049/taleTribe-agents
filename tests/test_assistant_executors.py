@@ -99,7 +99,12 @@ async def run(name, arguments, rt):
 
 def test_every_offered_read_tool_has_an_executor():
     """A schema the model can call with no executor is a guaranteed failure."""
-    offered = available_tools(edits_enabled=False, research_enabled=False)
+    offered = available_tools(
+        edits_enabled=False,
+        research_enabled=False,
+        entity_proposals_enabled=False,
+        specialists_enabled=False,
+    )
     assert set(offered) == set(EXECUTORS)
 
 
@@ -300,9 +305,13 @@ async def test_a_non_owner_is_refused_by_the_gate_the_tools_inherit(fake):
 
 async def test_no_executor_is_registered_for_a_mutating_tool():
     """The phase gate: no registered tool can mutate data or reach the web."""
-    assert not {"propose_editor_edit", "apply_editor_edit", "research_web"} & set(
-        EXECUTORS
-    )
+    assert not {
+        "propose_editor_edit",
+        "apply_editor_edit",
+        "propose_story_changes",
+        "apply_story_changes",
+        "research_web",
+    } & set(EXECUTORS)
     with pytest.raises(UnknownToolError):
         await execute_tool("apply_editor_edit", SimpleNamespace(), runtime())
 

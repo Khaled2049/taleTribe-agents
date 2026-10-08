@@ -1,0 +1,97 @@
+{
+  "name": "specialist-draft",
+  "description": "A drafted scene streams to the writer while its tool call is open.",
+  "protocolVersion": 1,
+  "events": [
+    {
+      "v": 1,
+      "runId": "run-specialist-draft",
+      "seq": 0,
+      "type": "run.started",
+      "provider": "mock",
+      "model": "mock-1"
+    },
+    {
+      "v": 1,
+      "runId": "run-specialist-draft",
+      "seq": 1,
+      "type": "tool.started",
+      "toolCallId": "call-1",
+      "name": "consult_specialist"
+    },
+    {
+      "v": 1,
+      "runId": "run-specialist-draft",
+      "seq": 2,
+      "type": "text.delta",
+      "text": "The lamp guttered. "
+    },
+    {
+      "v": 1,
+      "runId": "run-specialist-draft",
+      "seq": 3,
+      "type": "text.delta",
+      "text": "Mina counted the seconds between the waves."
+    },
+    {
+      "v": 1,
+      "runId": "run-specialist-draft",
+      "seq": 4,
+      "type": "text.done",
+      "part": {
+        "type": "text",
+        "text": "The lamp guttered. Mina counted the seconds between the waves."
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-specialist-draft",
+      "seq": 5,
+      "type": "usage",
+      "provider": "mock",
+      "model": "mock-1",
+      "promptTokens": 1100,
+      "completionTokens": 420,
+      "credits": 16,
+      "billing": "mock"
+    },
+    {
+      "v": 1,
+      "runId": "run-specialist-draft",
+      "seq": 6,
+      "type": "tool.completed",
+      "part": {
+        "type": "tool_call",
+        "toolCallId": "call-1",
+        "name": "consult_specialist",
+        "arguments": {
+          "specialist": "drafter",
+          "brief": "Write the storm from Mina's point of view.",
+          "focus": [
+            {
+              "kind": "event",
+              "ref": "The storm"
+            }
+          ],
+          "review": false
+        },
+        "result": {
+          "accepted": true,
+          "specialist": "drafter",
+          "name": "Drafting Agent",
+          "delivered": true,
+          "words": 10,
+          "truncated": false
+        }
+      }
+    },
+    {
+      "v": 1,
+      "runId": "run-specialist-draft",
+      "seq": 7,
+      "type": "run.completed",
+      "finishReason": "stop"
+    }
+  ],
+  "sse": "data: {\"v\":1,\"runId\":\"run-specialist-draft\",\"seq\":0,\"type\":\"run.started\",\"provider\":\"mock\",\"model\":\"mock-1\"}\n\ndata: {\"v\":1,\"runId\":\"run-specialist-draft\",\"seq\":1,\"type\":\"tool.started\",\"toolCallId\":\"call-1\",\"name\":\"consult_specialist\"}\n\ndata: {\"v\":1,\"runId\":\"run-specialist-draft\",\"seq\":2,\"type\":\"text.delta\",\"text\":\"The lamp guttered. \"}\n\ndata: {\"v\":1,\"runId\":\"run-specialist-draft\",\"seq\":3,\"type\":\"text.delta\",\"text\":\"Mina counted the seconds between the waves.\"}\n\ndata: {\"v\":1,\"runId\":\"run-specialist-draft\",\"seq\":4,\"type\":\"text.done\",\"part\":{\"type\":\"text\",\"text\":\"The lamp guttered. Mina counted the seconds between the waves.\"}}\n\ndata: {\"v\":1,\"runId\":\"run-specialist-draft\",\"seq\":5,\"type\":\"usage\",\"provider\":\"mock\",\"model\":\"mock-1\",\"promptTokens\":1100,\"completionTokens\":420,\"credits\":16,\"billing\":\"mock\"}\n\ndata: {\"v\":1,\"runId\":\"run-specialist-draft\",\"seq\":6,\"type\":\"tool.completed\",\"part\":{\"type\":\"tool_call\",\"toolCallId\":\"call-1\",\"name\":\"consult_specialist\",\"arguments\":{\"specialist\":\"drafter\",\"brief\":\"Write the storm from Mina's point of view.\",\"focus\":[{\"kind\":\"event\",\"ref\":\"The storm\"}],\"review\":false},\"result\":{\"accepted\":true,\"specialist\":\"drafter\",\"name\":\"Drafting Agent\",\"delivered\":true,\"words\":10,\"truncated\":false}}}\n\ndata: {\"v\":1,\"runId\":\"run-specialist-draft\",\"seq\":7,\"type\":\"run.completed\",\"finishReason\":\"stop\"}\n\n"
+}
