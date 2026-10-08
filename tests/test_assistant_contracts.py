@@ -35,6 +35,7 @@ EXPECTED = {
     "research-citations",
     "single-tool-round",
     "specialist-consult",
+    "specialist-draft",
     "stale-edit",
     "text-only",
 }

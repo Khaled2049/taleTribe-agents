@@ -526,3 +526,72 @@ async def test_a_story_request_with_a_selection_keeps_every_tool(story):
     assert request["required_tool"] is None
     names = {tool["name"] for tool in request["tools"]}
     assert {"propose_story_changes", "propose_editor_edit"} <= names
+
+
+# -- targets by name ------------------------------------------------------
+
+
+@pytest.mark.parametrize("ref", ["char-1", "Mina", " mina "])
+async def test_an_update_can_name_its_target_by_id_or_exact_name(story, ref):
+    bound = await bind({**UPDATE_MINA, "entityId": ref})
+    change = bound.changes[0]
+    # The browser always receives the real id and revision, whatever was sent.
+    assert (change.entity_id, change.base_revision, change.label) == (
+        "char-1",
+        4,
+        "Mina",
+    )
+
+
+async def test_an_event_update_can_name_the_plot_line_and_event(story):
+    bound = await bind(
+        {
+            "operation": "event.update",
+            "entityId": "the storm",
+            "plotLineId": "The Wreck",
+            "fields": {"tensionLevel": 9},
+        }
+    )
+    change = bound.changes[0]
+    assert (change.entity_id, change.plot_line_id) == ("event-1", "plot-1")
+    assert change.base_revision == 7
+
+
+async def test_an_event_finds_its_own_plot_line_when_the_one_given_is_wrong(story):
+    # A search hit carries the event's id, and the model guesses the rest.
+    bound = await bind(
+        {
+            "operation": "event.update",
+            "entityId": "event-1",
+            "plotLineId": "event-1",
+            "fields": {"tensionLevel": 9},
+        }
+    )
+    assert bound.changes[0].plot_line_id == "plot-1"
+
+
+async def test_an_event_id_used_as_a_plot_line_is_explained_not_just_refused(story):
+    with pytest.raises(ProposalRejected) as excinfo:
+        await bind(
+            {
+                "operation": "plot.update",
+                "entityId": "event-1",
+                "fields": {"description": "The tally never resolves."},
+            }
+        )
+    reason = str(excinfo.value)
+    assert "That is the event 'The storm' in plot line 'The Wreck'" in reason
+    assert "This story's plot lines: The Wreck" in reason
+
+
+async def test_a_name_and_an_id_for_one_row_still_count_as_the_same_target(story):
+    with pytest.raises(ProposalRejected, match="updates character 'Mina' twice"):
+        await bind(
+            UPDATE_MINA, {**UPDATE_MINA, "entityId": "Mina", "fields": {"voice": "x"}}
+        )
+
+
+async def test_an_ambiguous_name_asks_for_an_id(story):
+    story.seed_entity("story-1", "characters", "char-7", name="MINA")
+    with pytest.raises(ProposalRejected, match="More than one character"):
+        await bind({**UPDATE_MINA, "entityId": "Mina"})

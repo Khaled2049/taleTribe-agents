@@ -331,6 +331,7 @@ def specialist_consult() -> list[Any]:
         "specialist": "character_editor",
         "brief": "Is Mina's caution consistent with what she does in the storm?",
         "focus": [{"kind": "character", "ref": "Mina"}],
+        "review": False,
     }
     return [
         r.emit(RunStarted, provider="mock", model="mock-1"),
@@ -356,6 +357,7 @@ def specialist_consult() -> list[Any]:
                     "specialist": "character_editor",
                     "name": "Character Editor",
                     "degraded": False,
+                    "reviewed": False,
                     "findings": {
                         "analysis": (
                             "Mina is written as guarded, but in the storm she "
@@ -378,6 +380,50 @@ def specialist_consult() -> list[Any]:
         r.emit(
             TextDone,
             part=TextPart(type="text", text="Mina's caution slips in the storm. "),
+        ),
+        r.emit(RunCompleted, finish_reason="stop"),
+    ]
+
+
+def specialist_draft() -> list[Any]:
+    r = RunEvents("run-specialist-draft")
+    draft = "The lamp guttered. Mina counted the seconds between the waves."
+    return [
+        r.emit(RunStarted, provider="mock", model="mock-1"),
+        r.emit(ToolStarted, tool_call_id="call-1", name="consult_specialist"),
+        r.emit(TextDelta, text="The lamp guttered. "),
+        r.emit(TextDelta, text="Mina counted the seconds between the waves."),
+        r.emit(TextDone, part=TextPart(type="text", text=draft)),
+        r.emit(
+            Usage,
+            provider="mock",
+            model="mock-1",
+            prompt_tokens=1100,
+            completion_tokens=420,
+            credits=16,
+            billing="mock",
+        ),
+        r.emit(
+            ToolCompleted,
+            part=ToolCallPart(
+                type="tool_call",
+                tool_call_id="call-1",
+                name="consult_specialist",
+                arguments={
+                    "specialist": "drafter",
+                    "brief": "Write the storm from Mina's point of view.",
+                    "focus": [{"kind": "event", "ref": "The storm"}],
+                    "review": False,
+                },
+                result={
+                    "accepted": True,
+                    "specialist": "drafter",
+                    "name": "Drafting Agent",
+                    "delivered": True,
+                    "words": 10,
+                    "truncated": False,
+                },
+            ),
         ),
         r.emit(RunCompleted, finish_reason="stop"),
     ]
@@ -559,6 +605,10 @@ FIXTURES = {
     "specialist-consult": (
         "The director consults a specialist and folds the findings into a reply.",
         specialist_consult,
+    ),
+    "specialist-draft": (
+        "A drafted scene streams to the writer while its tool call is open.",
+        specialist_draft,
     ),
     "research-citations": (
         "Web and story references emitted as parts.",

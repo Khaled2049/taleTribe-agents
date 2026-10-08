@@ -170,12 +170,16 @@ HELP_CATALOG: tuple[Capability, ...] = (
         gate="specialists",
         title="Get a specialist's judgement",
         summary=(
-            "Bring in a story architect for structure and pacing, or a "
-            "character editor for motivation and consistency, and fold what "
-            "they find into one answer."
+            "Bring in a story architect for structure and pacing, a character "
+            "editor for motivation and consistency, or a critic for an "
+            "editorial read, and fold what they find into one answer. A "
+            "drafting agent can write a scene for an event you have planned."
         ),
         example="The middle of my story feels slow. Why?",
-        limits="Up to 2 specialists per reply. They advise; they never change anything.",
+        limits=(
+            "Up to 2 specialists per reply. They advise or draft in chat; "
+            "they never change your story."
+        ),
     ),
     Capability(
         id="research_web",

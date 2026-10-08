@@ -127,6 +127,22 @@ class _Story:
             ]
         return self._chapters
 
+    async def events(self) -> list[dict[str, Any]]:
+        """Every event, tagged with the plot line it belongs to."""
+        return [
+            {**event, "plotLineId": line.get("id"), "plotLine": line.get("name")}
+            for line in await self.roster("plots")
+            for event in line.get("events") or []
+            if isinstance(event, dict)
+        ]
+
+    async def known(self, kind: str) -> str:
+        if kind == "chapter":
+            return _known(await self.chapter_index(), "title")
+        if kind == "event":
+            return _known(await self.events())
+        return _known(await self.roster(COLLECTION_BY_KIND[kind]))
+
     async def resolve(self, ref: FocusRef) -> Optional[dict[str, Any]]:
         """The one record a reference names, or None when it names nothing."""
         if ref.kind == "chapter":
@@ -135,6 +151,10 @@ class _Story:
                 row for row in rows if row["number"] == ref.ref.strip()
             ]
             label = "title"
+        elif ref.kind == "event":
+            rows = await self.events()
+            matches = _match(rows, ref.ref, "name")
+            label = "name"
         else:
             rows = await self.roster(COLLECTION_BY_KIND[ref.kind])
             matches = _match(rows, ref.ref, "name")
@@ -200,8 +220,49 @@ def _events_with(plots: list[dict[str, Any]], character_id: str) -> list[dict]:
     return found
 
 
+async def _scene_material(
+    story: _Story, events: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Who is in the focused events, where they happen, and what came before."""
+    characters = {str(row.get("id")): row for row in await story.roster("characters")}
+    places = {str(row.get("id")): row for row in await story.roster("places")}
+    every_event = await story.events()
+    cast: dict[str, dict[str, Any]] = {}
+    settings: dict[str, dict[str, Any]] = {}
+    before: dict[str, dict[str, Any]] = {}
+    focus_ids = {str(event.get("id")) for event in events}
+    for event in events:
+        for character_id in event.get("characterIds") or []:
+            if str(character_id) in characters:
+                cast[str(character_id)] = characters[str(character_id)]
+        if str(event.get("locationId")) in places:
+            settings[str(event["locationId"])] = places[str(event["locationId"])]
+        # The event just before it on the same line, for continuity.
+        earlier = [
+            other
+            for other in every_event
+            if other.get("plotLineId") == event.get("plotLineId")
+            and (other.get("orderIndex") or 0) < (event.get("orderIndex") or 0)
+            and str(other.get("id")) not in focus_ids
+        ]
+        if earlier:
+            previous = max(earlier, key=lambda other: other.get("orderIndex") or 0)
+            before[str(previous.get("id"))] = previous
+    return _clean(
+        {
+            "events": events,
+            "charactersInScene": list(cast.values()),
+            "setting": list(settings.values()),
+            "whatCameBefore": list(before.values()),
+        }
+    )
+
+
 async def build_context(
-    specialist: Specialist, focus: list[FocusRef], ctx: ToolContext
+    specialist: Specialist,
+    focus: list[FocusRef],
+    ctx: ToolContext,
+    prior_findings: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     """The bounded story material for one consult, as JSON-serializable data."""
     story = _Story(ctx)
@@ -219,11 +280,34 @@ async def build_context(
         if all(row.get("id") != record.get("id") for row in rows):
             rows.append(record)
 
+    any_of = specialist.required_any_focus
+    if any_of and not any(focused.get(kind) for kind in any_of):
+        wanted = " or ".join(
+            f"{'an' if kind[0] in 'aeiou' else 'a'} {kind}" for kind in any_of
+        )
+        named = [ref.ref for ref, _ in story.unresolved if ref.kind in any_of]
+        problem = (
+            f"Nothing in this story is called {named[0]!r}."
+            if named
+            else f"The {specialist.name} needs {wanted} in focus."
+        )
+        listed = []
+        for kind in any_of:
+            known = await story.known(kind)
+            if known:
+                listed.append(f"{kind}s: {known}")
+        if not listed:
+            raise ConsultRejected(
+                f"{problem} This story has none recorded yet, so there is "
+                f"nothing for the {specialist.name} to work from."
+            )
+        raise ConsultRejected(f"{problem} This story's {'; '.join(listed)}.")
+
     for kind in specialist.required_focus:
         if focused.get(kind):
             continue
         # Tell the director what does exist, so it can retry without a lookup.
-        known = _known(await story.roster(COLLECTION_BY_KIND[kind]))
+        known = await story.known(kind)
         named = [ref.ref for ref, _ in story.unresolved if ref.kind == kind]
         if not known:
             raise ConsultRejected(
@@ -259,6 +343,12 @@ async def build_context(
         context["characters"] = _clean(focused["character"])
         context["relatedCharacters"] = list(related.values())
         context["eventsTheyAppearIn"] = _clean(appearances)
+    elif specialist.mode == "draft":
+        # Scene material only: the cast and setting of what is being written,
+        # not the whole plot the drafter might be tempted to advance.
+        context.update(await _scene_material(story, focused.get("event", [])))
+        if focused.get("character"):
+            context["focusCharacters"] = _clean(focused["character"])
     else:
         context["plotLines"] = _clean(await story.roster("plots"))
         context["characters"] = [
@@ -268,10 +358,15 @@ async def build_context(
             context["focusCharacters"] = _clean(focused["character"])
         if focused.get("plot"):
             context["focusPlotLines"] = [str(row.get("id")) for row in focused["plot"]]
+        if focused.get("event"):
+            context["focusEvents"] = [str(row.get("name")) for row in focused["event"]]
 
     for kind, key in (("place", "places"), ("chapter", "chapters")):
         if focused.get(kind):
             context[key] = _clean(focused[kind])
+
+    if prior_findings:
+        context["priorFindings"] = prior_findings
 
     fitted, _ = _fit(context, specialist.context_chars)
     return fitted if isinstance(fitted, dict) else {"truncated": True}

@@ -5,9 +5,12 @@ from __future__ import annotations
 from assistant.specialists.architect import STORY_ARCHITECT
 from assistant.specialists.base import Specialist
 from assistant.specialists.character_editor import CHARACTER_EDITOR
+from assistant.specialists.critic import CRITIC
+from assistant.specialists.drafter import DRAFTER
 
 SPECIALISTS: dict[str, Specialist] = {
-    specialist.id: specialist for specialist in (STORY_ARCHITECT, CHARACTER_EDITOR)
+    specialist.id: specialist
+    for specialist in (STORY_ARCHITECT, CHARACTER_EDITOR, CRITIC, DRAFTER)
 }
 
 

@@ -151,7 +151,7 @@ class FocusRef(StrictModel):
         max_length=MAX_FOCUS_REF_CHARS,
         description=(
             "The entity's exact name as the story roster shows it, or its id. "
-            "For a chapter, its title or its number."
+            "For a chapter, its title or its number. For an event, its name."
         ),
     )
 
@@ -173,6 +173,13 @@ class ConsultSpecialistArgs(StrictModel):
         description="What you want judged, in your own words. One question.",
     )
     focus: list[FocusRef] = Field(default_factory=list, max_length=MAX_FOCUS_REFS)
+    review: bool = Field(
+        default=False,
+        description=(
+            "True to also show this specialist what other specialists found "
+            "earlier in this reply, so it can agree or disagree. Once per reply."
+        ),
+    )
 
 
 class ResearchWebArgs(StrictModel):

@@ -320,13 +320,19 @@ class StoryChangeDraft(StrictModel):
         default=None,
         min_length=1,
         max_length=MAX_ID_CHARS,
-        description="Required for an update, as returned by a read tool. Omit for a create.",
+        description=(
+            "Required for an update: the entity's exact name, or its id. "
+            "Omit for a create."
+        ),
     )
     plot_line_id: Optional[str] = Field(
         default=None,
         min_length=1,
         max_length=MAX_ID_CHARS,
-        description="Required for event.create and event.update: the plot line the event belongs to.",
+        description=(
+            "Required for event.create and event.update: the plot line the "
+            "event belongs to, by exact name or id."
+        ),
     )
     fields: StoryChangeFields
 

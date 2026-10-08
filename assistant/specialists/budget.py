@@ -14,8 +14,12 @@ from dataclasses import dataclass
 class RunBudget:
     max_model_calls: int
     max_consults: int = 0
+    # A consult that reviews colleagues' findings. One round: disagreement is
+    # useful once and a loop after that.
+    max_critique_rounds: int = 1
     model_calls_used: int = 0
     consults_used: int = 0
+    critique_rounds_used: int = 0
 
     def take_director_call(self) -> bool:
         if self.model_calls_used >= self.max_model_calls:
@@ -36,6 +40,15 @@ class RunBudget:
         self.consults_used += 1
         self.model_calls_used += 1
         return True
+
+    def take_critique(self) -> bool:
+        if self.critique_rounds_used >= self.max_critique_rounds:
+            return False
+        self.critique_rounds_used += 1
+        return True
+
+    def refund_critique(self) -> None:
+        self.critique_rounds_used = max(0, self.critique_rounds_used - 1)
 
     def refund_consult(self) -> None:
         """Give back a consult that never reached the model."""

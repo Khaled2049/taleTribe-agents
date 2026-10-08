@@ -147,9 +147,9 @@
         ],
         "gate": "specialists",
         "title": "Get a specialist's judgement",
-        "summary": "Bring in a story architect for structure and pacing, or a character editor for motivation and consistency, and fold what they find into one answer.",
+        "summary": "Bring in a story architect for structure and pacing, a character editor for motivation and consistency, or a critic for an editorial read, and fold what they find into one answer. A drafting agent can write a scene for an event you have planned.",
         "example": "The middle of my story feels slow. Why?",
-        "limits": "Up to 2 specialists per reply. They advise; they never change anything."
+        "limits": "Up to 2 specialists per reply. They advise or draft in chat; they never change your story."
       },
       {
         "id": "research_web",
@@ -714,7 +714,7 @@
                 }
               ],
               "default": null,
-              "description": "Required for an update, as returned by a read tool. Omit for a create.",
+              "description": "Required for an update: the entity's exact name, or its id. Omit for a create.",
               "title": "Entityid"
             },
             "plotLineId": {
@@ -729,7 +729,7 @@
                 }
               ],
               "default": null,
-              "description": "Required for event.create and event.update: the plot line the event belongs to.",
+              "description": "Required for event.create and event.update: the plot line the event belongs to, by exact name or id.",
               "title": "Plotlineid"
             },
             "fields": {
@@ -1824,7 +1824,7 @@
                 }
               ],
               "default": null,
-              "description": "Required for an update, as returned by a read tool. Omit for a create.",
+              "description": "Required for an update: the entity's exact name, or its id. Omit for a create.",
               "title": "Entityid"
             },
             "plotLineId": {
@@ -1839,7 +1839,7 @@
                 }
               ],
               "default": null,
-              "description": "Required for event.create and event.update: the plot line the event belongs to.",
+              "description": "Required for event.create and event.update: the plot line the event belongs to, by exact name or id.",
               "title": "Plotlineid"
             },
             "fields": {
@@ -3293,13 +3293,14 @@
                   "character",
                   "place",
                   "plot",
+                  "event",
                   "chapter"
                 ],
                 "title": "Kind",
                 "type": "string"
               },
               "ref": {
-                "description": "The entity's exact name as the story roster shows it, or its id. For a chapter, its title or its number.",
+                "description": "The entity's exact name as the story roster shows it, or its id. For a chapter, its title or its number. For an event, its name.",
                 "maxLength": 500,
                 "minLength": 1,
                 "title": "Ref",
@@ -3320,7 +3321,9 @@
           "specialist": {
             "enum": [
               "story_architect",
-              "character_editor"
+              "character_editor",
+              "critic",
+              "drafter"
             ],
             "title": "Specialist",
             "type": "string"
@@ -3339,6 +3342,12 @@
             "maxItems": 6,
             "title": "Focus",
             "type": "array"
+          },
+          "review": {
+            "default": false,
+            "description": "True to also show this specialist what other specialists found earlier in this reply, so it can agree or disagree. Once per reply.",
+            "title": "Review",
+            "type": "boolean"
           }
         },
         "required": [
@@ -3571,7 +3580,7 @@
                   }
                 ],
                 "default": null,
-                "description": "Required for an update, as returned by a read tool. Omit for a create.",
+                "description": "Required for an update: the entity's exact name, or its id. Omit for a create.",
                 "title": "Entityid"
               },
               "plotLineId": {
@@ -3586,7 +3595,7 @@
                   }
                 ],
                 "default": null,
-                "description": "Required for event.create and event.update: the plot line the event belongs to.",
+                "description": "Required for event.create and event.update: the plot line the event belongs to, by exact name or id.",
                 "title": "Plotlineid"
               },
               "fields": {

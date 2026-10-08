@@ -428,7 +428,9 @@ async def test_consults_requested_together_run_in_parallel(story):
 
 async def test_consults_beyond_the_cap_are_declined_not_run(story):
     three = consult_step(
-        ("call-1", ARCHITECT), ("call-2", EDITOR), ("call-3", ARCHITECT)
+        ("call-1", ARCHITECT),
+        ("call-2", EDITOR),
+        ("call-3", {"specialist": "critic", "brief": "And an editorial read?"}),
     )
     provider = RoutingProvider([three, FINAL_ROUND])
     events = await collect(provider)
@@ -592,3 +594,298 @@ def test_the_submit_schema_reaches_the_provider_without_null_types():
     assert tool["parameters"]["required"] == ["analysis"]
     names = {tool["name"] for tool in _model_tools(edits_enabled=False)}
     assert "submit_findings" not in names
+
+
+# -- critic, review round and drafting ------------------------------------
+
+CRITIC = {"specialist": "critic", "brief": "Would that actually fix the sag?"}
+DRAFT = {
+    "specialist": "drafter",
+    "brief": "Write the storm from Mina's point of view, tense and spare.",
+    "focus": [{"kind": "event", "ref": "The storm"}],
+}
+PROSE = ["The lamp guttered. ", "Mina counted the seconds between the waves."]
+
+
+def draft_reply(chunks=PROSE, finish="stop"):
+    return [
+        *({"type": "text_delta", "text": chunk} for chunk in chunks),
+        USAGE,
+        {"type": "done", "finish_reason": finish},
+    ]
+
+
+class CastProvider(RoutingProvider):
+    """Routes each sub-call by the specialist named in its system prompt."""
+
+    NAMES = ("Story Architect", "Character Editor", "Critic", "Drafting Agent")
+
+    async def chat_stream(
+        self, messages, tools, *, max_output_tokens, idempotency_key, required_tool=None
+    ):
+        system = messages[0]["parts"][0]["text"]
+        name = next((n for n in self.NAMES if f"You are the {n}" in system), None)
+        request = {
+            "messages": messages,
+            "tools": [tool["name"] for tool in tools],
+            "idempotency_key": idempotency_key,
+            "required_tool": required_tool,
+            "max_output_tokens": max_output_tokens,
+            "specialist": name,
+        }
+        self.requests.append(request)
+        if name is None:
+            script = (
+                self.director.pop(0) if len(self.director) > 1 else self.director[0]
+            )
+        else:
+            default = draft_reply() if name == "Drafting Agent" else findings_reply()
+            script = self.specialists.get(name, default)
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            await asyncio.sleep(0.01)
+            self.active -= 1
+        if isinstance(script, BaseException):
+            raise script
+        for event in script:
+            yield event
+
+    def calls_to(self, name):
+        return [r for r in self.requests if r["specialist"] == name]
+
+
+def material(request):
+    return request["messages"][1]["parts"][0]["text"]
+
+
+def test_the_roster_covers_four_specialists_with_two_modes():
+    assert set(SPECIALISTS) == {
+        "story_architect",
+        "character_editor",
+        "critic",
+        "drafter",
+    }
+    assert [s.id for s in SPECIALISTS.values() if s.mode == "draft"] == ["drafter"]
+    # A drafter writes for the writer, so it is not told to submit findings.
+    assert "submit_findings" not in SPECIALISTS["drafter"].system_prompt
+    assert "submit_findings" in SPECIALISTS["critic"].system_prompt
+
+
+async def test_a_review_is_shown_what_colleagues_found_in_the_same_step(story):
+    step = consult_step(("call-1", ARCHITECT), ("call-2", {**CRITIC, "review": True}))
+    provider = CastProvider(
+        [step, FINAL_ROUND],
+        specialists={
+            "Critic": findings_reply({"analysis": "Raising tension alone is cosmetic."})
+        },
+    )
+    events = await collect(provider)
+
+    (critic_call,) = provider.calls_to("Critic")
+    # Injected by the server from the architect's validated answer, verbatim.
+    assert "priorFindings" in material(critic_call)
+    assert "same tension" in material(critic_call)
+    assert "priorFindings" not in material(provider.calls_to("Story Architect")[0])
+    # The review waited for the first wave rather than racing it.
+    assert provider.peak == 1
+    assert completed(events, "call-2").result["reviewed"] is True
+    assert completed(events, "call-1").result["reviewed"] is False
+    # Both views reach the director, disagreement intact.
+    final = json.dumps(provider.requests[-1]["messages"])
+    assert "same tension" in final and "cosmetic" in final
+
+
+async def test_a_review_in_a_later_step_sees_earlier_findings(story):
+    provider = CastProvider(
+        [
+            consult_step(("call-1", ARCHITECT)),
+            consult_step(("call-2", {**CRITIC, "review": True})),
+            FINAL_ROUND,
+        ]
+    )
+    await collect(provider)
+    assert "same tension" in material(provider.calls_to("Critic")[0])
+
+
+async def test_only_one_review_round_is_allowed(story):
+    provider = CastProvider(
+        [
+            consult_step(("call-1", ARCHITECT)),
+            consult_step(("call-2", {**CRITIC, "review": True})),
+            consult_step(("call-3", {**ARCHITECT, "review": True})),
+            FINAL_ROUND,
+        ]
+    )
+    events = await collect(provider, limits=RunLimits(max_consults=4))
+    assert len(provider.calls_to("Critic")) == 1
+    assert len(provider.calls_to("Story Architect")) == 1
+    declined = completed(events, "call-3").result
+    assert declined["accepted"] is False and "one review round" in declined["reason"]
+
+
+async def test_a_review_with_nothing_to_review_is_a_plain_consult(story):
+    provider = CastProvider(
+        [consult_step(("call-1", {**CRITIC, "review": True})), FINAL_ROUND]
+    )
+    events = await collect(provider)
+    assert "priorFindings" not in material(provider.calls_to("Critic")[0])
+    assert completed(events, "call-1").result["reviewed"] is False
+    # The round was not spent, so a real review is still possible later.
+    budget = RunBudget(max_model_calls=8, max_consults=2)
+    assert budget.take_critique() and not budget.take_critique()
+
+
+async def test_a_draft_streams_to_the_writer_and_ends_the_run(story):
+    provider = CastProvider([consult_step(("call-1", DRAFT)), FINAL_ROUND])
+    events = await collect(provider)
+    validate_event_sequence(events)
+
+    deltas = [event.text for event in events if event.type == "text.delta"]
+    assert deltas == PROSE
+    done = next(event for event in events if event.type == "text.done")
+    assert done.part.text == "".join(PROSE)
+    # The director gets a receipt, never the prose, and no further turn.
+    receipt = completed(events, "call-1").result
+    assert receipt == {
+        "accepted": True,
+        "specialist": "drafter",
+        "name": "Drafting Agent",
+        "delivered": True,
+        "words": 10,
+        "truncated": False,
+    }
+    assert events[-1].type == "run.completed" and events[-1].finish_reason == "stop"
+    assert [r["specialist"] for r in provider.requests] == [None, "Drafting Agent"]
+    (draft_call,) = provider.calls_to("Drafting Agent")
+    assert draft_call["tools"] == [] and draft_call["required_tool"] is None
+    assert draft_call["max_output_tokens"] == SPECIALISTS["drafter"].max_output_tokens
+
+
+async def test_a_draft_sees_the_scene_and_not_the_rest_of_the_plot(story):
+    story.entities[("story-1", "plots")][0]["events"] = [
+        {"id": "event-0", "name": "The warning", "orderIndex": 0, "characterIds": []},
+        {
+            "id": "event-1",
+            "name": "The storm",
+            "orderIndex": 1,
+            "characterIds": ["char-1"],
+            "locationId": "place-1",
+        },
+        {"id": "event-2", "name": "The inquest", "orderIndex": 2, "characterIds": []},
+    ]
+    context = await build_context(
+        SPECIALISTS["drafter"], focus(("event", "the storm")), CTX
+    )
+    assert [e["name"] for e in context["events"]] == ["The storm"]
+    assert [c["name"] for c in context["charactersInScene"]] == ["Mina"]
+    assert [p["name"] for p in context["setting"]] == ["The Lamp Room"]
+    assert [e["name"] for e in context["whatCameBefore"]] == ["The warning"]
+    # What happens next is exactly what a drafter must not be handed.
+    assert "The inquest" not in json.dumps(context)
+    assert "plotLines" not in context
+
+
+@pytest.mark.parametrize(
+    "refs, fragment",
+    [
+        ([], "needs an event or a chapter in focus"),
+        ([("event", "The confrontation")], "is called 'The confrontation'"),
+        ([("character", "Mina")], "needs an event or a chapter in focus"),
+    ],
+)
+async def test_a_draft_without_an_anchor_is_refused_with_what_exists(
+    story, refs, fragment
+):
+    with pytest.raises(ConsultRejected, match=fragment) as excinfo:
+        await build_context(SPECIALISTS["drafter"], focus(*refs), CTX)
+    assert "events: The storm, The inquest" in str(excinfo.value)
+    assert "chapters: The Lamp Room" in str(excinfo.value)
+
+
+async def test_a_chapter_alone_can_anchor_a_rewrite(story):
+    context = await build_context(
+        SPECIALISTS["drafter"], focus(("chapter", "The Lamp Room")), CTX
+    )
+    assert context["chapters"][0]["text"] == SECRET
+
+
+async def test_a_refused_draft_returns_to_the_director_without_spending(story):
+    bad = {**DRAFT, "focus": [{"kind": "event", "ref": "The confrontation"}]}
+    provider = CastProvider([consult_step(("call-1", bad)), FINAL_ROUND])
+    events = await collect(provider)
+    assert provider.calls_to("Drafting Agent") == []
+    assert completed(events, "call-1").result["accepted"] is False
+    assert events[-1].finish_reason == "stop"
+    assert len(provider.requests) == 2  # the director explains instead
+
+
+async def test_a_draft_alongside_another_call_is_declined(story):
+    provider = CastProvider(
+        [consult_step(("call-1", DRAFT), ("call-2", ARCHITECT)), FINAL_ROUND]
+    )
+    events = await collect(provider)
+    assert provider.calls_to("Drafting Agent") == []
+    assert "alone" in completed(events, "call-1").result["reason"]
+    assert completed(events, "call-2").result["accepted"] is True
+
+
+async def test_a_truncated_draft_is_reported_as_cut_short(story):
+    provider = CastProvider(
+        [consult_step(("call-1", DRAFT)), FINAL_ROUND],
+        specialists={"Drafting Agent": draft_reply(finish="length")},
+    )
+    events = await collect(provider)
+    assert completed(events, "call-1").result["truncated"] is True
+    assert events[-1].finish_reason == "length"
+
+
+async def test_a_draft_follows_the_directors_words_on_a_new_paragraph(story):
+    step = [
+        {"type": "text_delta", "text": "Here is the storm."},
+        *consult_step(("call-1", DRAFT)),
+    ]
+    events = await collect(CastProvider([step, FINAL_ROUND]))
+    settled = [event.part.text for event in events if event.type == "text.done"]
+    assert settled == ["Here is the storm.", "\n\n" + "".join(PROSE)]
+    streamed = "".join(e.text for e in events if e.type == "text.delta")
+    assert streamed == "Here is the storm.\n\n" + "".join(PROSE)
+
+
+async def test_a_draft_that_fails_midway_keeps_what_was_shown(story):
+    broken = [
+        {"type": "text_delta", "text": "The lamp guttered. "},
+        {"type": "error", "error": {"code": "provider_error"}},
+    ]
+    provider = CastProvider(
+        [consult_step(("call-1", DRAFT)), FINAL_ROUND],
+        specialists={"Drafting Agent": broken},
+    )
+    events = await collect(provider)
+    types = [event.type for event in events]
+    assert "tool.failed" in types and "run.failed" not in types
+    assert any(
+        event.type == "text.done" and event.part.text == "The lamp guttered. "
+        for event in events
+    )
+    # The director still gets a turn to say what happened.
+    assert events[-1].type == "run.completed" and len(provider.requests) == 3
+
+
+async def test_an_empty_draft_is_a_failed_consult(story):
+    provider = CastProvider(
+        [consult_step(("call-1", DRAFT)), FINAL_ROUND],
+        specialists={"Drafting Agent": draft_reply(chunks=[])},
+    )
+    events = await collect(provider)
+    assert any(event.type == "tool.failed" for event in events)
+    assert events[-1].finish_reason == "stop"
+
+
+async def test_the_same_specialist_twice_in_one_step_is_asked_once(story):
+    twice = consult_step(("call-1", CRITIC), ("call-2", {**CRITIC, "brief": "Again?"}))
+    provider = CastProvider([twice, FINAL_ROUND])
+    events = await collect(provider)
+    assert len(provider.calls_to("Critic")) == 1
+    assert completed(events, "call-1").result["accepted"] is True
+    repeat = completed(events, "call-2").result
+    assert repeat["accepted"] is False and "already asked" in repeat["reason"]
