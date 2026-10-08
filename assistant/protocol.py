@@ -471,6 +471,9 @@ class RunRequest(StrictModel):
     message: UserMessage
     editor_context: Optional[EditorContext] = None
     continuation: Optional[Continuation] = None
+    # "room" convenes several specialists on purpose and shows each view. Only
+    # this field turns it on; a model cannot enter room mode by itself.
+    mode: Optional[Literal["room"]] = None
 
 
 class ProviderConfig(StrictModel):

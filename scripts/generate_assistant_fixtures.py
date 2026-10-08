@@ -358,6 +358,7 @@ def specialist_consult() -> list[Any]:
                     "name": "Character Editor",
                     "degraded": False,
                     "reviewed": False,
+                    "room": False,
                     "findings": {
                         "analysis": (
                             "Mina is written as guarded, but in the storm she "
@@ -424,6 +425,71 @@ def specialist_draft() -> list[Any]:
                     "truncated": False,
                 },
             ),
+        ),
+        r.emit(RunCompleted, finish_reason="stop"),
+    ]
+
+
+def writers_room() -> list[Any]:
+    r = RunEvents("run-writers-room")
+
+    def view(call_id: str, specialist: str, name: str, analysis: str, reviewed: bool):
+        return r.emit(
+            ToolCompleted,
+            part=ToolCallPart(
+                type="tool_call",
+                tool_call_id=call_id,
+                name="consult_specialist",
+                arguments={
+                    "specialist": specialist,
+                    "brief": "Why does the ending feel weak?",
+                    "focus": [],
+                    "review": reviewed,
+                },
+                result={
+                    "accepted": True,
+                    "specialist": specialist,
+                    "name": name,
+                    "degraded": False,
+                    "reviewed": reviewed,
+                    "room": True,
+                    "findings": {
+                        "analysis": analysis,
+                        "recommendations": [
+                            {
+                                "title": "Pay off the lamp",
+                                "detail": "Use it at the end.",
+                            }
+                        ],
+                        "suggestedChanges": [],
+                        "risks": [],
+                    },
+                },
+            ),
+        )
+
+    return [
+        r.emit(RunStarted, provider="mock", model="mock-1"),
+        r.emit(ToolStarted, tool_call_id="call-1", name="consult_specialist"),
+        r.emit(ToolStarted, tool_call_id="call-2", name="consult_specialist"),
+        view(
+            "call-1",
+            "story_architect",
+            "Story Architect",
+            "The inquest resolves nothing the storm set up.",
+            False,
+        ),
+        view(
+            "call-2",
+            "critic",
+            "Critic",
+            "I disagree: the setup is there, but the ending explains it away.",
+            True,
+        ),
+        r.emit(TextDelta, text="The room splits on the cause. "),
+        r.emit(
+            TextDone,
+            part=TextPart(type="text", text="The room splits on the cause. "),
         ),
         r.emit(RunCompleted, finish_reason="stop"),
     ]
@@ -609,6 +675,10 @@ FIXTURES = {
     "specialist-draft": (
         "A drafted scene streams to the writer while its tool call is open.",
         specialist_draft,
+    ),
+    "writers-room": (
+        "Room mode: each specialist's view is its own card, then one recommendation.",
+        writers_room,
     ),
     "research-citations": (
         "Web and story references emitted as parts.",

@@ -38,6 +38,7 @@ EXPECTED = {
     "specialist-draft",
     "stale-edit",
     "text-only",
+    "writers-room",
 }
 
 

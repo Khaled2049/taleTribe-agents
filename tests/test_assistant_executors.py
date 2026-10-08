@@ -99,7 +99,12 @@ async def run(name, arguments, rt):
 
 def test_every_offered_read_tool_has_an_executor():
     """A schema the model can call with no executor is a guaranteed failure."""
-    offered = available_tools(edits_enabled=False, research_enabled=False)
+    offered = available_tools(
+        edits_enabled=False,
+        research_enabled=False,
+        entity_proposals_enabled=False,
+        specialists_enabled=False,
+    )
     assert set(offered) == set(EXECUTORS)
 
 

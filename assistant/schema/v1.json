@@ -134,7 +134,7 @@
           "propose_story_changes",
           "apply_story_changes"
         ],
-        "gate": "entities",
+        "gate": "always",
         "title": "Suggest changes to your cast, places and plot",
         "summary": "Draft a new character, place, plot line or plot event, or changes to one you have. You review each change and nothing is saved until you accept it.",
         "example": "Add an abandoned hospital as a location.",
@@ -145,11 +145,11 @@
         "tools": [
           "consult_specialist"
         ],
-        "gate": "specialists",
+        "gate": "always",
         "title": "Get a specialist's judgement",
         "summary": "Bring in a story architect for structure and pacing, a character editor for motivation and consistency, or a critic for an editorial read, and fold what they find into one answer. A drafting agent can write a scene for an event you have planned.",
         "example": "The middle of my story feels slow. Why?",
-        "limits": "Up to 2 specialists per reply. They advise or draft in chat; they never change your story."
+        "limits": "Up to 2 specialists per reply, or type /room and your question to hear from several at once. They advise or draft in chat; they never change your story."
       },
       {
         "id": "research_web",
@@ -1223,6 +1223,19 @@
           ],
           "default": null,
           "title": "Continuation"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "const": "room",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mode"
         }
       },
       "required": [
@@ -2333,6 +2346,19 @@
           ],
           "default": null,
           "title": "Continuation"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "const": "room",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mode"
         },
         "userId": {
           "maxLength": 128,

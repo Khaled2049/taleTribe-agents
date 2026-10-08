@@ -59,7 +59,7 @@ def settings(**kwargs):
     )
 
 
-def client(*, enabled=True, authorized=True, provider=None):
+def client(*, enabled=True, authorized=True, provider=None, **flags):
     app = FastAPI()
     app.state.rate_limiter = PerUserRateLimiter(20)
     app.state.agent = SimpleNamespace(
@@ -72,7 +72,7 @@ def client(*, enabled=True, authorized=True, provider=None):
         if not authorized:
             raise HTTPException(401)
 
-    register_assistant(app, settings(assistant_api_enabled=enabled), verify)
+    register_assistant(app, settings(assistant_api_enabled=enabled, **flags), verify)
     return TestClient(app), app.state.agent.llm_provider
 
 
@@ -106,6 +106,16 @@ def test_gates(enabled, authorized, status):
             assert api.post("/assistant/run", json=BODY).status_code == status
     else:
         assert api.post("/assistant/run", json=BODY).status_code == status
+
+
+def test_room_mode_needs_no_flag():
+    provider = TextProvider()
+    api, _ = client(provider=provider)
+    with patch("assistant.api.StoryDataClient") as factory:
+        owned(factory)
+        response = api.post("/assistant/run", json={**BODY, "mode": "room"})
+    assert response.status_code == 200
+    assert provider.calls >= 1
 
 
 def test_unowned_story_is_refused_before_the_model():

@@ -254,8 +254,8 @@ def available_tools(
     *,
     edits_enabled: bool,
     research_enabled: bool,
-    entity_proposals_enabled: bool = False,
-    specialists_enabled: bool = False,
+    entity_proposals_enabled: bool = True,
+    specialists_enabled: bool = True,
 ) -> dict[str, type[BaseModel]]:
     """The allowlist for one run. Server-owned; a model cannot widen it."""
     tools = dict(READ_TOOLS)

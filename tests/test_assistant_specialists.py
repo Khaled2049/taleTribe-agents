@@ -81,11 +81,11 @@ def test_every_specialist_prompt_starts_from_the_shared_rules():
         assert specialist.prompt in specialist.system_prompt
 
 
-def test_the_consult_tool_is_offered_only_behind_its_flag():
-    off = available_tools(edits_enabled=True, research_enabled=True)
-    on = available_tools(
-        edits_enabled=False, research_enabled=False, specialists_enabled=True
+def test_the_consult_tool_is_offered_unless_withheld():
+    off = available_tools(
+        edits_enabled=True, research_enabled=True, specialists_enabled=False
     )
+    on = available_tools(edits_enabled=False, research_enabled=False)
     assert "consult_specialist" not in off and "consult_specialist" in on
 
 
@@ -451,7 +451,11 @@ async def test_a_consult_cannot_take_the_directors_last_call(story):
 
 
 async def test_a_bad_focus_is_declined_and_does_not_cost_a_consult(story):
-    bad = {**EDITOR, "focus": [{"kind": "character", "ref": "the protagonist"}]}
+    bad = {
+        "specialist": "character_editor",
+        "brief": "Is the lead consistent?",
+        "focus": [{"kind": "character", "ref": "the protagonist"}],
+    }
     provider = RoutingProvider(
         [
             consult_step(("call-1", bad)),
@@ -530,7 +534,7 @@ async def test_an_empty_answer_is_a_failed_consult(story):
     assert [e.type for e in events].count("usage") == 3
 
 
-async def test_the_tool_is_unknown_and_unadvertised_when_the_flag_is_off(story):
+async def test_the_tool_is_unknown_and_unadvertised_when_withheld(story):
     provider = RoutingProvider([consult_step(("call-1", ARCHITECT)), FINAL_ROUND])
     events = await collect(provider, enabled=False)
     assert any(event.type == "tool.failed" for event in events)
@@ -889,3 +893,180 @@ async def test_the_same_specialist_twice_in_one_step_is_asked_once(story):
     assert completed(events, "call-1").result["accepted"] is True
     repeat = completed(events, "call-2").result
     assert repeat["accepted"] is False and "already asked" in repeat["reason"]
+
+
+# -- writers' room mode ---------------------------------------------------
+
+ROOM_STEP = consult_step(
+    ("call-1", ARCHITECT),
+    ("call-2", EDITOR),
+    ("call-3", {**CRITIC, "review": True}),
+)
+
+
+async def collect_room(provider, *, room_enabled=True, mode="room", **kwargs):
+    request = AgentRunRequest.model_validate({**BODY, "userId": "uid-1", "mode": mode})
+    return [
+        event
+        async for event in run_assistant(
+            request,
+            run_id="run-1",
+            provider=provider,
+            postgres=FakePostgres(),
+            embedder=None,
+            limits=kwargs.pop("limits", RunLimits()),
+            specialists_enabled=kwargs.pop("specialists_enabled", True),
+            room_enabled=room_enabled,
+            **kwargs,
+        )
+    ]
+
+
+async def test_the_room_convenes_three_views_and_one_recommendation(story):
+    provider = CastProvider([ROOM_STEP, FINAL_ROUND])
+    events = await collect_room(provider)
+    validate_event_sequence(events)
+
+    # Past the normal cap of two, and each view is marked for its own card.
+    for call_id in ("call-1", "call-2", "call-3"):
+        result = completed(events, call_id).result
+        assert result["accepted"] is True and result["room"] is True
+    assert completed(events, "call-3").result["reviewed"] is True
+    assert events[-1].type == "run.completed" and events[-1].finish_reason == "stop"
+    # Director, three specialists, director: five model calls for the whole room.
+    assert len(provider.requests) == 5
+
+    first = provider.requests[0]
+    assert first["required_tool"] == "consult_specialist"
+    assert first["tools"] == ["consult_specialist"]
+    system = first["messages"][0]["parts"][0]["text"]
+    assert "convened the writers' room" in system and "at most 4 consults" in system
+    # Only the opening step is forced; the synthesis is free to answer.
+    assert provider.requests[-1]["required_tool"] is None
+
+
+async def test_each_view_is_emitted_as_it_finishes_not_when_all_are_done(story):
+    class Staggered(CastProvider):
+        async def chat_stream(self, messages, tools, **kwargs):
+            system = messages[0]["parts"][0]["text"]
+            if "You are the Story Architect" in system:
+                await asyncio.sleep(0.08)
+            async for event in super().chat_stream(messages, tools, **kwargs):
+                yield event
+
+    step = consult_step(("call-1", ARCHITECT), ("call-2", EDITOR))
+    events = await collect_room(Staggered([step, FINAL_ROUND]))
+    order = [e.part.tool_call_id for e in events if e.type == "tool.completed"]
+    # Requested first, finished last.
+    assert order == ["call-2", "call-1"]
+
+
+async def test_the_room_does_not_draft(story):
+    step = consult_step(("call-1", ARCHITECT), ("call-2", DRAFT))
+    provider = CastProvider([step, FINAL_ROUND])
+    events = await collect_room(provider)
+    assert provider.calls_to("Drafting Agent") == []
+    refused = completed(events, "call-2").result
+    assert refused["accepted"] is False and "does not draft" in refused["reason"]
+    assert events[-1].finish_reason == "stop"
+
+
+async def test_room_mode_comes_only_from_the_request_field(story):
+    for kwargs in ({"room_enabled": False}, {"mode": None}):
+        provider = CastProvider([ROOM_STEP, FINAL_ROUND])
+        events = await collect_room(provider, **kwargs)
+        # An ordinary run: nothing forced, the normal cap, no room cards.
+        assert provider.requests[0]["required_tool"] is None
+        assert "convened the writers' room" not in (
+            provider.requests[0]["messages"][0]["parts"][0]["text"]
+        )
+        assert len(provider.specialist_requests()) == 2
+        results = [e.part.result for e in events if e.type == "tool.completed"]
+        assert not any(result.get("room") for result in results)
+
+
+async def test_room_mode_is_inert_without_specialists(story):
+    provider = CastProvider([FINAL_ROUND])
+    events = await collect_room(provider, specialists_enabled=False)
+    assert provider.requests[0]["required_tool"] is None
+    assert events[-1].type == "run.completed"
+
+
+async def test_the_room_still_answers_when_the_budget_runs_short(story):
+    provider = CastProvider([ROOM_STEP, FINAL_ROUND])
+    events = await collect_room(provider, limits=RunLimits(max_model_calls=3))
+    # One consult fits beside the director's two calls; the rest are declined.
+    assert len(provider.specialist_requests()) == 1
+    assert events[-1].type == "run.completed" and events[-1].finish_reason == "stop"
+
+
+async def test_a_cancelled_room_leaves_no_specialist_running(story):
+    started = asyncio.Event()
+    finished = []
+
+    class Hanging(CastProvider):
+        async def chat_stream(self, messages, tools, **kwargs):
+            if kwargs.get("required_tool") == "submit_findings":
+                started.set()
+                try:
+                    await asyncio.sleep(30)
+                finally:
+                    finished.append("cancelled")
+            async for event in super().chat_stream(messages, tools, **kwargs):
+                yield event
+
+    provider = Hanging([consult_step(("call-1", ARCHITECT), ("call-2", EDITOR))])
+    events = await collect_room(provider, limits=RunLimits(timeout_seconds=0.2))
+    assert started.is_set()
+    await asyncio.sleep(0)
+    assert finished == ["cancelled", "cancelled"]
+    assert events[-1].type == "run.completed"
+
+
+def test_only_a_known_mode_is_accepted():
+    from pydantic import ValidationError
+
+    assert AgentRunRequest.model_validate({**BODY, "userId": "u", "mode": "room"})
+    with pytest.raises(ValidationError):
+        AgentRunRequest.model_validate({**BODY, "userId": "u", "mode": "debate"})
+
+
+@pytest.mark.parametrize(
+    "brief, expected",
+    [
+        ("Is Mina consistent in the storm?", ["char-1"]),
+        ("Why is TOBIAS so passive?", ["char-2"]),
+        ("Is the protagonist consistent?", None),
+    ],
+)
+async def test_a_character_named_only_in_the_brief_is_put_in_focus(
+    story, brief, expected
+):
+    editor = SPECIALISTS["character_editor"]
+    if expected is None:
+        with pytest.raises(ConsultRejected, match="needs a character in focus"):
+            await build_context(editor, [], CTX, brief=brief)
+        return
+    context = await build_context(editor, [], CTX, brief=brief)
+    assert [c["id"] for c in context["characters"]] == expected
+
+
+async def test_a_shared_first_name_is_not_guessed(story):
+    story.entities[("story-1", "characters")][0]["name"] = "Mina Stone"
+    story.seed_entity("story-1", "characters", "char-7", name="Mina Vale")
+    with pytest.raises(ConsultRejected, match="needs a character in focus"):
+        await build_context(
+            SPECIALISTS["character_editor"], [], CTX, brief="What does Mina want?"
+        )
+
+
+async def test_the_rooms_critic_reviews_even_when_not_asked_to(story):
+    step = consult_step(("call-1", ARCHITECT), ("call-2", CRITIC))
+    provider = CastProvider([step, FINAL_ROUND])
+    events = await collect_room(provider)
+    assert completed(events, "call-2").result["reviewed"] is True
+    assert "priorFindings" in material(provider.calls_to("Critic")[0])
+    # Outside the room the model's own choice stands.
+    ordinary = CastProvider([step, FINAL_ROUND])
+    plain = await collect(ordinary)
+    assert completed(plain, "call-2").result["reviewed"] is False

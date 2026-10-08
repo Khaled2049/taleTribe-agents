@@ -8,8 +8,8 @@ running creditProxy and spends real calls.
 
     python -m scripts.eval_specialist_routing --user-id <uid>
 
-Run it before enabling ASSISTANT_SPECIALISTS_ENABLED and after changing the
-director's prompt or a specialist's description.
+Run it after changing the director's prompt, a specialist's description, or
+the model the platform routes to.
 """
 
 from __future__ import annotations

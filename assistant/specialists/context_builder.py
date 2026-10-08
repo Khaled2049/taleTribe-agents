@@ -14,6 +14,7 @@ that does not resolve in this story is a rejected consult, not a wider read.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 
 from assistant.executors import _fit
@@ -26,6 +27,7 @@ COLLECTION_BY_KIND = {"character": "characters", "place": "places", "plot": "plo
 # A focused chapter contributes a window, never the whole manuscript.
 CHAPTER_WINDOW_CHARS = 6_000
 MAX_LISTED_NAMES = 12
+MAX_INFERRED_FOCUS = 2
 
 # Fields that are noise to a specialist: media, bookkeeping, back-references.
 _DROPPED = frozenset(
@@ -86,6 +88,29 @@ def _match(rows: list[dict[str, Any]], ref: str, label: str) -> list[dict[str, A
     return [
         row for row in rows if str(row.get(label) or "").strip().casefold() == wanted
     ]
+
+
+def _named_in(brief: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Entities a brief refers to: by full name, else by an unambiguous first name."""
+    words = set(re.findall(r"[\w'-]+", brief.casefold()))
+    text = brief.casefold()
+    full = [
+        row
+        for row in rows
+        if (name := str(row.get("name") or "").strip().casefold()) and name in text
+    ]
+    if full:
+        return full[:MAX_INFERRED_FOCUS]
+    firsts: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        tokens = str(row.get("name") or "").casefold().split()
+        if tokens and len(tokens[0]) >= 3:
+            firsts.setdefault(tokens[0], []).append(row)
+    return [
+        matches[0]
+        for first, matches in firsts.items()
+        if first in words and len(matches) == 1
+    ][:MAX_INFERRED_FOCUS]
 
 
 class _Story:
@@ -263,6 +288,7 @@ async def build_context(
     focus: list[FocusRef],
     ctx: ToolContext,
     prior_findings: Optional[list[dict[str, Any]]] = None,
+    brief: str = "",
 ) -> dict[str, Any]:
     """The bounded story material for one consult, as JSON-serializable data."""
     story = _Story(ctx)
@@ -303,6 +329,13 @@ async def build_context(
             )
         raise ConsultRejected(f"{problem} This story's {'; '.join(listed)}.")
 
+    for kind in specialist.required_focus:
+        if not focused.get(kind):
+            # The director named them in the brief but left focus empty: a
+            # common slip, and cheaper to repair here than to bounce back.
+            inferred = _named_in(brief, await story.roster(COLLECTION_BY_KIND[kind]))
+            if inferred:
+                focused[kind] = inferred
     for kind in specialist.required_focus:
         if focused.get(kind):
             continue

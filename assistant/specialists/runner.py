@@ -143,6 +143,8 @@ async def consult_stream(
     tools_schema: Any,
     prior_findings: Optional[list[dict[str, Any]]] = None,
     alone: bool = True,
+    room: bool = False,
+    force_review: bool = False,
 ) -> AsyncIterator[Union[str, ConsultOutcome]]:
     """Yield a draft's text as it arrives, then exactly one ``ConsultOutcome``.
 
@@ -174,7 +176,7 @@ async def consult_stream(
         )
         return
     # A review needs something to review; without it this is a plain consult.
-    reviewing = bool(args.review and prior_findings and not drafting)
+    reviewing = bool((args.review or force_review) and prior_findings and not drafting)
     if reviewing and not budget.take_critique():
         budget.refund_consult()
         yield _declined(
@@ -198,6 +200,7 @@ async def consult_stream(
                     list(args.focus),
                     ctx,
                     prior_findings if reviewing else None,
+                    brief=args.brief,
                 )
             except ConsultRejected as rejected:
                 outcome = "rejected"
@@ -288,6 +291,8 @@ async def consult_stream(
                     "name": specialist.name,
                     "degraded": degraded,
                     "reviewed": reviewing,
+                    # Tells the browser to show this view as its own card.
+                    "room": room,
                     "findings": findings,
                 },
                 max_result_chars,
@@ -354,17 +359,23 @@ async def run_consult(**kwargs: Any) -> ConsultOutcome:
     return outcome
 
 
-def declined_repeat(arguments_text: str) -> ConsultOutcome:
-    """A second consult of one specialist in a single step: refused, unspent."""
+REPEAT_REASON = (
+    "You already asked this specialist in this step. Put everything you want "
+    "from one specialist into a single brief."
+)
+ROOM_DRAFT_REASON = (
+    "The room advises; it does not draft. Give the writer the room's "
+    "recommendation, and they can ask for a draft afterwards."
+)
+
+
+def declined_call(arguments_text: str, reason: str) -> ConsultOutcome:
+    """Refuse a consult before it starts, without spending anything."""
     try:
         args = ConsultSpecialistArgs.model_validate(json.loads(arguments_text or "{}"))
     except (ValueError, ValidationError):
         return ConsultOutcome({}, invalid=True)
-    return _declined(
-        args.model_dump(by_alias=True, exclude_none=True),
-        "You already asked this specialist in this step. Put everything you "
-        "want from one specialist into a single brief.",
-    )
+    return _declined(args.model_dump(by_alias=True, exclude_none=True), reason)
 
 
 def specialist_of(arguments_text: str) -> Optional[str]:

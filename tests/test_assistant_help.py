@@ -61,12 +61,6 @@ def test_gate_matches_what_a_run_would_actually_offer(capability):
     ungated = {
         "always": read_only,
         "edits": available_tools(edits_enabled=True, research_enabled=False),
-        "entities": available_tools(
-            edits_enabled=False, research_enabled=False, entity_proposals_enabled=True
-        ),
-        "specialists": available_tools(
-            edits_enabled=False, research_enabled=False, specialists_enabled=True
-        ),
         "research": available_tools(edits_enabled=False, research_enabled=True),
     }[capability.gate]
     for name in capability.tools:
@@ -119,7 +113,11 @@ def test_read_tools_are_all_described_as_always_available():
         if capability.gate == "always"
         for name in capability.tools
     }
-    assert always == set(READ_TOOLS)
+    assert always == set(READ_TOOLS) | {
+        "propose_story_changes",
+        "apply_story_changes",
+        "consult_specialist",
+    }
 
 
 def test_payload_is_json_ready_and_drops_absent_limits():

@@ -140,11 +140,11 @@ def test_a_proposal_is_bounded_to_five_changes():
         ProposeStoryChangesDraft.model_validate(draft(*many))
 
 
-def test_the_tool_is_offered_only_behind_its_flag():
-    off = available_tools(edits_enabled=True, research_enabled=True)
-    on = available_tools(
-        edits_enabled=False, research_enabled=False, entity_proposals_enabled=True
+def test_the_tool_can_be_withheld_and_never_exposes_its_apply_half():
+    off = available_tools(
+        edits_enabled=True, research_enabled=True, entity_proposals_enabled=False
     )
+    on = available_tools(edits_enabled=False, research_enabled=False)
     assert "propose_story_changes" not in off
     assert "propose_story_changes" in on
     assert "apply_story_changes" not in on
@@ -340,9 +340,9 @@ async def test_a_proposal_alongside_another_tool_is_declined_not_fatal(story):
     assert "approval.requested" not in types and "run.failed" not in types
 
 
-async def test_the_tool_is_unknown_when_the_flag_is_off(story):
+async def test_the_tool_is_unknown_when_it_is_withheld(story):
     provider = FakeProvider(proposal_round(CREATE_PLACE), FINAL_ROUND)
-    events = await collect(provider, enabled=False)
+    events = await collect(provider, enabled=False, specialists_enabled=False)
     types = [event.type for event in events]
     assert "tool.failed" in types and "approval.requested" not in types
     assert all(
@@ -480,7 +480,7 @@ async def test_a_tampered_proposal_breaks_the_linkage(story):
     assert events[-1].type == "run.failed"
 
 
-async def test_entity_continuations_are_refused_when_the_flag_is_off(story):
+async def test_entity_continuations_are_refused_when_proposals_are_withheld(story):
     base = await first_proposal(story, CREATE_PLACE)
     _, events = await continue_with({**base, "decision": "rejected"}, enabled=False)
     assert events[-1].type == "run.failed"

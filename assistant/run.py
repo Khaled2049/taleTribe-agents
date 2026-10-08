@@ -72,9 +72,11 @@ from assistant.protocol import (
 from assistant.specialists.budget import RunBudget
 from assistant.specialists.registry import SPECIALISTS, roster
 from assistant.specialists.runner import (
+    REPEAT_REASON,
+    ROOM_DRAFT_REASON,
     ConsultOutcome,
     consult_stream,
-    declined_repeat,
+    declined_call,
     run_consult,
     specialist_of,
     wants_review,
@@ -150,6 +152,18 @@ it alone: its draft goes straight to the writer as the reply, so do not repeat
 or summarise it. If a specialist is unavailable, answer from what you have.
 Only you can call propose_story_changes."""
 
+ROOM_RULES = """
+The writer has convened the writers' room for this message, so they want
+several views, not one. In your first step call consult_specialist for the
+story_architect and the critic, and for the character_editor too when the
+question involves a character; set review true on the critic so it weighs what
+the others find. Give each the writer's question as its brief and name what it
+is about in focus. The writer sees each specialist's view as its own card above
+your reply, so do not repeat them. Write the creative director's recommendation
+instead: where the room agrees, where it disagrees and whose view you would
+follow, then one recommended approach and the next step. The room does not
+draft prose."""
+
 # With entity proposals on, an edit verb alone no longer means "rewrite my
 # selection": "make the villain more interesting" is about the story.
 _SELECTION_REFERENCES = frozenset(
@@ -202,6 +216,7 @@ class RunLimits:
     timeout_seconds: float = 240
     max_tool_result_chars: int = 8_000
     max_consults: int = 2
+    max_room_consults: int = 4
     specialist_timeout_seconds: float = 90
 
     @classmethod
@@ -213,6 +228,7 @@ class RunLimits:
             timeout_seconds=settings.assistant_run_timeout_seconds,
             max_tool_result_chars=settings.assistant_max_tool_result_chars,
             max_consults=settings.assistant_max_consults_per_run,
+            max_room_consults=settings.assistant_room_max_consults,
             specialist_timeout_seconds=settings.assistant_specialist_timeout_seconds,
         )
 
@@ -288,6 +304,7 @@ async def _system_prompt(
     edits_enabled: bool,
     entity_proposals_enabled: bool = False,
     max_consults: int = 0,
+    room: bool = False,
 ) -> str:
     slim = ""
     if postgres is not None and getattr(postgres, "pool", None) is not None:
@@ -304,6 +321,7 @@ async def _system_prompt(
             if max_consults > 0
             else ""
         )
+        + (ROOM_RULES if room else "")
     )
     if not slim:
         return rules
@@ -484,6 +502,19 @@ def _consult_error(outcome: ConsultOutcome) -> Optional[ErrorCode]:
     return None
 
 
+def _tool_message(tool_call_id: str, payload: Any) -> dict[str, Any]:
+    return {
+        "role": "tool",
+        "tool_call_id": tool_call_id,
+        "parts": [
+            {
+                "type": "text",
+                "text": json.dumps(payload, separators=(",", ":"), default=str),
+            }
+        ],
+    }
+
+
 def _tool_error_message(code: ErrorCode) -> dict[str, Any]:
     return {"error": {"code": code.value, "message": safe_message(code)}}
 
@@ -498,8 +529,11 @@ async def run_assistant(
     limits: RunLimits,
     billing: str = "platform",
     edits_enabled: bool = False,
-    entity_proposals_enabled: bool = False,
-    specialists_enabled: bool = False,
+    # Story-change proposals, specialists and room mode are always on in the
+    # service. These stay as parameters so a test can run the loop without them.
+    entity_proposals_enabled: bool = True,
+    specialists_enabled: bool = True,
+    room_enabled: bool = True,
     history_limits: Optional[HistoryLimits] = None,
 ) -> AsyncIterator[BaseEvent]:
     """Run one assistant turn and yield normalized protocol events."""
@@ -521,9 +555,20 @@ async def run_assistant(
         and editor.selection.text
     )
     # One budget for the director and every specialist it consults.
+    # Room mode comes only from the request, and only with both flags on.
+    room = bool(
+        request.mode == "room"
+        and room_enabled
+        and specialists_enabled
+        and continuation is None
+    )
     budget = RunBudget(
         max_model_calls=limits.max_model_calls,
-        max_consults=limits.max_consults if specialists_enabled else 0,
+        max_consults=(
+            (limits.max_room_consults if room else limits.max_consults)
+            if specialists_enabled
+            else 0
+        ),
     )
     consulting = budget.max_consults > 0
     model_tools = _model_tools(
@@ -587,6 +632,7 @@ async def run_assistant(
                 edits_enabled=editor_can_propose,
                 entity_proposals_enabled=entity_proposals_enabled,
                 max_consults=budget.max_consults,
+                room=room,
             )
             user_text = "\n".join(part.text for part in request.message.parts)
             if continuation is not None:
@@ -614,6 +660,7 @@ async def run_assistant(
             ]
             direct_editor_proposal = bool(
                 continuation is None
+                and not room
                 and editor_can_propose
                 and _is_edit_request(
                     user_text, require_selection_reference=entity_proposals_enabled
@@ -638,6 +685,10 @@ async def run_assistant(
                 finish_reason: Optional[str] = None
                 stream_failed = False
                 required_tool = "propose_editor_edit" if editor_snapshot_read else None
+                if room and step == 0:
+                    # Convening the room is the point of the request, so the
+                    # first step must consult rather than answer alone.
+                    required_tool = "consult_specialist"
                 step_tools = (
                     [tool for tool in model_tools if tool["name"] == required_tool]
                     if required_tool
@@ -785,56 +836,132 @@ async def run_assistant(
                     "max_result_chars": limits.max_tool_result_chars,
                     "tools_schema": _without_null_branches,
                 }
-                consult_calls = [
-                    call
-                    for call in calls
-                    if call.name == "consult_specialist" and not _is_draft(call)
-                ]
-                consults: dict[str, ConsultOutcome] = {}
+                consult_kwargs["room"] = room
+                # Consults settle here, as each one finishes, so the writer
+                # sees a view the moment it exists instead of when the slowest
+                # specialist is done. `settled` holds what the model is told.
+                settled: dict[str, Any] = {}
+                access_denied = False
+
+                async def _settle(
+                    call: _PendingToolCall, consult: ConsultOutcome
+                ) -> AsyncIterator[BaseEvent]:
+                    nonlocal access_denied
+                    # Billed whether or not the answer was usable.
+                    for usage_event in consult.usage:
+                        yield events.emit(Usage, **_usage_fields(usage_event, billing))
+                    error = (
+                        ErrorCode.PROVIDER_ERROR
+                        if consult.invalid
+                        else _consult_error(consult)
+                    )
+                    if error is not None:
+                        yield events.emit(
+                            ToolFailed,
+                            tool_call_id=call.tool_call_id,
+                            code=error,
+                            message=safe_message(error),
+                        )
+                        settled[call.tool_call_id] = _tool_error_message(error)
+                        access_denied = access_denied or (
+                            error is ErrorCode.STORY_ACCESS_DENIED
+                        )
+                        return
+                    yield events.emit(
+                        ToolCompleted,
+                        part=ToolCallPart(
+                            type="tool_call",
+                            tool_call_id=call.tool_call_id,
+                            name=call.name,
+                            arguments=consult.arguments,
+                            result=consult.payload,
+                        ),
+                    )
+                    settled[call.tool_call_id] = consult.payload
+                    if consult.findings is not None:
+                        run_findings.append(consult.findings)
+
                 if consulting:
                     # One brief per specialist per step: a small model will
                     # otherwise ask the same one twice and pay twice.
                     asked: set[str] = set()
-                    unique_calls = []
-                    for call in consult_calls:
+                    consult_calls = []
+                    for call in calls:
+                        if call.name != "consult_specialist":
+                            continue
+                        refusal: Optional[str] = None
                         who = specialist_of(call.arguments_text) or ""
-                        if who in asked:
-                            consults[call.tool_call_id] = declined_repeat(
-                                call.arguments_text
-                            )
+                        if _is_draft(call):
+                            if not room:
+                                continue  # streamed from the loop below
+                            refusal = ROOM_DRAFT_REASON
+                        elif who in asked:
+                            refusal = REPEAT_REASON
+                        if refusal is not None:
+                            async for event in _settle(
+                                call, declined_call(call.arguments_text, refusal)
+                            ):
+                                yield event
                             continue
                         asked.add(who)
-                        unique_calls.append(call)
-                    consult_calls = unique_calls
+                        consult_calls.append(call)
+
+                    def _reviews(call: _PendingToolCall) -> bool:
+                        # In the room the critic always weighs the other views,
+                        # whether or not the model remembered to ask.
+                        return wants_review(call.arguments_text) or (
+                            room and specialist_of(call.arguments_text) == "critic"
+                        )
+
                     for wave in (
-                        [
-                            c
-                            for c in consult_calls
-                            if not wants_review(c.arguments_text)
-                        ],
-                        [c for c in consult_calls if wants_review(c.arguments_text)],
+                        [c for c in consult_calls if not _reviews(c)],
+                        [c for c in consult_calls if _reviews(c)],
                     ):
                         if not wave:
                             continue
                         known_findings = list(run_findings)
-                        outcomes = await asyncio.gather(
-                            *(
+                        tasks = {
+                            asyncio.ensure_future(
                                 run_consult(
                                     arguments_text=call.arguments_text,
                                     tool_call_id=call.tool_call_id,
                                     prior_findings=known_findings,
+                                    force_review=_reviews(call),
                                     **consult_kwargs,
                                 )
-                                for call in wave
-                            )
-                        )
-                        for call, consult_outcome in zip(wave, outcomes):
-                            consults[call.tool_call_id] = consult_outcome
-                            if consult_outcome.findings is not None:
-                                run_findings.append(consult_outcome.findings)
+                            ): call
+                            for call in wave
+                        }
+                        try:
+                            waiting = set(tasks)
+                            while waiting:
+                                finished, waiting = await asyncio.wait(
+                                    waiting, return_when=asyncio.FIRST_COMPLETED
+                                )
+                                for task in finished:
+                                    async for event in _settle(
+                                        tasks[task], task.result()
+                                    ):
+                                        yield event
+                        finally:
+                            # A cancelled or timed-out run must not leave
+                            # specialists running and billing behind it.
+                            for task in tasks:
+                                task.cancel()
+
+                if access_denied:
+                    code = ErrorCode.STORY_ACCESS_DENIED
+                    yield events.emit(RunFailed, code=code, message=safe_message(code))
+                    outcome = "failed"
+                    return
 
                 for call in calls:
                     tool_calls_used += 1
+                    if call.tool_call_id in settled:
+                        messages.append(
+                            _tool_message(call.tool_call_id, settled[call.tool_call_id])
+                        )
+                        continue
                     story_proposal_id: Optional[str] = None
                     delivered_draft: Optional[ConsultOutcome] = None
                     try:
@@ -842,8 +969,8 @@ async def run_assistant(
                         if not isinstance(raw_arguments, dict):
                             raise ValueError("tool arguments must be an object")
                         if call.name == "consult_specialist":
-                            consult = consults.get(call.tool_call_id)
-                            if consult is None and consulting and _is_draft(call):
+                            consult: Optional[ConsultOutcome] = None
+                            if consulting and _is_draft(call):
                                 # Streamed here, not gathered: the prose is the
                                 # writer's and reaches them as it is written.
                                 draft_started = False

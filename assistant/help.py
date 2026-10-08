@@ -31,7 +31,7 @@ from typing import Any, Literal, Optional
 
 from capability_catalog import assistant_tools
 
-Gate = Literal["always", "edits", "entities", "specialists", "research"]
+Gate = Literal["always", "edits", "research"]
 
 
 @dataclass(frozen=True)
@@ -154,7 +154,7 @@ HELP_CATALOG: tuple[Capability, ...] = (
     Capability(
         id="propose_story_changes",
         tools=assistant_tools("propose_story_changes"),
-        gate="entities",
+        gate="always",
         title="Suggest changes to your cast, places and plot",
         summary=(
             "Draft a new character, place, plot line or plot event, or changes "
@@ -167,7 +167,7 @@ HELP_CATALOG: tuple[Capability, ...] = (
     Capability(
         id="consult_specialist",
         tools=assistant_tools("consult_specialist"),
-        gate="specialists",
+        gate="always",
         title="Get a specialist's judgement",
         summary=(
             "Bring in a story architect for structure and pacing, a character "
@@ -177,8 +177,9 @@ HELP_CATALOG: tuple[Capability, ...] = (
         ),
         example="The middle of my story feels slow. Why?",
         limits=(
-            "Up to 2 specialists per reply. They advise or draft in chat; "
-            "they never change your story."
+            "Up to 2 specialists per reply, or type /room and your question "
+            "to hear from several at once. They advise or draft in chat; they "
+            "never change your story."
         ),
     ),
     Capability(
