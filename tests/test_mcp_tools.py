@@ -256,6 +256,18 @@ async def test_list_chapters_sorted_with_ids():
     assert page.truncated is False
 
 
+async def test_chapter_reads_say_whether_readers_can_see_the_chapter():
+    fake = _seeded_story_data()
+    fake.chapters["story-a"][1]["publishedAt"] = "2026-07-02T00:00:00Z"
+
+    page = await data.list_chapters("story-a", UID_A)
+    assert [c["released"] for c in page.items] == [False, True]
+
+    draft = await data.get_chapter("story-a", "ch1", UID_A, 0, 10)
+    released = await data.get_chapter("story-a", "ch2", UID_A, 0, 10)
+    assert (draft["released"], released["released"]) == (False, True)
+
+
 async def test_list_chapters_does_not_fetch_chapter_bodies():
     """Regression: listing a book must not transfer every word of it.
 
@@ -748,6 +760,8 @@ async def test_create_chapter_reports_the_chapter_count_it_observed():
     db, fake = _write_env()
     result = await writes.create_chapter(db, UID_A, "story-a", "Three", "text")
     assert result["chapter_count"] == 3
+    # A connector-written chapter is never live until the author releases it.
+    assert result["released"] is False
     assert len(fake.chapters["story-a"]) == 3
 
 
