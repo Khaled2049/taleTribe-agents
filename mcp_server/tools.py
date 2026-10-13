@@ -352,6 +352,9 @@ def register_tools(
         first 200 in reading order and the story continues beyond them — say so
         rather than treating the list as the whole book.
 
+        Each chapter's `released` says whether readers can see it. A chapter
+        that is not released is a private draft, even in a published story.
+
         Args:
             story_id: The story's ID.
         """
@@ -513,6 +516,10 @@ def register_tools(
 
             The chapter is appended after the story's current last chapter.
 
+            It is created as a DRAFT that readers cannot see, even in a
+            published story. Only the author can release it, from the editor;
+            no tool here does. Tell the user it is waiting for them to release.
+
             `content` is PLAIN TEXT, not HTML or Markdown — separate paragraphs
             with a blank line. Any markup is escaped and stored literally, so
             do not attempt to pass tags for formatting.
@@ -552,6 +559,9 @@ def register_tools(
 
             Nothing already in the chapter is changed — the new text goes after
             the last block.
+
+            If the chapter is released (see list_chapters), readers see the
+            new text immediately.
 
             `content` is PLAIN TEXT, not HTML or Markdown — separate paragraphs
             with a blank line. Any markup is escaped and stored literally.
@@ -602,6 +612,9 @@ def register_tools(
             every `index` here refers to that listing. Blocks you do not name
             are left exactly as they were, so the author's headings, lists,
             images and formatting elsewhere are untouched.
+
+            If the chapter is released (see list_chapters), readers see the
+            edit immediately.
 
             Each op is one of:
               - {"action": "replace", "index": N, "text": "..."} — overwrite

@@ -446,6 +446,9 @@ async def _append_chapter(uid: str, story_id: str, title: str, stored: str) -> d
             "title": chapter.get("title") or title,
             "order": chapter.get("position"),
             "word_count": chapter.get("wordCount"),
+            # story-data creates every chapter as a draft; only the author
+            # can release it, from the editor.
+            "released": bool(chapter.get("publishedAt")),
             # What we saw, plus ours. story-data owns the real ceiling and
             # rejects the create once the story is full.
             "chapter_count": len(chapters) + 1,

@@ -219,10 +219,17 @@ async def list_chapters(story_id: str, uid: str) -> Page:
             "order": chapter.get("position"),
             "chapter_number": number,
             "word_count": chapter.get("wordCount"),
+            "released": _released(chapter),
         }
         for number, chapter in _numbered(capped)
     ]
     return Page(chapters, truncated)
+
+
+def _released(chapter: dict) -> bool:
+    """Whether readers can see the chapter. story-data omits `publishedAt` for
+    a draft, which only its author (and so this connector) can read."""
+    return bool(chapter.get("publishedAt"))
 
 
 async def _owned_chapter(story_id: str, chapter_id: str, uid: str) -> dict:
@@ -269,6 +276,7 @@ async def get_chapter(
         "order": record.get("position"),
         "chapter_number": await _chapter_number(story_id, chapter_id, uid),
         "word_count": record.get("wordCount"),
+        "released": _released(record),
         "total_chars": len(content),
         "offset": offset,
         "content": window,
