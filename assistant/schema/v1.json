@@ -4002,6 +4002,7 @@
         "description": "A bounded window, so a read cannot pull a whole manuscript into a prompt.",
         "properties": {
           "chapterId": {
+            "description": "Exact chapter_id from the story roster or get_story_overview; never a title or chapter number.",
             "maxLength": 128,
             "minLength": 1,
             "title": "Chapterid",

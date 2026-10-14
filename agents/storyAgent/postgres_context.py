@@ -116,7 +116,7 @@ class PostgresStoryContext:
                 story_id,
             )
             chapters = await conn.fetch(
-                "SELECT title FROM chapters WHERE story_id=$1 ORDER BY position LIMIT 12",
+                "SELECT id,title FROM chapters WHERE story_id=$1 ORDER BY position LIMIT 12",
                 story_id,
             )
         return self.format_slim_context(
@@ -206,12 +206,33 @@ class PostgresStoryContext:
             ("Plot lines", context["plots"]),
             ("Chapters", context["chapters"]),
         ):
-            names = [
-                _bounded(
-                    item.get("name") or item.get("title") or "", MAX_SLIM_LABEL_CHARS
+            items = items[:12]
+            if not items:
+                continue
+            remaining = (
+                MAX_SLIM_CONTEXT_CHARS
+                - sum(len(line) + 1 for line in lines)
+                - len(label)
+                - 2
+            )
+            label_cap = min(
+                MAX_SLIM_LABEL_CHARS, (remaining - 2 * (len(items) - 1)) // len(items)
+            )
+            names = []
+            for item in items:
+                # A title identifies a chapter to the writer, but read_chapter
+                # needs the database id. Reserve room for that id before
+                # shortening the title so the bounded roster stays usable.
+                suffix = (
+                    f" [chapter_id: {item['id']}]"
+                    if label == "Chapters" and item.get("id")
+                    else ""
                 )
-                for item in items[:12]
-            ]
+                name = _bounded(
+                    item.get("name") or item.get("title") or "",
+                    max(1, label_cap - len(suffix)),
+                )
+                names.append(name + suffix)
             if names:
                 lines.append(f"{label}: " + ", ".join(names))
         return "\n".join(lines)[:MAX_SLIM_CONTEXT_CHARS]

@@ -141,7 +141,13 @@ def _clip(node: Any, max_string: int, max_items: Optional[int]) -> Any:
     if isinstance(node, str):
         return node if len(node) <= max_string else node[:max_string] + "…"
     if isinstance(node, dict):
-        return {k: _clip(v, max_string, max_items) for k, v in node.items()}
+        # A shortened chapter id cannot be used by read_chapter. Count ids as
+        # scaffolding so a crowded overview drops rows rather than corrupting
+        # the identifiers on the rows it retains.
+        return {
+            k: v if k == "chapter_id" else _clip(v, max_string, max_items)
+            for k, v in node.items()
+        }
     if isinstance(node, list):
         kept = node if max_items is None else node[:max_items]
         return [_clip(v, max_string, max_items) for v in kept]

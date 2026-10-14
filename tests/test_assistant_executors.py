@@ -118,6 +118,46 @@ async def test_get_story_overview(fake):
     assert result.references == ()
 
 
+async def test_overview_chapter_ids_can_be_read_even_with_duplicate_titles(fake):
+    fake.chapters[STORY] = []
+    fake.seed_chapter(
+        STORY, "chapter-1", title="Two Inches", content="The first chapter."
+    )
+    fake.seed_chapter(
+        STORY, "chapter-2", title="Two Inches", content="The second chapter."
+    )
+    overview = await run("get_story_overview", {}, runtime())
+
+    for chapter, expected in zip(
+        overview.result["chapters"], ["The first chapter.", "The second chapter."]
+    ):
+        result = await run(
+            "read_chapter", {"chapterId": chapter["chapter_id"]}, runtime()
+        )
+        assert result.result["title"] == "Two Inches"
+        assert result.result["content"] == expected
+        assert result.references[0].source_id == chapter["chapter_id"]
+
+
+async def test_shortened_overview_preserves_readable_chapter_ids(fake):
+    ids = [f"00000000-0000-4000-8000-{i:012d}" for i in range(50)]
+    for chapter_id in ids:
+        fake.seed_chapter(
+            STORY, chapter_id, title="Long title " * 40, content="A passage."
+        )
+    result = await run("get_story_overview", {}, runtime(max_result_chars=1_500))
+
+    assert result.truncated is True
+    assert len(json.dumps(result.result)) <= 1_500
+    assert result.result["chapters"]
+    for chapter in result.result["chapters"]:
+        assert chapter["chapter_id"] in {"chapter-1", "chapter-2", *ids}
+        read = await run(
+            "read_chapter", {"chapterId": chapter["chapter_id"]}, runtime()
+        )
+        assert read.result.get("found") is not False
+
+
 async def test_list_story_entities_maps_the_singular_kind(fake):
     result = await run("list_story_entities", {"kind": "character"}, runtime())
     assert result.result["kind"] == "character"

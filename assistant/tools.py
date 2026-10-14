@@ -101,7 +101,14 @@ class GetStoryEntityArgs(StrictModel):
 class ReadChapterArgs(StrictModel):
     """A bounded window, so a read cannot pull a whole manuscript into a prompt."""
 
-    chapter_id: str = Field(min_length=1, max_length=MAX_ID_CHARS)
+    chapter_id: str = Field(
+        min_length=1,
+        max_length=MAX_ID_CHARS,
+        description=(
+            "Exact chapter_id from the story roster or get_story_overview; "
+            "never a title or chapter number."
+        ),
+    )
     offset: int = Field(default=0, ge=0)
     limit: int = Field(default=8_000, ge=1, le=MAX_CHAPTER_WINDOW_CHARS)
 

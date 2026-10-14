@@ -50,3 +50,23 @@ def test_slim_context_bounds_roster_labels_description_and_total_size():
         for label in roster.split(": ", 1)[1].split(", "):
             assert len(label) <= MAX_SLIM_LABEL_CHARS
     assert context.count("…") >= 2
+
+
+def test_slim_roster_preserves_chapter_ids_when_titles_are_shortened():
+    ids = [f"00000000-0000-4000-8000-{i:012d}" for i in range(12)]
+    huge = "x" * MAX_SLIM_CONTEXT_CHARS
+    context = PostgresStoryContext.format_slim_context(
+        {
+            "story": {"title": huge, "description": huge},
+            "characters": [{"name": huge} for _ in range(12)],
+            "places": [{"name": huge} for _ in range(12)],
+            "plots": [{"name": huge} for _ in range(12)],
+            "chapters": [{"id": chapter_id, "title": huge} for chapter_id in ids],
+        }
+    )
+
+    assert len(context) <= MAX_SLIM_CONTEXT_CHARS
+    for chapter_id in ids:
+        assert f"[chapter_id: {chapter_id}]" in context
+    chapter_labels = context.split("Chapters: ", 1)[1].split(", ")
+    assert all(len(label) <= MAX_SLIM_LABEL_CHARS for label in chapter_labels)
