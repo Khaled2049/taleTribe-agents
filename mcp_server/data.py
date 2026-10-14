@@ -196,6 +196,7 @@ async def get_story_overview(story_id: str, uid: str) -> dict:
         "updated_at": story.get("updatedAt"),
         "chapters": [
             {
+                "chapter_id": chapter.get("id"),
                 "title": chapter.get("title") or "Untitled",
                 "order": chapter.get("position"),
                 "chapter_number": number,
