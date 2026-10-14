@@ -161,13 +161,8 @@ async def test_tool_answer_runs_end_to_end_and_reenters_as_data(owned_story):
     ]
     assert parsed[-1].finish_reason == "stop"
     assert len(provider.requests) == 2
-    assert provider.requests[0]["idempotency_key"] == "run-1:0"
-    assert provider.requests[1]["idempotency_key"] == "run-1:1"
-    assert (
-        "structured entity tools"
-        in provider.requests[0]["messages"][0]["parts"][0]["text"]
-    )
-    assert "Story: Saltmarsh" in provider.requests[0]["messages"][0]["parts"][0]["text"]
+    assert len({request["idempotency_key"] for request in provider.requests}) == 2
+    assert "Saltmarsh" in provider.requests[0]["messages"][0]["parts"][0]["text"]
 
     second_messages = provider.requests[1]["messages"]
     assert second_messages[-1]["role"] == "tool"
@@ -482,7 +477,8 @@ def signed_tool_round(signature="sig-abc", call_id="call-1"):
 async def test_provider_meta_is_replayed_on_the_next_turn(owned_story):
     provider = FakeProvider(signed_tool_round(), FINAL_ROUND)
 
-    await collect(provider)
+    events = await collect(provider)
+    assert "sig-abc" not in repr(events)
 
     replayed = provider.requests[1]["messages"]
     tool_calls = [
@@ -511,14 +507,6 @@ async def test_provider_meta_is_absent_when_the_provider_sends_none(owned_story)
     ]
     assert len(tool_calls) == 1
     assert "provider_meta" not in tool_calls[0]
-
-
-async def test_provider_meta_never_reaches_the_browser(owned_story):
-    provider = FakeProvider(signed_tool_round(), FINAL_ROUND)
-
-    events = await collect(provider)
-
-    assert "sig-abc" not in repr(events)
 
 
 async def test_bare_this_edit_request_takes_the_direct_proposal_path(owned_story):
@@ -599,6 +587,8 @@ async def test_prior_turns_reach_the_model_before_the_current_message(owned_stor
     assert messages[1]["parts"][0]["text"] == "Who is Mina?"
     assert messages[2]["parts"][0]["text"] == "The lighthouse keeper."
     assert messages[3]["parts"][0]["text"] == "How many chapters?"
+    for message in messages[1:-1]:
+        assert all(part["type"] == "text" for part in message["parts"])
 
 
 async def test_a_run_without_a_thread_sends_only_the_current_message(owned_story):
@@ -608,58 +598,3 @@ async def test_a_run_without_a_thread_sends_only_the_current_message(owned_story
 
     messages = provider.requests[0]["messages"]
     assert [message["role"] for message in messages] == ["system", "user"]
-
-
-async def test_history_is_replayed_as_text_never_as_tool_calls(owned_story):
-    thread = "22222222-2222-4222-8222-222222222222"
-    owned_story.seed_thread(thread, "story-1")
-    owned_story.seed_message(thread, "user", "Who is Mina?")
-    owned_story.seed_message(thread, "assistant", "The lighthouse keeper.")
-    provider = FakeProvider(FINAL_ROUND)
-
-    await collect(provider, body={**BODY, "threadId": thread})
-
-    replayed = provider.requests[0]["messages"][1:-1]
-    assert replayed
-    for message in replayed:
-        assert all(part["type"] == "text" for part in message["parts"])
-
-
-async def test_roster_guidance_only_appears_with_a_roster(owned_story):
-    provider = FakeProvider(FINAL_ROUND)
-
-    await collect(provider)
-    with_roster = provider.requests[0]["messages"][0]["parts"][0]["text"]
-
-    assert "roster below" in with_roster
-    assert "<story_context>" in with_roster
-    assert "Reading steps are limited" in with_roster
-
-
-async def test_step_economy_rules_survive_an_empty_roster(owned_story):
-    class NoContext:
-        pool = object()
-
-        async def slim_context(self, story_id):
-            return ""
-
-    provider = FakeProvider(FINAL_ROUND)
-    request = AgentRunRequest.model_validate({**BODY, "userId": "uid-1"})
-    events = [
-        event
-        async for event in run_assistant(
-            request,
-            run_id="run-1",
-            provider=provider,
-            postgres=NoContext(),
-            embedder=None,
-            limits=RunLimits(),
-            edits_enabled=False,
-        )
-    ]
-    assert events
-
-    prompt = provider.requests[0]["messages"][0]["parts"][0]["text"]
-    assert "Reading steps are limited" in prompt
-    assert "roster below" not in prompt
-    assert "<story_context>" not in prompt

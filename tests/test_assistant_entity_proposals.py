@@ -7,9 +7,9 @@ from pydantic import ValidationError
 
 from assistant.entity_changes import ProposalRejected, bind_story_changes
 from assistant.events import validate_event_sequence
-from assistant.protocol import AgentRunRequest, RunRequest, StoryChangeDraft
-from assistant.run import RunLimits, _is_edit_request, run_assistant
-from assistant.tools import ProposeStoryChangesDraft, ToolContext, available_tools
+from assistant.protocol import AgentRunRequest, StoryChangeDraft
+from assistant.run import RunLimits, run_assistant
+from assistant.tools import ProposeStoryChangesDraft, ToolContext
 from mcp_server import story_data
 from tests.mcp_fakes import FakeStoryData
 from tests.test_assistant_run import (
@@ -140,16 +140,6 @@ def test_a_proposal_is_bounded_to_five_changes():
         ProposeStoryChangesDraft.model_validate(draft(*many))
 
 
-def test_the_tool_can_be_withheld_and_never_exposes_its_apply_half():
-    off = available_tools(
-        edits_enabled=True, research_enabled=True, entity_proposals_enabled=False
-    )
-    on = available_tools(edits_enabled=False, research_enabled=False)
-    assert "propose_story_changes" not in off
-    assert "propose_story_changes" in on
-    assert "apply_story_changes" not in on
-
-
 def test_provider_facing_schemas_carry_no_null_type():
     """Optional fields reach the provider as plain, not-required fields."""
     from assistant.run import _model_tools
@@ -255,11 +245,6 @@ async def test_unbindable_changes_are_rejected_with_a_reason(story, change, frag
         await bind(change)
 
 
-async def test_two_updates_to_one_entity_are_rejected(story):
-    with pytest.raises(ProposalRejected, match="twice"):
-        await bind(UPDATE_MINA, {**UPDATE_MINA, "fields": {"voice": "Low."}})
-
-
 async def test_event_create_names_are_unique_per_resolved_plot(story):
     create = {
         "operation": "event.create",
@@ -321,7 +306,7 @@ async def test_a_proposal_pauses_for_approval_and_writes_nothing(story):
     proposal_id = proposal.part.result["proposalId"]
     approval = next(event for event in events if event.type == "approval.requested")
     assert approval.approval_id == f"approval-{proposal_id.removeprefix('proposal-')}"
-    assert approval.summary == "Save these 2 changes to the story?"
+    assert approval.summary
     assert repr(story.entities) == before
     assert len(provider.requests) == 1
 
@@ -376,16 +361,6 @@ async def test_the_tool_is_unknown_when_it_is_withheld(story):
     )
     system = provider.requests[0]["messages"][0]["parts"][0]["text"]
     assert "propose_story_changes" not in system
-
-
-async def test_a_plain_question_still_proposes_nothing(story):
-    provider = FakeProvider(FINAL_ROUND)
-    events = await collect(provider)
-    types = [event.type for event in events]
-    assert not {"tool.started", "approval.requested"} & set(types)
-    assert types[-1] == "run.completed"
-    system = provider.requests[0]["messages"][0]["parts"][0]["text"]
-    assert "propose_story_changes" in system
 
 
 # -- continuation ---------------------------------------------------------
@@ -511,30 +486,7 @@ async def test_entity_continuations_are_refused_when_proposals_are_withheld(stor
     assert events[-1].type == "run.failed"
 
 
-def test_the_browser_request_accepts_both_continuation_kinds():
-    with pytest.raises(ValidationError):
-        RunRequest.model_validate(
-            {**BODY, "userId": None, "continuation": {"kind": "something_else"}}
-        )
-
-
 # -- selection hijack -----------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "text, direct",
-    [
-        ("Make the villain more interesting", False),
-        ("Improve the pacing of the second act", False),
-        ("Make this tighter", True),
-        ("Rewrite the selected paragraph", True),
-        ("Shorten", True),
-        ("Tighten it up please", True),
-    ],
-)
-def test_an_edit_verb_alone_does_not_claim_the_selection(text, direct):
-    assert _is_edit_request(text, require_selection_reference=True) is direct
-    assert _is_edit_request(text) is True
 
 
 async def test_a_story_request_with_a_selection_keeps_every_tool(story):

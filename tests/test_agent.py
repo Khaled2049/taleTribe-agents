@@ -11,12 +11,6 @@ os.environ["GOOGLE_CLOUD_PROJECT"] = "test-project"
 from agents.storyAgent.agent import StoryAgent
 
 
-class TestStoryAgentInitialization:
-    def test_agent_initializes_with_mock_provider(self):
-        agent = StoryAgent(project_id="test-project")
-        assert agent.project_id == "test-project"
-
-
 @pytest.mark.asyncio
 class TestActionDispatch:
     async def test_execute_agent_accepts_snake_case(self):

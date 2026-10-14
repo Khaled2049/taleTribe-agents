@@ -37,6 +37,12 @@ and pgvector context.
 
 ## Verification
 
+Tests should protect observable behavior, real regressions, or meaningful safety
+and cost boundaries. Prefer a representative flow over repeated helper-layer
+checks. Avoid pinning private structures, prompt wording, numeric defaults, or
+framework validation already exercised by an existing test; extend that test
+when it covers the same behavior. See `docs/test-suite-review.md` for the audit.
+
 Run focused tests and `pytest`, then check `GET /health`. For changes to the
 PostgreSQL pipeline, verify one outbox event is embedded and persisted without
 errors.

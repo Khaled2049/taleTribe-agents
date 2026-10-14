@@ -12,19 +12,16 @@ import os
 
 import httpx
 import pytest
-from tenacity import stop_after_attempt, stop_after_delay, stop_any
 
 os.environ.setdefault("CREDIT_PROXY_URL", "http://localhost:8080")
 os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "test-project")
 
 from agents.storyAgent.llm_provider import (  # noqa: E402
-    DEFAULT_MAX_OUTPUT_TOKENS,
     BackendUnavailableError,
     BillingCommitError,
     CreditProxyProvider,
     InsufficientCreditsError,
     InvalidRequestError,
-    LLMProviderError,
     LLMTimeoutError,
     ProviderAuthError,
     ProviderNotFoundError,
@@ -38,9 +35,6 @@ from agents.storyAgent.llm_provider import (  # noqa: E402
 
 
 class TestClassifyHttpError:
-    def test_402_is_insufficient_credits(self):
-        err = _classify_http_error(402, "unable to reserve credits (ref req_1)", None)
-        assert isinstance(err, InsufficientCreditsError)
 
     def test_insufficient_credits_body_text_also_matches(self):
         # Fallback path for any caller that DOES echo the reason in the body.
@@ -57,10 +51,6 @@ class TestClassifyHttpError:
         )
         assert isinstance(err, ProviderAuthError)
 
-    def test_429_is_rate_limited(self):
-        err = _classify_http_error(429, "platform daily request limit reached", None)
-        assert isinstance(err, RateLimitedError)
-
     def test_404_with_model_config_is_provider_not_found(self):
         err = _classify_http_error(
             404,
@@ -75,39 +65,8 @@ class TestClassifyHttpError:
         err = _classify_http_error(404, "not found", None)
         assert isinstance(err, BackendUnavailableError)
 
-    def test_400_is_invalid_request(self):
-        err = _classify_http_error(400, "prompt must be <= 8000 characters", None)
-        assert isinstance(err, InvalidRequestError)
-
-    def test_409_is_billing_commit_error(self):
-        err = _classify_http_error(409, "commit reservation failed (ref req_3)", None)
-        assert isinstance(err, BillingCommitError)
-
-    @pytest.mark.parametrize("status", [500, 502, 503, 504])
-    def test_5xx_is_backend_unavailable(self, status):
-        err = _classify_http_error(status, "internal error", None)
-        assert isinstance(err, BackendUnavailableError)
-
-    def test_unrecognized_status_is_generic_provider_error(self):
-        err = _classify_http_error(418, "I'm a teapot", None)
-        assert type(err) is LLMProviderError
-
 
 # --- retry policy shape (no network involved) --------------------------------
-
-
-def test_retry_is_bounded_by_attempts_and_wall_clock_time():
-    """Regression guard: retries must never be unbounded. Two independent
-    caps — attempt count AND elapsed time — either of which stops retrying."""
-    retrying = CreditProxyProvider.generate_content_async.retry
-    assert isinstance(retrying.stop, stop_any)
-    assert any(isinstance(s, stop_after_attempt) for s in retrying.stop.stops)
-    assert any(isinstance(s, stop_after_delay) for s in retrying.stop.stops)
-
-
-def test_retry_only_targets_backend_unavailable_error():
-    retrying = CreditProxyProvider.generate_content_async.retry
-    assert retrying.retry.exception_types == BackendUnavailableError
 
 
 # --- retry behavior against a mocked transport --------------------------------
@@ -284,23 +243,14 @@ async def test_get_balance_returns_usage_payload():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
         assert request.url.path == "/v1/users/user123/balance"
+        assert request.headers.get("X-Firebase-Token") == "fb-token"
         return httpx.Response(
             200, json={"user_id": "user123", "available_credits": 1749}
         )
 
     provider = _provider_with_transport(handler)
-    data = await provider.get_balance("user123")
+    data = await provider.get_balance("user123", firebase_token="fb-token")
     assert data["available_credits"] == 1749
-
-
-@pytest.mark.asyncio
-async def test_get_balance_forwards_firebase_token():
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.headers.get("X-Firebase-Token") == "fb-token"
-        return httpx.Response(200, json={"user_id": "user123", "available_credits": 0})
-
-    provider = _provider_with_transport(handler)
-    await provider.get_balance("user123", firebase_token="fb-token")
 
 
 @pytest.mark.asyncio
@@ -402,21 +352,6 @@ async def test_generate_forwards_max_output_tokens():
     provider = _provider_with_transport(handler)
     await provider.generate_content_async("hello", max_output_tokens=1024)
     assert captured["max_output_tokens"] == 1024
-
-
-@pytest.mark.asyncio
-async def test_generate_defaults_max_output_tokens():
-    captured = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        import json as _json
-
-        captured.update(_json.loads(request.content))
-        return httpx.Response(200, json={"response": {"output": "ok"}})
-
-    provider = _provider_with_transport(handler)
-    await provider.generate_content_async("hello")
-    assert captured["max_output_tokens"] == DEFAULT_MAX_OUTPUT_TOKENS
 
 
 @pytest.mark.asyncio

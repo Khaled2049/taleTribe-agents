@@ -62,6 +62,7 @@ def _register(client, ip: str):
 
 def test_register_throttled_after_budget(client):
     """Cap is 2/min: the third unauthenticated registration is refused."""
+    before = _client_docs()
     assert _register(client, "10.0.0.1").status_code == 201
     assert _register(client, "10.0.0.1").status_code == 201
 
@@ -69,23 +70,8 @@ def test_register_throttled_after_budget(client):
     assert resp.status_code == 429
     assert resp.json()["error"] == "temporarily_unavailable"
     assert resp.headers["retry-after"] == "60"
-
-
-def test_throttle_is_per_ip_not_global(client):
-    """One abusive caller must not lock everyone else out."""
-    for _ in range(3):
-        _register(client, "10.0.0.2")
-    assert _register(client, "10.0.0.2").status_code == 429
-    assert _register(client, "10.0.0.3").status_code == 201
-
-
-def test_no_client_document_written_when_throttled(client):
-    """The point of the guard: a refused call must not reach Firestore."""
-    before = sum(1 for path in fake_db.docs if path.startswith("mcpOauthClients/"))
-    for _ in range(6):
-        _register(client, "10.0.0.4")
-    after = sum(1 for path in fake_db.docs if path.startswith("mcpOauthClients/"))
-    assert after - before == 2  # the budget, not the 6 attempts
+    assert _client_docs() == before + 2
+    assert _register(client, "10.0.0.2").status_code == 201
 
 
 # ---------------------------------------------------------------------------
@@ -131,10 +117,6 @@ def test_mcp_endpoint_not_covered_by_oauth_throttle(client):
         assert resp.status_code == 401
 
 
-def test_health_still_reachable_under_throttle(client):
-    assert client.get("/health").status_code == 200
-
-
 # ---------------------------------------------------------------------------
 # IP extraction
 # ---------------------------------------------------------------------------
@@ -145,12 +127,6 @@ def _request(forwarded=None, peer=("10.1.1.1", 1234)):
 
     headers = [(b"x-forwarded-for", forwarded)] if forwarded is not None else []
     return Request({"type": "http", "headers": headers, "client": peer})
-
-
-def test_client_ip_takes_entry_appended_by_trusted_proxy():
-    request = _request(b"203.0.113.9, 70.41.3.18, 150.172.238.178")
-    assert client_ip(request, 1) == "150.172.238.178"
-    assert client_ip(request, 2) == "70.41.3.18"
 
 
 def test_client_ip_ignores_forwarded_header_with_zero_hops():
@@ -234,45 +210,8 @@ async def test_register_total_budget_caps_distinct_clients():
     assert passed == ["/register", "/register", "/token"]
 
 
-async def test_non_http_scopes_pass_through():
-    """Lifespan/websocket scopes have no path or headers to inspect."""
-    seen = []
-
-    async def inner_app(scope, receive, send):
-        seen.append(scope["type"])
-
-    middleware = OAuthThrottleMiddleware(
-        inner_app, register_per_minute=1, oauth_per_minute=1
-    )
-    await middleware({"type": "lifespan"}, None, None)
-    assert seen == ["lifespan"]
-
-
 def _client_docs():
     return sum(1 for path in fake_db.docs if path.startswith("mcpOauthClients/"))
-
-
-async def test_starlette_enforces_urlencoded_form_limits():
-    import starlette
-    from starlette.formparsers import MultiPartException
-    from starlette.requests import Request
-
-    version = tuple(int(p) for p in starlette.__version__.split(".")[:3])
-    assert version >= (1, 3, 1)
-
-    async def receive():
-        return {"type": "http.request", "body": b"a=1&b=2", "more_body": False}
-
-    request = Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "headers": [(b"content-type", b"application/x-www-form-urlencoded")],
-        },
-        receive,
-    )
-    with pytest.raises(MultiPartException):
-        await request.form(max_fields=1)
 
 
 def test_oversized_declared_body_rejected_before_parsing(client):

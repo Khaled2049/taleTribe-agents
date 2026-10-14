@@ -32,36 +32,24 @@ def _htmls(content: str) -> list[str]:
 
 FIXTURES = [
     "",
-    "   \n  ",
-    "<p>one</p>",
-    "<p>one</p><p>two</p>",
-    "<p>one</p>\n<p>two</p>",
-    "<h1>Title</h1>\n<h2>Sub</h2>\n<h3>Deep</h3>\n<p>body</p>",
-    '<ul class="list-disc"><li><p>a</p></li><li><p>b</p></li></ul>',
-    '<ol class="list-decimal"><li>one</li><li>two</li></ol>',
+    "<h1>Title</h1><h2>Sub</h2><h3>Deep</h3><p>line<br>two</p>"
+    '<ul class="list-disc"><li><p>a</p></li><li><p>b</p></li></ul>'
+    '<ol class="list-decimal"><li>one</li><li>two</li></ol>'
     '<ul data-type="taskList"><li data-type="taskItem" data-checked="false">'
     '<label><input type="checkbox"><span></span></label><div><p>todo</p></div>'
-    "</li></ul>",
-    "<blockquote><p>quoted</p><p>still quoted</p></blockquote><p>after</p>",
-    '<pre><code class="language-python">if a &lt; b:\n    pass</code></pre>',
-    "<p>before</p><hr><p>after</p>",
-    '<p>a</p><img src="x.png" data-display-mode="wrap" data-align="left"><p>b</p>',
-    '<p>a</p><img src="x.png" alt="a>b" /><p>c</p>',
-    "<p>line one<br>line two</p>",
-    "bare text",
-    "bare text<p>then a block</p>",
-    "<p>block</p>\n  trailing bare text",
-    "<p>unclosed",
-    "</p><p>real</p>",
-    "<p>a &amp; b</p>",
-    "a &amp; b",
-    "<p>x</p><!-- a comment --><p>y</p>",
+    "</li></ul><blockquote><p>quoted</p><p>still quoted</p></blockquote>"
+    '<pre><code class="language-python">if a &lt; b:\n    pass</code></pre><hr>'
+    '<img src="x.png" data-display-mode="wrap" data-align="left">'
     '<p style="text-align: center"><span style="color: #f00">red</span></p>',
+    "bare &amp; text<p>a &amp; b</p>\n<!-- a comment -->trailing words",
+    "<p>closed</p><p>unclosed",
+    "</div></div><p>a</p><p>b</p>",
+    '<p>a</p><img src="x.png" alt="a>b" /><p>c</p>\n  trailing bare text',
 ]
 
 
 @pytest.mark.parametrize("content", FIXTURES)
-def test_blocks_are_contiguous_in_order_slices(content):
+def test_editable_blocks_preserve_source_and_survive_repeated_edits(content):
     """The load-bearing property: nothing is reserialised, nothing is lost.
 
     Each block must be findable in the source at a position after the previous
@@ -80,18 +68,7 @@ def test_blocks_are_contiguous_in_order_slices(content):
     assert not content[
         cursor:
     ].strip(), f"trailing content dropped: {content[cursor:]!r}"
-
-
-@pytest.mark.parametrize("content", FIXTURES)
-def test_split_is_stable_under_rejoin(content):
-    """Re-splitting rebuilt content yields the same blocks.
-
-    join_blocks normalises separators, so a second edit of an already-edited
-    chapter must not re-partition it differently.
-    """
-    once = split_blocks(content)
-    twice = split_blocks(join_blocks([block.html for block in once]))
-    assert once == twice
+    assert split_blocks(join_blocks([block.html for block in blocks])) == blocks
 
 
 # ---------------------------------------------------------------------------

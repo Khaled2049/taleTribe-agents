@@ -26,21 +26,6 @@ async def fetch(limits=None, thread_id="thread-1", uid="uid-1"):
     )
 
 
-async def test_completed_exchanges_are_replayed_in_order(threaded):
-    threaded.seed_message("thread-1", "user", "Who is Mina?")
-    threaded.seed_message("thread-1", "assistant", "The lighthouse keeper.")
-
-    turns = await fetch()
-
-    assert turns == [
-        {"role": "user", "parts": [{"type": "text", "text": "Who is Mina?"}]},
-        {
-            "role": "assistant",
-            "parts": [{"type": "text", "text": "The lighthouse keeper."}],
-        },
-    ]
-
-
 async def test_trailing_user_message_is_dropped(threaded):
     threaded.seed_message("thread-1", "user", "Who is Mina?")
     threaded.seed_message("thread-1", "assistant", "The lighthouse keeper.")
@@ -90,13 +75,6 @@ async def test_character_budget_keeps_the_newest_turns(threaded):
     ]
 
 
-async def test_no_thread_id_means_no_history(threaded):
-    threaded.seed_message("thread-1", "user", "Who is Mina?")
-    threaded.seed_message("thread-1", "assistant", "The lighthouse keeper.")
-
-    assert await fetch(thread_id=None) == []
-
-
 async def test_history_can_be_disabled(threaded):
     threaded.seed_message("thread-1", "user", "Who is Mina?")
     threaded.seed_message("thread-1", "assistant", "The lighthouse keeper.")
@@ -117,11 +95,5 @@ async def test_a_broken_story_data_does_not_fail_the_run(threaded):
             raise story_data.StoryDataError("down")
 
     story_data.configure(Broken())
-
-    assert await fetch() == []
-
-
-async def test_an_unconfigured_client_does_not_fail_the_run(threaded):
-    story_data.configure(None)
 
     assert await fetch() == []
