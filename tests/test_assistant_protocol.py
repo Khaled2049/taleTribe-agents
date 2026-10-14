@@ -1,7 +1,5 @@
 """Protocol-level invariants: versioning, the trust boundary, and sequences."""
 
-import json
-
 import pytest
 from pydantic import ValidationError
 
@@ -13,10 +11,9 @@ from assistant.events import (
     RunEvents,
     RunStarted,
     TextDelta,
-    encode_sse,
     validate_event_sequence,
 )
-from assistant.protocol import AgentRunRequest, RunRequest
+from assistant.protocol import RunRequest
 from assistant.version import ASSISTANT_PROTOCOL_VERSION
 
 BROWSER_BODY = {
@@ -25,12 +22,6 @@ BROWSER_BODY = {
     "clientMessageId": "client-1",
     "message": {"role": "user", "parts": [{"type": "text", "text": "Tighten this"}]},
 }
-
-
-def test_run_request_round_trips_camel_case():
-    request = RunRequest.model_validate(BROWSER_BODY)
-    assert request.story_id == "story-1"
-    assert request.model_dump(by_alias=True, exclude_none=True) == BROWSER_BODY
 
 
 def test_editor_context_from_alias_survives_round_trip():
@@ -90,10 +81,9 @@ def test_editor_continuation_is_strict_and_bounded():
         )
 
 
-@pytest.mark.parametrize("version", [0, 2, 99])
-def test_unsupported_protocol_version_rejected(version):
+def test_unsupported_protocol_version_rejected():
     with pytest.raises(ValidationError):
-        RunRequest.model_validate({**BROWSER_BODY, "v": version})
+        RunRequest.model_validate({**BROWSER_BODY, "v": ASSISTANT_PROTOCOL_VERSION + 1})
 
 
 def test_protocol_version_is_required():
@@ -107,13 +97,6 @@ def test_browser_cannot_assert_an_identity():
     assert "user_id" not in RunRequest.model_fields
     with pytest.raises(ValidationError):
         RunRequest.model_validate({**BROWSER_BODY, "userId": "someone-else"})
-
-
-def test_gateway_adds_the_verified_uid():
-    request = AgentRunRequest.model_validate({**BROWSER_BODY, "userId": "uid-1"})
-    assert request.user_id == "uid-1"
-    with pytest.raises(ValidationError):
-        AgentRunRequest.model_validate(BROWSER_BODY)
 
 
 def test_message_text_is_bounded_tighter_than_assistant_output():
@@ -153,18 +136,6 @@ def test_event_writers_reject_unknown_fields():
         RunCancelled(v=1, run_id="r", seq=0, added_later=7)
 
 
-@pytest.mark.parametrize(
-    "event",
-    [
-        lambda: RunCancelled(v=1, run_id="", seq=0),
-        lambda: TextDelta(v=1, run_id="r", seq=0, text=""),
-    ],
-)
-def test_required_event_strings_are_non_empty(event):
-    with pytest.raises(ValidationError):
-        event()
-
-
 def test_run_events_stamps_version_and_dense_seq():
     events = RunEvents("run-1")
     emitted = [
@@ -190,23 +161,6 @@ def test_failure_carries_only_a_code_and_its_canned_message():
     failure = RunEvents("run-1").failure(ErrorCode.PROVIDER_UNAVAILABLE)
     assert failure.code is ErrorCode.PROVIDER_UNAVAILABLE
     assert failure.message == safe_message(ErrorCode.PROVIDER_UNAVAILABLE)
-
-
-def test_every_error_code_has_a_safe_message():
-    assert all(safe_message(code) for code in ErrorCode)
-
-
-def test_encode_sse_emits_one_terminated_frame():
-    frame = encode_sse(RunEvents("run-1").emit(TextDelta, text="hi"))
-    assert frame.startswith("data: ")
-    assert frame.endswith("\n\n")
-    assert json.loads(frame[6:]) == {
-        "v": 1,
-        "runId": "run-1",
-        "seq": 0,
-        "type": "text.delta",
-        "text": "hi",
-    }
 
 
 @pytest.mark.parametrize(

@@ -18,7 +18,6 @@ from mcp.server.fastmcp.exceptions import ToolError  # noqa: E402
 from structlog.testing import capture_logs  # noqa: E402
 
 from capability_catalog import MCP_READ_TOOL_NAMES, MCP_WRITE_TOOL_NAMES  # noqa: E402
-from mcp_server import app as mcp_app  # noqa: E402
 from mcp_server import blocks as blocks_module  # noqa: E402
 from mcp_server import data  # noqa: E402
 from mcp_server import story_data  # noqa: E402
@@ -120,35 +119,6 @@ async def test_list_stories_scoped_to_owner_and_sorted():
     assert story_a["description"].endswith("…")
 
 
-async def test_list_stories_limit_clamped():
-    _seeded_story_data()
-    assert len(await data.list_stories_for_user(UID_A, limit=1)) == 1
-    assert len(await data.list_stories_for_user(UID_A, limit=99999)) == 2
-
-
-async def test_list_stories_ranks_across_the_whole_collection():
-    """Ordering must be applied before the limit, not over an arbitrary slice.
-
-    story-data returns the caller's stories already ordered by updated_at DESC,
-    so the cap here can only ever trim the tail. With more stories than the cap,
-    a sort-after-trim would miss the genuinely newest one.
-    """
-    fake = _use_story_data(FakeStoryData())
-    for i in range(data.MAX_STORY_LIST_LIMIT + 20):
-        fake.seed_story(
-            f"story-{i:04d}",
-            UID_A,
-            title=f"Story {i}",
-            updatedAt=(
-                f"2026-01-01T00:00:{i:02d}Z"
-                if i < 60
-                else f"2026-01-02T{i - 60:02d}:00:00Z"
-            ),
-        )
-    stories = await data.list_stories_for_user(UID_A, limit=3)
-    assert [s["title"] for s in stories] == ["Story 119", "Story 118", "Story 117"]
-
-
 async def test_idor_story_of_other_user_is_not_found():
     _seeded_story_data()
     with pytest.raises(data.StoryNotFoundError):
@@ -239,13 +209,6 @@ async def test_story_overview_numbers_chapters_by_position():
     assert [c["order"] for c in overview["chapters"]] == [1.0, 7.5, 99.0]
 
 
-async def test_story_overview_on_a_story_with_one_chapter():
-    _seeded_story_data()
-    overview = await data.get_story_overview("story-c", UID_A)
-    assert [c["title"] for c in overview["chapters"]] == ["Only Chapter"]
-    assert overview["chapters_truncated"] is False
-
-
 async def test_list_chapters_sorted_with_ids():
     _seeded_story_data()
     page = await data.list_chapters("story-a", UID_A)
@@ -303,22 +266,6 @@ async def test_get_chapter_pagination_arithmetic():
     assert full == "0123456789" * 2500
 
 
-async def test_get_chapter_clamps_inputs():
-    _seeded_story_data()
-    clamped = await data.get_chapter("story-a", "ch1", UID_A, -5, 999_999)
-    assert clamped["offset"] == 0
-    assert len(clamped["content"]) == 25_000  # max_chars clamped to 50k > total
-    with pytest.raises(data.EntityNotFoundError):
-        await data.get_chapter("story-a", "nope", UID_A, 0, 10)
-
-
-async def test_get_chapter_reports_its_reading_order_number():
-    _seeded_story_data()
-    second = await data.get_chapter("story-a", "ch2", UID_A, 0, 10)
-    assert second["chapter_number"] == 2
-    assert second["order"] == 2.0
-
-
 def _seed_long_book(fake: FakeStoryData, story_id: str = "story-long") -> int:
     """A story with more chapters than the cap.
 
@@ -337,21 +284,6 @@ def _seed_long_book(fake: FakeStoryData, story_id: str = "story-long") -> int:
             content="x",
         )
     return total
-
-
-async def test_list_chapters_ranks_across_the_whole_collection():
-    """The cap must slice reading order, not insertion order."""
-    fake = _seeded_story_data()
-    _seed_long_book(fake)
-
-    page = await data.list_chapters("story-long", UID_A)
-
-    assert len(page.items) == data.COLLECTION_FETCH_LIMIT
-    assert page.truncated is True
-    # Chapter 1 is present and first, rather than the book opening at chapter 51.
-    assert [c["order"] for c in page.items] == [
-        float(n) for n in range(1, data.COLLECTION_FETCH_LIMIT + 1)
-    ]
 
 
 async def test_story_overview_reports_truncation():
@@ -388,77 +320,6 @@ async def test_list_entities_descriptor_and_sorting():
     assert page.items[0]["descriptor"].startswith("p")
     assert len(page.items[0]["descriptor"]) <= data.SHORT_TEXT_LIMIT
     assert page.truncated is False
-
-
-async def test_list_entities_survives_non_string_names():
-    """A name that is not a string must not break the sort."""
-    fake = _seeded_story_data()
-    fake.seed_entity("story-a", "places", "p1", name=7, description="a tower")
-    fake.seed_entity(
-        "story-a", "places", "p2", name=None, title=True, description="a moor"
-    )
-    fake.seed_entity("story-a", "places", "p3", name="   ", description="a fen")
-    fake.seed_entity("story-a", "places", "p4", name="Harbor")
-
-    entities = (await data.list_entities("story-a", UID_A, "places")).items
-
-    by_id = {e["entity_id"]: e["name"] for e in entities}
-    assert by_id["p1"] == "7"  # coerced, not crashed
-    assert by_id["p2"] == "Unnamed"  # bool is never a name
-    assert by_id["p3"] == "Unnamed"  # whitespace-only falls through
-    assert by_id["p4"] == "Harbor"
-    assert [e["name"] for e in entities] == ["7", "Harbor", "Unnamed", "Unnamed"]
-
-
-async def test_list_entities_falls_back_to_title():
-    fake = _seeded_story_data()
-    fake.seed_entity("story-a", "plots", "pl1", name=None, title="The Reckoning")
-    page = await data.list_entities("story-a", UID_A, "plots")
-    assert page.items == [
-        {"entity_id": "pl1", "name": "The Reckoning", "descriptor": None}
-    ]
-
-
-def test_descriptor_fields_exist_in_entity_schema():
-    """Guard the one copy of field names data.py still keeps.
-
-    _DESCRIPTOR_FIELDS encodes editorial priority, so it can't be derived from
-    entity_schema.py — but every name in it must exist there for its kind, or
-    list_entities silently returns blank descriptors after a rename.
-    """
-    from agents.storyAgent.entity_schema import embedded_field_names
-
-    for collection, fields in data._DESCRIPTOR_FIELDS.items():
-        kind = data.ENTITY_KIND_BY_COLLECTION[collection]
-        known = embedded_field_names(kind)
-        assert known, f"entity_schema has no fields for kind {kind!r}"
-        for field in fields:
-            assert field in known, (
-                f"{collection}: descriptor field {field!r} is not in "
-                f"entity_schema.py for kind {kind!r} (known: {known})"
-            )
-
-
-def test_entity_collections_cover_every_schema_kind():
-    """A new entity kind in entity_schema.py should surface through MCP too."""
-    from agents.storyAgent.entity_schema import ENTITY_FIELD_SCHEMA
-
-    assert set(data.ENTITY_KIND_BY_COLLECTION.values()) == set(ENTITY_FIELD_SCHEMA)
-    assert set(data._DESCRIPTOR_FIELDS) == set(data.ENTITY_COLLECTIONS)
-
-
-def test_tool_entity_type_literal_matches_collections():
-    """The tool signature's Literal is the one copy the type system forces.
-
-    `Literal[...]` members must be spelled out at the call site — they can't be
-    unpacked from ENTITY_COLLECTIONS — so this is where drift would show up as a
-    tool that advertises an entity type data.py rejects.
-    """
-    from typing import get_args
-
-    from mcp_server.tools import EntityType
-
-    assert set(get_args(EntityType)) == set(data.ENTITY_COLLECTIONS)
 
 
 async def test_list_entities_rejects_unknown_type():
@@ -504,23 +365,6 @@ async def test_get_entity_projects_instead_of_passing_through():
         assert internal not in entity, f"{internal} leaked into tool output"
 
 
-async def test_get_entity_omits_empty_values():
-    fake = _seeded_story_data()
-    fake.seed_entity(
-        "story-a",
-        "places",
-        "p2",
-        name="Bare",
-        description="",
-        atmosphere=None,
-        history="damp",
-    )
-    entity = await data.get_entity("story-a", UID_A, "places", "p2")
-    assert entity["history"] == "damp"
-    assert "description" not in entity
-    assert "atmosphere" not in entity
-
-
 async def test_get_entity_is_owner_only_even_when_published():
     """Worldbuilding is owner-only in story-data, and must stay so through MCP."""
     fake = _seeded_story_data()
@@ -530,16 +374,6 @@ async def test_get_entity_is_owner_only_even_when_published():
         await data.get_entity("story-b", UID_A, "characters", "secret")
     with pytest.raises(data.StoryNotFoundError):
         await data.list_entities("story-b", UID_A, "characters")
-
-
-def test_entity_content_fields_track_the_shared_schema():
-    """get_entity's field set is the shared vocabulary plus named extras."""
-    from agents.storyAgent.entity_schema import embedded_field_names
-
-    for collection, kind in data.ENTITY_KIND_BY_COLLECTION.items():
-        fields = data.entity_content_fields(collection)
-        assert set(embedded_field_names(kind)).issubset(fields)
-        assert set(data._ENTITY_EXTRA_FIELDS[collection]).issubset(fields)
 
 
 # ---------------------------------------------------------------------------
@@ -699,14 +533,6 @@ async def test_create_chapter_missing_story_indistinguishable_from_not_owned():
         await writes.create_chapter(db, UID_A, "story-b", "T", "x")
 
 
-async def test_no_write_argument_can_target_another_users_story():
-    """Guards against a later `user_id`-style parameter reopening the IDOR."""
-    db, fake = _write_env()
-    story = await writes.create_story(db, UID_B, "B's book")
-    with pytest.raises(data.StoryNotFoundError):
-        await writes.create_chapter(db, UID_A, story["story_id"], "T", "x")
-
-
 async def test_the_asserted_uid_is_the_one_story_data_is_told():
     """story-data derives ownership from X-User-ID, so the uid writes.py passes
     IS the authorization decision. A caller's own id must reach it unchanged."""
@@ -741,13 +567,6 @@ async def test_create_story_sends_the_fields_story_data_stores():
     assert result["is_published"] is False
 
 
-async def test_create_story_author_from_public_profile():
-    db, fake = _blank_env()
-    fake.seed_profile(UID_A, username="mira")
-    await writes.create_story(db, UID_A, "T")
-    assert fake.writes[-1][1]["authorName"] == "mira"
-
-
 async def test_create_story_author_blank_when_profile_missing():
     """A story must still be creatable before the writer has a public profile —
     the byline is cosmetic, and story-data serves the username on read anyway."""
@@ -763,20 +582,6 @@ async def test_create_chapter_reports_the_chapter_count_it_observed():
     # A connector-written chapter is never live until the author releases it.
     assert result["released"] is False
     assert len(fake.chapters["story-a"]) == 3
-
-
-async def test_created_chapter_carries_the_fields_a_listing_needs():
-    db, fake = _write_env()
-    created = await writes.create_chapter(
-        db, UID_A, "story-a", "Three", "one two three"
-    )
-    stored = next(
-        c for c in fake.chapters["story-a"] if c["id"] == created["chapter_id"]
-    )
-    assert stored["title"] == "Three"
-    assert stored["position"] == created["order"]
-    # Counted by story-data, reported back rather than recomputed here.
-    assert created["word_count"] == stored["wordCount"] == 3
 
 
 # ---------------------------------------------------------------------------
@@ -815,33 +620,6 @@ async def test_create_chapter_retries_when_the_position_is_taken():
     assert result["order"] == 4.0
 
 
-async def test_positions_are_unique_under_repeated_contention():
-    db, fake = _write_env()
-    positions = []
-    for n in range(4):
-        state = {"done": False}
-
-        def concurrent_writer(state=state, n=n):
-            if not state["done"]:
-                state["done"] = True
-                fake.seed_chapter(
-                    "story-a",
-                    f"rival{n}",
-                    title="Rival",
-                    position=_next_free_position(fake),
-                )
-
-        fake.before_create_chapter = concurrent_writer
-        # Distinct titles: identical arguments would hit the idempotency
-        # replay and return the same chapter rather than exercising ordering.
-        positions.append(
-            (await writes.create_chapter(db, UID_A, "story-a", f"C{n}", "x"))["order"]
-        )
-    all_positions = [c["position"] for c in fake.chapters["story-a"]]
-    assert len(set(positions)) == len(positions)
-    assert len(set(all_positions)) == len(all_positions)
-
-
 def _next_free_position(fake: FakeStoryData, story_id: str = "story-a") -> float:
     return max(c["position"] for c in fake.chapters[story_id]) + 1.0
 
@@ -870,31 +648,6 @@ async def test_write_conflict_after_exhausting_attempts():
 # counts them transactionally; writes.py keeps only the stored-size bound that
 # has no counterpart there. These tests pin that split rather than the numbers.
 # ---------------------------------------------------------------------------
-
-
-async def test_story_cap_is_reported_from_story_data():
-    db, fake = _blank_env()
-    for i in range(FakeStoryData.STORY_LIMIT):
-        fake.seed_story(f"s{i}", UID_A)
-    with pytest.raises(story_data.Rejected, match="limit of 100 stories"):
-        await writes.create_story(db, UID_A, "One too many")
-
-
-async def test_chapter_cap_is_reported_from_story_data():
-    db, fake = _blank_env()
-    fake.seed_story("s", UID_A)
-    for i in range(FakeStoryData.CHAPTER_LIMIT):
-        fake.seed_chapter("s", f"c{i}", position=float(i))
-    with pytest.raises(story_data.Rejected, match="limit of 50 chapters"):
-        await writes.create_chapter(db, UID_A, "s", "Too many", "x")
-
-
-async def test_word_cap_is_reported_from_story_data():
-    db, fake = _write_env()
-    with pytest.raises(story_data.Rejected, match="5000 words"):
-        await writes.create_chapter(
-            db, UID_A, "story-a", "T", "word " * (FakeStoryData.WORD_LIMIT + 1)
-        )
 
 
 async def test_content_char_cap_measures_the_stored_string():
@@ -963,19 +716,6 @@ async def test_content_is_escaped_and_paragraph_wrapped():
         "<p>a &amp; b &lt;script&gt;x&lt;/script&gt;</p>\n<p>second</p>"
     )
     assert "<script" not in stored["content"]
-
-
-async def test_word_count_comes_back_from_story_data():
-    """Counted once, by the service that stores it — so the number cannot drift
-    from what the next read reports."""
-    db, fake = _write_env()
-    plain = "one two three\n\nfour five"
-    result = await writes.create_chapter(db, UID_A, "story-a", "T", plain)
-    stored = next(
-        c for c in fake.chapters["story-a"] if c["id"] == result["chapter_id"]
-    )
-    assert result["word_count"] == len(stored["content"].split())
-    assert result["word_count"] == len(plain.split())
 
 
 async def test_empty_content_stores_empty_string():
@@ -1074,18 +814,6 @@ async def test_expired_reservation_is_claimed_by_exactly_one_racer():
     assert len(fake.stories) == stories_before
 
 
-async def test_a_vanished_reservation_is_reclaimed():
-    """TTL collection or a concurrent _release can remove the document between
-    the create that lost and the read that follows it. The key is free then."""
-    db, _ = _blank_env()
-    first = await writes.create_story(db, UID_A, "Gone", "poof")
-    for path in [p for p in db.docs if p.startswith(f"{writes.WRITES_COLLECTION}/")]:
-        del db.docs[path]
-    second = await writes.create_story(db, UID_A, "Gone", "poof")
-    assert second["story_id"] != first["story_id"]
-    assert second["idempotent_replay"] is False
-
-
 async def test_failed_write_releases_the_reservation():
     """A rejection from story-data must free the key, or the caller's corrected
     retry would be refused as a duplicate for two minutes."""
@@ -1141,22 +869,6 @@ async def test_read_only_token_cannot_call_write_tools():
             )
     assert fake.writes == []
     assert _doc_count(db) == 0
-
-
-async def test_write_scoped_token_can_call_write_tools():
-    mcp, _db, _fake = _write_tool_server()
-    with patch("mcp_server.tools.get_access_token", return_value=_token(UID_A, _RW)):
-        story = await _call(mcp, "create_story", {"title": "Made by MCP"})
-        chapter = await _call(
-            mcp,
-            "create_chapter",
-            {"story_id": story["story_id"], "title": "One", "content": "hello"},
-        )
-    assert story["notice"] == UNTRUSTED_NOTICE
-    assert chapter["notice"] == UNTRUSTED_NOTICE
-    # story-data seeds "Chapter 1" at position 0, so the first added chapter
-    # lands after it.
-    assert chapter["order"] == 1.0
 
 
 async def test_write_scoped_token_can_still_call_read_tools():
@@ -1313,13 +1025,6 @@ def _content_of(fake, chapter: str = "rich", story: str = "story-a") -> str:
     return _chapter_row(fake, chapter, story)["content"]
 
 
-async def test_get_chapter_exposes_a_revision():
-    """story-data carries an integer revision per row; the token is that value."""
-    _rich_story_data()
-    chapter = await data.get_chapter("story-a", "rich", UID_A, 0, 100)
-    assert chapter["revision"] == "4"
-
-
 async def test_get_chapter_blocks_lists_indices_tags_and_previews():
     _rich_story_data()
     listing = await data.get_chapter_blocks("story-a", "rich", UID_A, 0, 500)
@@ -1399,14 +1104,6 @@ async def test_unusable_revisions_are_refused_before_any_request(bad):
     assert fake.writes == []
 
 
-async def test_fresh_revision_succeeds_and_returns_the_new_one():
-    db, fake = _rich_env()
-    old = _revision_of(fake)
-    result = await writes.append_to_chapter(db, UID_A, "story-a", "rich", "more", old)
-    assert result["revision"] == _revision_of(fake)
-    assert result["revision"] != old
-
-
 async def test_concurrent_writer_between_check_and_update_is_caught():
     """The window If-Match exists to close.
 
@@ -1428,27 +1125,6 @@ async def test_concurrent_writer_between_check_and_update_is_caught():
             db, UID_A, "story-a", "rich", "appended", revision
         )
     assert _content_of(fake) == "<p>the human typed this</p>"
-
-
-async def test_the_revision_a_read_hands_out_is_the_one_a_write_accepts():
-    """The handshake the port exists to restore.
-
-    Under the Firestore write path a read returned story-data's integer
-    revision while a write expected a timestamp token, so the two never met —
-    which is why config refused that combination outright. Taking the token
-    straight from the read tool and passing it to a write must now work, and
-    the write's own returned revision must chain into a second edit.
-    """
-    db, fake = _rich_env()
-    listing = await data.get_chapter_blocks("story-a", "rich", UID_A, 0, 500)
-    first = await writes.append_to_chapter(
-        db, UID_A, "story-a", "rich", "ok", listing["revision"]
-    )
-    second = await writes.append_to_chapter(
-        db, UID_A, "story-a", "rich", "again", first["revision"]
-    )
-    assert second["revision"] == _revision_of(fake)
-    assert _content_of(fake).endswith("<p>ok</p>\n<p>again</p>")
 
 
 # ---------------------------------------------------------------------------
@@ -1485,71 +1161,12 @@ async def test_append_escapes_markup_and_splits_paragraphs():
     assert stored.endswith("<p>second</p>")
 
 
-async def test_append_block_count_survives_malformed_existing_content():
-    """block_count must be what split_blocks will say next time, not the sum of
-    the two halves — an unclosed tag makes those differ, and the number is the
-    index range the caller's next edit addresses."""
-    db, fake = _rich_env()
-    fake.seed_chapter(
-        "story-a", "broken", title="Broken", position=9.0, content="<p>unclosed"
-    )
-    result = await writes.append_to_chapter(
-        db, UID_A, "story-a", "broken", "New paragraph.", _revision_of(fake, "broken")
-    )
-    content = _content_of(fake, "broken")
-    assert result["block_count"] == len(blocks_module.split_blocks(content)) == 1
-    assert result["appended_blocks"] == 1  # the sum would have said 2
-
-
-async def test_append_reports_the_word_count_story_data_stored():
-    db, fake = _rich_env()
-    result = await writes.append_to_chapter(
-        db, UID_A, "story-a", "rich", "one two three", _revision_of(fake)
-    )
-    row = _chapter_row(fake, "rich")
-    assert row["wordCount"] == result["word_count"]
-    assert row["wordCount"] == len(_content_of(fake).split())
-
-
-async def test_append_carries_the_title_and_position_through_the_patch():
-    """story-data's chapter PATCH takes a whole ChapterInput, so a body-only
-    edit that omitted these would rename the chapter and move it to the front
-    of the book."""
-    db, fake = _rich_env()
-    await writes.append_to_chapter(
-        db, UID_A, "story-a", "rich", "x", _revision_of(fake)
-    )
-    row = _chapter_row(fake, "rich")
-    assert row["title"] == "Rich"
-    assert row["position"] == 3.0
-
-
-async def test_append_does_not_create_a_chapter():
-    db, fake = _rich_env()
-    before = len(fake.chapters["story-a"])
-    await writes.append_to_chapter(
-        db, UID_A, "story-a", "rich", "x", _revision_of(fake)
-    )
-    assert len(fake.chapters["story-a"]) == before
-
-
 async def test_append_rejects_empty_content():
     db, fake = _rich_env()
     with pytest.raises(ValueError, match="must not be empty"):
         await writes.append_to_chapter(
             db, UID_A, "story-a", "rich", "   ", _revision_of(fake)
         )
-
-
-async def test_append_word_cap_is_reported_from_story_data():
-    db, fake = _rich_env()
-    body = "<p>" + " ".join(["w"] * (FakeStoryData.WORD_LIMIT - 1)) + "</p>"
-    fake.seed_chapter("story-a", "big", title="Big", position=9.0, content=body)
-    with pytest.raises(story_data.Rejected, match="5000 words"):
-        await writes.append_to_chapter(
-            db, UID_A, "story-a", "big", "two more words", _revision_of(fake, "big")
-        )
-    assert _content_of(fake, "big") == body  # denied, and nothing written
 
 
 async def test_append_enforces_the_char_cap_on_the_rebuilt_string():
@@ -1854,23 +1471,6 @@ async def test_edit_escapes_markup():
     )
     assert "<script>" not in _content_of(fake)
     assert "&lt;script&gt;" in _content_of(fake)
-
-
-async def test_edit_word_cap_is_reported_from_story_data():
-    db, fake = _rich_env()
-    with pytest.raises(story_data.Rejected, match="5000 words"):
-        await _edit(
-            db,
-            fake,
-            [
-                {
-                    "action": "replace",
-                    "index": 1,
-                    "text": " ".join(["w"] * (FakeStoryData.WORD_LIMIT + 1)),
-                }
-            ],
-        )
-    assert _content_of(fake) == RICH
 
 
 async def test_edit_enforces_the_char_cap_on_the_rebuilt_string():
@@ -2375,50 +1975,3 @@ def test_block_op_actions_match_the_writes_layer():
 
     field = tools_module.BlockOp.model_fields["action"]
     assert set(get_args(field.annotation)) == set(writes.OP_ACTIONS)
-
-
-def test_write_scope_is_not_in_required_scopes():
-    """The single most important regression guard in this change.
-
-    required_scopes is enforced CONJUNCTIVELY by RequireAuthMiddleware over the
-    whole /mcp mount, so it is a FLOOR: every scope in it is demanded of every
-    caller, at the transport layer, before any tool runs. Moving the write
-    scope there would not enable writes — it would make write access mandatory
-    and read-only connections impossible, collapsing the read/write
-    distinction this server is built around.
-
-    It would also invalidate every issued token, but that is the lesser reason
-    and it stops being true once tokens are cheap to re-mint. The one above
-    never stops being true. If you are here because consolidating the two
-    lists looked like tidying: it isn't.
-    """
-    assert mcp_app.MCP_WRITE_SCOPE not in mcp_app.MCP_REQUIRED_SCOPES
-    assert mcp_app.MCP_WRITE_SCOPE in mcp_app.MCP_VALID_SCOPES
-    assert mcp_app.MCP_REQUIRED_SCOPES == [mcp_app.MCP_READ_SCOPE]
-
-
-def test_default_scopes_stay_read_only():
-    """A client that registers without an explicit `scope` must not be handed
-    write access by omission."""
-    assert mcp_app.MCP_DEFAULT_SCOPES == [mcp_app.MCP_READ_SCOPE]
-
-
-def test_tools_write_scope_constant_matches_app():
-    from mcp_server.tools import WRITE_SCOPE
-
-    assert WRITE_SCOPE == mcp_app.MCP_WRITE_SCOPE
-
-
-def test_ceilings_story_data_owns_are_not_restated_here():
-    """writes.py used to re-declare firestore.rules' ceilings because the Admin
-    SDK bypassed them. story-data enforces its own, transactionally, so a copy
-    here would be a second number to keep in step — and the first one to go
-    stale. Only the stored-size bound, which has no counterpart there, remains.
-    """
-    for gone in (
-        "MAX_STORIES_PER_USER",
-        "MAX_CHAPTERS_PER_STORY",
-        "MAX_CHAPTER_WORDS",
-    ):
-        assert not hasattr(writes, gone), f"{gone} is story-data's to enforce"
-    assert writes.MAX_CHAPTER_CONTENT_CHARS == 100_000

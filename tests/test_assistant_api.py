@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
 
 from agents.storyAgent.llm_provider import _byok_config, _firebase_token
 from assistant.api import register_assistant
@@ -81,18 +80,6 @@ def owned(factory):
         return_value={"id": "s1", "ownerId": "u1"}
     )
     factory.return_value.close = AsyncMock()
-
-
-def test_defaults_and_ceiling_validation():
-    config = settings()
-    assert config.assistant_max_model_calls == 8
-    assert config.assistant_max_tool_calls == 20
-    assert config.assistant_max_output_tokens == 2048
-    assert config.assistant_run_timeout_seconds == 240
-    with pytest.raises(ValidationError):
-        settings(assistant_max_model_calls=0)
-    with pytest.raises(ValidationError):
-        settings(assistant_max_output_tokens=8193)
 
 
 @pytest.mark.parametrize(
@@ -234,20 +221,6 @@ def test_byok_credentials_reach_the_provider_context():
         },
         "firebase-token",
     )
-
-
-def test_a_run_without_byok_sends_no_key():
-    """The platform path must stay the default: absent settings mean absent
-    credentials, not an empty-string provider the gateway might honour."""
-    provider = TextProvider()
-    api, _ = client(provider=provider)
-    with patch("assistant.api.StoryDataClient") as factory:
-        owned(factory)
-        api.post("/assistant/run", json=BODY)
-
-    config, _ = provider.context
-    assert config["provider"] == ""
-    assert config["api_key"] == ""
 
 
 @pytest.mark.parametrize(

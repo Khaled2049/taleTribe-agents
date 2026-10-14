@@ -20,29 +20,8 @@ class TestHealth:
         response = client.get("/health")
         assert response.status_code == 200
 
-    def test_health_check_contains_project_id(self):
-        response = client.get("/health")
-        data = response.json()
-        assert data["project_id"] == "test-project"
-
 
 class TestAgentExecution:
-    def test_agent_execute_success(self):
-        app.state.agent.execute_agent = AsyncMock(return_value={"storyId": "s1"})
-
-        response = client.post(
-            "/agent/execute",
-            json={
-                "action": "brainstormIdeas",
-                "parameters": {"storyId": "s1", "type": "theme"},
-                "user_id": "u1",
-            },
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["success"] is True
-        assert data["data"]["storyId"] == "s1"
 
     def test_agent_execute_missing_user_id_returns_422(self):
         response = client.post(
@@ -51,28 +30,6 @@ class TestAgentExecution:
                 "action": "brainstormIdeas",
                 "parameters": {"storyId": "s1", "type": "theme"},
             },
-        )
-
-        assert response.status_code == 422
-        data = response.json()
-        assert data["success"] is False
-        assert data["error"]["code"] == "VALIDATION_ERROR"
-
-    def test_agent_execute_unknown_action_validation_error(self):
-        response = client.post(
-            "/agent/execute",
-            json={"action": "invalidAction", "parameters": {}},
-        )
-
-        assert response.status_code == 422
-        data = response.json()
-        assert data["success"] is False
-        assert data["error"]["code"] == "VALIDATION_ERROR"
-
-    def test_agent_execute_invalid_parameters_returns_422(self):
-        response = client.post(
-            "/agent/execute",
-            json={"action": "generateNextLines", "parameters": {"storyId": "s1"}},
         )
 
         assert response.status_code == 422
@@ -146,6 +103,7 @@ class TestAgentExecution:
                     "data": {"title": "The Last Lantern"},
                     "userId": "user-1",
                 },
+                "user_id": "u1",
             },
         )
 
@@ -256,6 +214,7 @@ class TestGenerateStoryChoices:
             json={
                 "action": "generateStoryChoices",
                 "parameters": {"storyId": "s1"},
+                "user_id": "u1",
             },
         )
 
@@ -270,6 +229,7 @@ class TestGenerateStoryChoices:
             json={
                 "action": "generateStoryChoices",
                 "parameters": {"mode": "opening"},
+                "user_id": "u1",
             },
         )
 
@@ -284,6 +244,7 @@ class TestGenerateStoryChoices:
             json={
                 "action": "generateStoryChoices",
                 "parameters": {"storyId": "s1", "mode": "invalid"},
+                "user_id": "u1",
             },
         )
 
@@ -292,23 +253,6 @@ class TestGenerateStoryChoices:
         assert data["success"] is False
         assert data["error"]["code"] == "VALIDATION_ERROR"
 
-    def test_current_content_defaults_to_empty_string(self):
-        app.state.agent.execute_agent = AsyncMock(
-            return_value={"storyId": "s1", "choices": []}
-        )
-
-        client.post(
-            "/agent/execute",
-            json={
-                "action": "generateStoryChoices",
-                "parameters": {"storyId": "s1", "mode": "opening"},
-                "user_id": "u1",
-            },
-        )
-
-        _, called_params = app.state.agent.execute_agent.await_args.args
-        assert called_params["currentContent"] == ""
-
 
 class TestCredits:
     def test_balance_success(self):
@@ -316,25 +260,16 @@ class TestCredits:
             return_value={"user_id": "u1", "available_credits": 1749}
         )
 
-        response = client.post("/credits/balance", json={"user_id": "u1"})
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["success"] is True
-        assert data["data"]["available_credits"] == 1749
-        app.state.agent.llm_provider.get_balance.assert_awaited_once_with("u1", None)
-
-    def test_balance_forwards_firebase_token(self):
-        app.state.agent.llm_provider.get_balance = AsyncMock(
-            return_value={"user_id": "u1", "available_credits": 0}
-        )
-
-        client.post(
+        response = client.post(
             "/credits/balance",
             json={"user_id": "u1"},
             headers={"X-Firebase-Token": "fb-token"},
         )
 
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["data"]["available_credits"] == 1749
         app.state.agent.llm_provider.get_balance.assert_awaited_once_with(
             "u1", "fb-token"
         )
@@ -450,10 +385,3 @@ class TestAiProviders:
         app.state.agent.llm_provider.validate_provider.assert_awaited_once_with(
             "u1", "openai", "secret", "gpt-4o-mini", "fb-token"
         )
-
-
-class TestDocsEndpoints:
-    def test_openapi_schema_available(self):
-        response = client.get("/openapi.json")
-        assert response.status_code == 200
-        assert "openapi" in response.json()

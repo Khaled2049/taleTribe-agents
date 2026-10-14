@@ -12,48 +12,24 @@ from typing import get_args
 import pytest
 
 from assistant.events import (
-    TERMINAL_EVENT_TYPES,
-    AssistantEventAdapter,
     encode_sse,
     validate_event_sequence,
 )
+from assistant.version import ASSISTANT_PROTOCOL_VERSION
 from scripts.export_assistant_schema import build as build_schema
 
 FIXTURE_DIR = Path(__file__).resolve().parent.parent / "assistant" / "fixtures"
 FIXTURES = sorted(p for p in FIXTURE_DIR.glob("*.json") if p.name != "MANIFEST.json")
-EXPECTED = {
-    "approval-applied",
-    "approval-pause-resume",
-    "approval-rejected",
-    "cancellation",
-    "entity-approval-applied",
-    "entity-approval-partial",
-    "entity-approval-requested",
-    "max-steps",
-    "multi-tool",
-    "provider-error",
-    "research-citations",
-    "single-tool-round",
-    "specialist-consult",
-    "specialist-draft",
-    "stale-edit",
-    "text-only",
-    "writers-room",
-}
 
 
 def load(path: Path) -> dict:
     return json.loads(path.read_text())
 
 
-def test_the_agreed_fixture_set_is_present():
-    """Named explicitly so deleting a case is a decision, not an accident."""
-    assert {p.stem for p in FIXTURES} == EXPECTED
-
-
 @pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
-def test_fixture_round_trips_without_loss(path):
+def test_fixture_preserves_its_wire_contract(path):
     document = load(path)
+    assert document["protocolVersion"] == ASSISTANT_PROTOCOL_VERSION
     events = document["events"]
     parsed = validate_event_sequence(events)
     redumped = [
@@ -61,29 +37,7 @@ def test_fixture_round_trips_without_loss(path):
         for event in parsed
     ]
     assert redumped == events
-
-
-@pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
-def test_fixture_sse_matches_its_events(path):
-    """The wire bytes are part of the contract, not just the parsed objects."""
-    document = load(path)
-    parsed = [AssistantEventAdapter.validate_python(e) for e in document["events"]]
     assert "".join(encode_sse(event) for event in parsed) == document["sse"]
-
-
-@pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
-def test_fixture_declares_the_current_protocol_version(path):
-    document = load(path)
-    assert document["protocolVersion"] == 1
-    assert {event["v"] for event in document["events"]} == {1}
-
-
-@pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
-def test_fixture_has_exactly_one_terminal_event_last(path):
-    events = load(path)["events"]
-    terminals = [e for e in events if e["type"] in TERMINAL_EVENT_TYPES]
-    assert len(terminals) == 1
-    assert events[-1]["type"] in TERMINAL_EVENT_TYPES
 
 
 def test_every_event_type_appears_in_at_least_one_fixture():

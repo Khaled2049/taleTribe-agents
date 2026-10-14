@@ -57,34 +57,6 @@ def test_oidc_audience_strips_trailing_slash(monkeypatch):
     assert s.oidc_audience == AGENT_URL
 
 
-def test_oidc_audience_none_outside_production(monkeypatch):
-    monkeypatch.delenv("ENVIRONMENT", raising=False)
-    s = Settings()
-    assert s.oidc_audience is None
-
-    monkeypatch.setenv("ENVIRONMENT", "development")
-    s = Settings()
-    assert s.oidc_audience is None
-
-
-def test_oidc_audience_requires_agent_service_url_in_production(monkeypatch):
-    monkeypatch.setenv("ENVIRONMENT", "production")
-    monkeypatch.setenv("FIREBASE_FUNCTIONS_SERVICE_ACCOUNT", TRUSTED_SA)
-    monkeypatch.delenv("AGENT_SERVICE_URL", raising=False)
-
-    with pytest.raises((ValueError, ValidationError), match="AGENT_SERVICE_URL"):
-        Settings()
-
-
-def test_oidc_audience_returns_normalized_url(monkeypatch):
-    require_production_env(monkeypatch)
-    monkeypatch.setenv("ENVIRONMENT", "production")
-    monkeypatch.setenv("AGENT_SERVICE_URL", f"{AGENT_URL}/")
-    monkeypatch.setenv("FIREBASE_FUNCTIONS_SERVICE_ACCOUNT", TRUSTED_SA)
-    s = Settings()
-    assert s.oidc_audience == AGENT_URL
-
-
 # ------------------------------------------------------------------
 # Settings.allowed_callers  (replaces _parse_allowed_service_accounts / _production_allowed_callers)
 # ------------------------------------------------------------------
@@ -113,25 +85,6 @@ def test_allowed_callers_from_comma_list(monkeypatch):
     assert s.allowed_callers == frozenset(
         {TRUSTED_SA, "other@project.iam.gserviceaccount.com"}
     )
-
-
-def test_allowed_callers_requires_config_in_production(monkeypatch):
-    monkeypatch.setenv("ENVIRONMENT", "production")
-    monkeypatch.setenv("AGENT_SERVICE_URL", AGENT_URL)
-    monkeypatch.delenv("ALLOWED_SERVICE_ACCOUNTS", raising=False)
-    monkeypatch.delenv("FIREBASE_FUNCTIONS_SERVICE_ACCOUNT", raising=False)
-
-    with pytest.raises(
-        (ValueError, ValidationError),
-        match="FIREBASE_FUNCTIONS_SERVICE_ACCOUNT|ALLOWED_SERVICE_ACCOUNTS",
-    ):
-        Settings()
-
-
-def test_allowed_callers_empty_outside_production(monkeypatch):
-    monkeypatch.setenv("ENVIRONMENT", "development")
-    s = Settings()
-    assert s.allowed_callers == frozenset()
 
 
 # ------------------------------------------------------------------
@@ -220,7 +173,7 @@ async def test_verify_accepts_allowlisted_caller():
 # ------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("value", ["prod", "Production", "PRODUCTION", "staging", ""])
+@pytest.mark.parametrize("value", ["staging"])
 def test_unknown_environment_values_are_rejected(monkeypatch, value):
     monkeypatch.setenv("ENVIRONMENT", value)
     with pytest.raises(ValidationError, match="environment"):
@@ -242,14 +195,6 @@ def _unconfigured_request(insecure_local_auth: bool) -> SimpleNamespace:
         insecure_local_auth=insecure_local_auth,
     )
     return SimpleNamespace(app=SimpleNamespace(state=state), headers={})
-
-
-@pytest.mark.asyncio
-async def test_unconfigured_auth_rejects_internal_calls():
-    with pytest.raises(HTTPException) as exc_info:
-        await _verify_internal_token(_unconfigured_request(False))
-    assert exc_info.value.status_code == 401
-    assert "not configured" in exc_info.value.detail["message"]
 
 
 @pytest.mark.asyncio

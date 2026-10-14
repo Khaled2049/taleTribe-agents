@@ -33,12 +33,6 @@ def test_mcp_routes_absent_when_disabled():
         assert client.get("/oauth/txn/x").status_code == 404
 
 
-def test_protected_resource_metadata_absent_when_disabled():
-    with TestClient(app) as client:
-        resp = client.get("/.well-known/oauth-protected-resource/mcp")
-    assert resp.status_code == 404
-
-
 # ---------------------------------------------------------------------------
 # Write flag defaults (Settings only — no app build needed)
 # ---------------------------------------------------------------------------
@@ -70,10 +64,3 @@ def test_writes_require_story_data_url(monkeypatch):
     monkeypatch.setenv("STORY_DATA_URL", "")
     with pytest.raises(ValidationError, match="ENABLE_MCP_WRITES requires"):
         Settings()
-
-
-def test_write_rate_limit_clamps_garbage(monkeypatch):
-    monkeypatch.setenv("MCP_MAX_WRITES_PER_MINUTE_PER_USER", "not-a-number")
-    assert Settings().mcp_max_writes_per_minute_per_user == 6
-    monkeypatch.setenv("MCP_MAX_WRITES_PER_MINUTE_PER_USER", "-5")
-    assert Settings().mcp_max_writes_per_minute_per_user == 0

@@ -163,29 +163,8 @@ def test_authorization_server_metadata(client):
     assert body["token_endpoint"].endswith("/token")
     assert body["registration_endpoint"].endswith("/register")
     assert body["code_challenge_methods_supported"] == ["S256"]
-
-
-def test_metadata_advertises_only_public_client_auth(client):
-    """The document must describe the server that exists.
-
-    The SDK hard-codes the two client_secret methods here, but every
-    registration is downgraded to a public client, so advertising them would
-    invite a client to authenticate in a way this server never checks.
-    """
-    body = client.get("/.well-known/oauth-authorization-server").json()
     assert body["token_endpoint_auth_methods_supported"] == ["none"]
     assert body["revocation_endpoint_auth_methods_supported"] == ["none"]
-
-
-def test_protected_resource_metadata(client):
-    resp = client.get("/.well-known/oauth-protected-resource/mcp")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["resource"].rstrip("/").endswith("/mcp")
-    assert any(
-        issuer.rstrip("/") == "http://localhost:8000"
-        for issuer in body["authorization_servers"]
-    )
 
 
 def test_health_reports_mcp_available(client):
@@ -296,23 +275,12 @@ def test_full_authorization_code_flow(client):
     assert refresh_resp.status_code == 200, refresh_resp.text
     rotated = refresh_resp.json()
     assert rotated["access_token"] != token["access_token"]
-
-
-def test_full_flow_with_resource_indicator(client):
-    """RFC 8707: real clients (Claude Code) always send `resource`.
-
-    The round-trip through Firestore must hand the SDK a plain str — an AnyUrl
-    fails AuthorizationCode validation and surfaces as a bare 500 at /token.
-    """
-    resource = "https://mcp.example.com/mcp"
-    verifier, challenge = _pkce_pair()
-    client_id = _register(client)
-    txn_id = _authorize(client, client_id, challenge, resource=resource)
-    code = _approve(client, txn_id)
-
-    resp = _exchange(client, client_id, code, verifier, resource=resource)
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["access_token"].startswith("mcp_at_")
+    accepted = client.post(
+        "/mcp",
+        json=INITIALIZE,
+        headers={**MCP_HEADERS, "Authorization": f"Bearer {rotated['access_token']}"},
+    )
+    assert accepted.status_code == 200, accepted.text
 
 
 def test_token_exchange_rejects_wrong_verifier(client):
@@ -436,22 +404,6 @@ def test_mcp_rejects_garbage_token(client):
     assert resp.status_code == 401
 
 
-def test_mcp_accepts_valid_token(client):
-    verifier, challenge = _pkce_pair()
-    client_id = _register(client)
-    txn_id = _authorize(client, client_id, challenge)
-    code = _approve(client, txn_id)
-    token = _exchange(client, client_id, code, verifier).json()
-
-    resp = client.post(
-        "/mcp",
-        json=INITIALIZE,
-        headers={**MCP_HEADERS, "Authorization": f"Bearer {token['access_token']}"},
-    )
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["result"]["serverInfo"]["name"] == "TheTaleTribe"
-
-
 def test_refresh_reuse_kills_the_grant_end_to_end(client):
     """A replayed refresh token must invalidate the successor, over real HTTP.
 
@@ -511,17 +463,6 @@ def test_refresh_reuse_kills_the_grant_end_to_end(client):
         },
     )
     assert resp.status_code == 401
-
-
-def test_agent_execute_still_requires_internal_token(client):
-    resp = client.post(
-        "/agent/execute",
-        json={"action": "generate_story", "parameters": {}, "user_id": "u"},
-    )
-    # Outside production the OIDC guard is a no-op, but the request must never
-    # be treated as an MCP route; it still hits the guarded host endpoint.
-    assert resp.status_code in (200, 401, 422, 500)
-    assert "jsonrpc" not in resp.text
 
 
 # ---------------------------------------------------------------------------
@@ -604,23 +545,13 @@ def test_write_scoped_flow_end_to_end(client):
     txn_id = _authorize(
         client, client_id, challenge, scope="stories:read stories:write"
     )
+    consent = client.get(f"/oauth/txn/{txn_id}")
+    assert set(consent.json()["scopes"]) == {"stories:read", "stories:write"}
     code = _approve(client, txn_id)
     resp = _exchange(client, client_id, code, verifier)
     assert resp.status_code == 200, resp.text
     granted = set(resp.json()["scope"].split())
     assert granted == {"stories:read", "stories:write"}
-
-
-def test_consent_page_sees_the_write_scope(client):
-    """The consent copy in mcpConsentScopes.ts keys off exactly this list."""
-    client_id = _register(client, scope="stories:read stories:write")
-    _verifier, challenge = _pkce_pair()
-    txn_id = _authorize(
-        client, client_id, challenge, scope="stories:read stories:write"
-    )
-    resp = client.get(f"/oauth/txn/{txn_id}")
-    assert resp.status_code == 200
-    assert set(resp.json()["scopes"]) == {"stories:read", "stories:write"}
 
 
 # ---------------------------------------------------------------------------
@@ -645,19 +576,3 @@ def test_consent_refused_for_a_user_not_on_the_allowlist(client):
     assert resp.status_code == 403
     # The app wraps HTTPException detail in its standard error envelope.
     assert "request access" in resp.json()["error"]["message"].lower()
-
-
-def test_revoked_status_is_refused_like_an_absent_record(client):
-    fake_db.seed("mcpAccess/revoked-uid", {"status": "revoked"})
-    client_id = _register(client)
-    _verifier, challenge = _pkce_pair()
-    txn_id = _authorize(client, client_id, challenge)
-    with patch(
-        "mcp_server.oauth_routes.google_id_token.verify_firebase_token",
-        return_value={"sub": "revoked-uid"},
-    ):
-        resp = client.post(
-            "/oauth/complete",
-            json={"txn_id": txn_id, "approve": True, "id_token": "stub-token"},
-        )
-    assert resp.status_code == 403

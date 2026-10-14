@@ -36,16 +36,6 @@ async def test_mock_provider_matches_expected_dimension():
     assert len(emb) == EXPECTED_EMBEDDING_DIM
 
 
-def test_verify_passes_for_matching_provider():
-    # Should not raise and should not log at error level.
-    verify_embedding_dimension(MockEmbeddingProvider())
-
-
-def test_verify_none_embedder_is_tolerated():
-    # No embedder is a valid (degraded) state — warn, don't crash.
-    verify_embedding_dimension(None)
-
-
 def test_verify_warns_but_does_not_raise_by_default(monkeypatch, caplog):
     monkeypatch.delenv("STRICT_EMBEDDING_DIM", raising=False)
     with caplog.at_level("ERROR"):

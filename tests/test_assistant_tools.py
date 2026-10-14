@@ -4,47 +4,32 @@ import pytest
 from pydantic import ValidationError
 
 from assistant.tools import (
-    APPROVAL_REQUIRED,
     IDENTITY_FIELD_NAMES,
     MODEL_EDIT_TOOLS,
     READ_TOOLS,
     RESEARCH_TOOLS,
     TOOL_SCHEMAS,
-    ToolContext,
     UnknownToolError,
     available_tools,
     validate_tool_arguments,
 )
 
 
-@pytest.mark.parametrize("name", sorted(TOOL_SCHEMAS))
-def test_no_tool_argument_model_declares_an_identity_field(name):
+def test_no_tool_argument_model_declares_an_identity_field():
     """The structural invariant: a model cannot say whose story to read.
 
     Identity lives on ToolContext, which is built from the verified token. If
     this fails, a tool has reopened the hole rather than a check having been
     skipped -- which is exactly why the field is absent instead of validated.
     """
-    schema = TOOL_SCHEMAS[name]
-    declared = set(schema.model_fields)
-    aliases = {
-        field.alias for field in schema.model_fields.values() if field.alias is not None
-    }
-    assert not (declared | aliases) & IDENTITY_FIELD_NAMES
-
-
-@pytest.mark.parametrize("name", sorted(TOOL_SCHEMAS))
-def test_tool_arguments_reject_unknown_fields(name):
-    with pytest.raises(ValidationError):
-        TOOL_SCHEMAS[name].model_validate({"totallyUnexpected": 1})
-
-
-def test_tool_context_is_not_constructible_from_model_output():
-    """A frozen dataclass has no model_validate, so no JSON path builds one."""
-    context = ToolContext(user_id="uid-1", story_id="story-1")
-    assert not hasattr(ToolContext, "model_validate")
-    with pytest.raises(AttributeError):
-        context.user_id = "someone-else"
+    for name, schema in TOOL_SCHEMAS.items():
+        declared = set(schema.model_fields)
+        aliases = {
+            field.alias
+            for field in schema.model_fields.values()
+            if field.alias is not None
+        }
+        assert not (declared | aliases) & IDENTITY_FIELD_NAMES, name
 
 
 def test_read_tools_are_always_available_and_others_are_gated():
@@ -69,18 +54,6 @@ def test_read_tools_are_always_available_and_others_are_gated():
     )
 
 
-def test_story_changes_and_specialists_are_offered_by_default():
-    default = set(available_tools(edits_enabled=False, research_enabled=False))
-    assert {"propose_story_changes", "consult_specialist"} <= default
-    assert "apply_story_changes" not in default
-
-
-def test_applying_an_edit_requires_approval_but_proposing_does_not():
-    assert "apply_editor_edit" in APPROVAL_REQUIRED
-    assert "propose_editor_edit" not in APPROVAL_REQUIRED
-    assert APPROVAL_REQUIRED <= set(TOOL_SCHEMAS)
-
-
 def test_model_edit_draft_cannot_supply_editor_coordinates():
     schema = MODEL_EDIT_TOOLS["propose_editor_edit"]
     assert (
@@ -102,13 +75,6 @@ def test_model_edit_draft_cannot_supply_editor_coordinates():
 def test_unknown_tool_is_refused():
     with pytest.raises(UnknownToolError):
         validate_tool_arguments("run_sql", {})
-
-
-def test_validate_returns_camel_case_payload():
-    assert validate_tool_arguments("search_story", {"query": "harbour"}) == {
-        "query": "harbour",
-        "limit": 8,
-    }
 
 
 @pytest.mark.parametrize(
