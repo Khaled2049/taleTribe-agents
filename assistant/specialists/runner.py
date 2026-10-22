@@ -248,6 +248,7 @@ async def consult_stream(
                 max_output_tokens=specialist.max_output_tokens,
                 idempotency_key=_idempotency_key(run_id, tool_call_id),
                 required_tool=None if drafting else SUBMIT_TOOL,
+                feature="assistant_drafting" if drafting else "assistant_specialist",
             ):
                 kind = event.get("type")
                 if kind == "text_delta" and isinstance(event.get("text"), str):

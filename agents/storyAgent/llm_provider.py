@@ -25,6 +25,34 @@ _byok_config: ContextVar[Optional[Dict[str, str]]] = ContextVar(
 )
 _firebase_token: ContextVar[Optional[str]] = ContextVar("firebase_token", default=None)
 
+# The product feature an LLM call serves; creditProxy records it on every ledger
+# event for usage reporting and folds unknown names into "other". KEEP IN SYNC
+# with usageFeatures in creditProxy cmd/gateway/feature.go.
+USAGE_FEATURES = frozenset(
+    {
+        "next_line",
+        "enhance",
+        "brainstorm",
+        "story_choices",
+        "wizard_enhance",
+        "summarize",
+        "assistant",
+        "assistant_specialist",
+        "assistant_drafting",
+        "other",
+    }
+)
+ACTION_FEATURES = {
+    "summarizeChapter": "summarize",
+    "brainstormIdeas": "brainstorm",
+    "generateNextLines": "next_line",
+    "enhanceText": "enhance",
+    "enhanceWizardInput": "wizard_enhance",
+    "generateStoryChoices": "story_choices",
+}
+# Set once per request by each entry point, like _byok_config.
+_usage_feature: ContextVar[str] = ContextVar("usage_feature", default="other")
+
 # Conservative default output cap. Each tool passes its own max_output_tokens
 # (see tools/*); this default only applies to callers that don't specify one, so
 # an un-updated call site stays cheap rather than reserving the old 8192 ceiling.
@@ -220,6 +248,7 @@ class CreditProxyProvider(LLMProvider):
             "byok_provider": provider,
             "byok_api_key": api_key,
             "byok_model": model,
+            "feature": _usage_feature.get(),
         }
 
     async def chat_stream(
@@ -230,6 +259,7 @@ class CreditProxyProvider(LLMProvider):
         max_output_tokens: int,
         idempotency_key: str,
         required_tool: Optional[str] = None,
+        feature: Optional[str] = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Yield normalized CreditProxy chat events from one billed model call.
 
@@ -251,6 +281,8 @@ class CreditProxyProvider(LLMProvider):
             "stream": True,
             "idempotency_key": idempotency_key,
         }
+        if feature:
+            payload["feature"] = feature
         headers = await self._auth_headers(_firebase_token.get())
         try:
             async with self._client.stream(

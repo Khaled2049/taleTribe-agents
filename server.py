@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, ValidationError
 from agents.storyAgent.action_schemas import ActionName, validate_action_parameters
 from agents.storyAgent.agent import StoryAgent
 from agents.storyAgent.llm_provider import (
+    ACTION_FEATURES,
     BackendUnavailableError,
     BillingCommitError,
     InsufficientCreditsError,
@@ -32,6 +33,7 @@ from agents.storyAgent.llm_provider import (
     RateLimitedError,
     _byok_config,
     _firebase_token,
+    _usage_feature,
 )
 from assistant.api import register_assistant
 from config import Settings
@@ -452,6 +454,9 @@ def create_app() -> FastAPI:
                 or raw_request.headers.get("X-Firebase-Token", "")
             ).strip() or None
             firebase_token = _firebase_token.set(incoming_firebase_token)
+            feature_token = _usage_feature.set(
+                ACTION_FEATURES.get(request.action, "other")
+            )
 
             try:
                 result = await app.state.agent.execute_agent(
@@ -463,6 +468,7 @@ def create_app() -> FastAPI:
             finally:
                 _byok_config.reset(byok_token)
                 _firebase_token.reset(firebase_token)
+                _usage_feature.reset(feature_token)
             return AgentResponse(success=True, data=result)
         except ValidationError as exc:
             raise HTTPException(

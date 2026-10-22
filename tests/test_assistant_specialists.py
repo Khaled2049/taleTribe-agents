@@ -325,7 +325,14 @@ class RoutingProvider:
         self.peak = 0
 
     async def chat_stream(
-        self, messages, tools, *, max_output_tokens, idempotency_key, required_tool=None
+        self,
+        messages,
+        tools,
+        *,
+        max_output_tokens,
+        idempotency_key,
+        required_tool=None,
+        feature=None,
     ):
         request = {
             "messages": messages,
@@ -333,6 +340,7 @@ class RoutingProvider:
             "idempotency_key": idempotency_key,
             "required_tool": required_tool,
             "max_output_tokens": max_output_tokens,
+            "feature": feature,
         }
         self.requests.append(request)
         system = messages[0]["parts"][0]["text"]
@@ -401,6 +409,7 @@ async def test_a_consult_returns_findings_and_the_director_answers(story):
     (sub,) = provider.specialist_requests()
     assert sub["tools"] == ["submit_findings"]
     assert sub["idempotency_key"].startswith("run-1:consult:")
+    assert sub["feature"] == "assistant_specialist"
     # The findings re-enter the director's prompt as a tool result, i.e. data.
     tool_message = provider.requests[-1]["messages"][-1]
     assert tool_message["role"] == "tool"
@@ -702,7 +711,14 @@ class CastProvider(RoutingProvider):
     """Routes each sub-call by the specialist named in its system prompt."""
 
     async def chat_stream(
-        self, messages, tools, *, max_output_tokens, idempotency_key, required_tool=None
+        self,
+        messages,
+        tools,
+        *,
+        max_output_tokens,
+        idempotency_key,
+        required_tool=None,
+        feature=None,
     ):
         system = messages[0]["parts"][0]["text"]
         name = next(
@@ -719,6 +735,7 @@ class CastProvider(RoutingProvider):
             "idempotency_key": idempotency_key,
             "required_tool": required_tool,
             "max_output_tokens": max_output_tokens,
+            "feature": feature,
             "specialist": name,
         }
         self.requests.append(request)
@@ -830,6 +847,10 @@ async def test_a_draft_streams_to_the_writer_and_ends_the_run(story):
     assert [r["specialist"] for r in provider.requests] == [None, "Drafting Agent"]
     (draft_call,) = provider.calls_to("Drafting Agent")
     assert draft_call["tools"] == [] and draft_call["required_tool"] is None
+    # Drafting is reported apart from consults; the director call inherits the
+    # run's "assistant" feature rather than naming one.
+    assert draft_call["feature"] == "assistant_drafting"
+    assert provider.requests[0]["feature"] is None
     assert draft_call["max_output_tokens"] == SPECIALISTS["drafter"].max_output_tokens
 
 
