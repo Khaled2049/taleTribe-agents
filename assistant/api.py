@@ -10,7 +10,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
-from agents.storyAgent.llm_provider import _byok_config, _firebase_token
+from agents.storyAgent.llm_provider import (
+    _byok_config,
+    _firebase_token,
+    _usage_feature,
+)
 from assistant.errors import ErrorCode, safe_message
 from assistant.events import encode_sse
 from assistant.history import HistoryLimits
@@ -82,6 +86,7 @@ def register_assistant(
                 }
             )
             firebase_context = _firebase_token.set(firebase_token)
+            feature_context = _usage_feature.set("assistant")
             try:
                 agent = request.app.state.agent
                 async for event in run_assistant(
@@ -96,6 +101,7 @@ def register_assistant(
                 ):
                     yield encode_sse(event)
             finally:
+                _usage_feature.reset(feature_context)
                 _firebase_token.reset(firebase_context)
                 _byok_config.reset(byok_context)
 

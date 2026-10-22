@@ -10,6 +10,7 @@ os.environ["CREDIT_PROXY_URL"] = "http://localhost:8080"
 os.environ["GOOGLE_CLOUD_PROJECT"] = "test-project"
 os.environ["MAX_REQUESTS_PER_MINUTE_PER_USER"] = "1000"
 
+from agents.storyAgent.llm_provider import _usage_feature  # noqa: E402
 from server import app
 
 client = TestClient(app)
@@ -55,9 +56,13 @@ class TestAgentExecution:
         app.state.agent.execute_agent.assert_not_awaited()
 
     def test_enhance_wizard_input_success(self):
-        app.state.agent.execute_agent = AsyncMock(
-            return_value={"enhanced": "In a world..."}
-        )
+        features = []
+
+        async def run(*_args, **_kwargs):
+            features.append(_usage_feature.get())
+            return {"enhanced": "In a world..."}
+
+        app.state.agent.execute_agent = AsyncMock(side_effect=run)
 
         response = client.post(
             "/agent/execute",
@@ -92,6 +97,8 @@ class TestAgentExecution:
             background_tasks=ANY,
             user_id="u-session",
         )
+        # The action's LLM calls are reported under its feature.
+        assert features == ["wizard_enhance"]
 
     def test_enhance_wizard_input_invalid_type_returns_422(self):
         response = client.post(

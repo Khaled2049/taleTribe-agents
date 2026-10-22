@@ -17,6 +17,8 @@ os.environ.setdefault("CREDIT_PROXY_URL", "http://localhost:8080")
 os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "test-project")
 
 from agents.storyAgent.llm_provider import (  # noqa: E402
+    ACTION_FEATURES,
+    USAGE_FEATURES,
     BackendUnavailableError,
     BillingCommitError,
     CreditProxyProvider,
@@ -29,6 +31,7 @@ from agents.storyAgent.llm_provider import (  # noqa: E402
     _byok_config,
     _classify_http_error,
     _firebase_token,
+    _usage_feature,
 )
 
 # --- _classify_http_error ----------------------------------------------------
@@ -421,6 +424,7 @@ async def test_chat_stream_forwards_contract_and_parses_sse():
         "byok_provider": "gemini",
         "byok_api_key": "secret",
         "byok_model": "gemini-test",
+        "feature": "other",
         "version": 1,
         "messages": [{"role": "user", "parts": [{"type": "text", "text": "Hi"}]}],
         "tools": [{"name": "get_story_overview", "parameters": {"type": "object"}}],
@@ -500,3 +504,46 @@ async def test_chat_stream_rejects_non_sse_success():
         ):
             pass
     await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_calls_report_the_feature_set_by_their_entry_point():
+    captured = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        captured.append(body["feature"])
+        if request.url.path == "/v1/chat":
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/event-stream"},
+                text='data: {"type":"done","finish_reason":"stop"}\n\n',
+            )
+        return httpx.Response(200, json={"response": {"output": "ok"}})
+
+    provider = _provider_with_transport(handler)
+    await provider.generate_content_async("hello")
+    token = _usage_feature.set("next_line")
+    try:
+        await provider.generate_content_async("hello")
+        async for _ in provider.chat_stream(
+            [],
+            [],
+            max_output_tokens=16,
+            idempotency_key="k",
+            feature="assistant_drafting",
+        ):
+            pass
+    finally:
+        _usage_feature.reset(token)
+        await provider.aclose()
+
+    # Unset means "other"; an explicit chat feature beats the ambient one.
+    assert captured == ["other", "next_line", "assistant_drafting"]
+
+
+def test_every_action_reports_a_known_feature():
+    from agents.storyAgent.action_schemas import _ACTION_SCHEMAS
+
+    assert set(ACTION_FEATURES) == set(_ACTION_SCHEMAS)
+    assert set(ACTION_FEATURES.values()) <= USAGE_FEATURES
