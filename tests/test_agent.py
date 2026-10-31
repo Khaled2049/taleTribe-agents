@@ -27,7 +27,9 @@ class TestActionDispatch:
             },
         )
 
-        agent.generate_next_lines.assert_awaited_once_with("s1", "Once", 4, "c1")
+        agent.generate_next_lines.assert_awaited_once_with(
+            "s1", "Once", 4, "c1", "anonymous"
+        )
 
     async def test_execute_agent_unknown_action_raises(self):
         agent = StoryAgent(project_id="test-project")

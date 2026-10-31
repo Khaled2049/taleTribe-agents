@@ -219,6 +219,14 @@ def test_local_auth_switch_refused_in_production(monkeypatch):
         Settings()
 
 
+def test_voice_queue_worker_refused_in_production(monkeypatch):
+    require_production_env(monkeypatch)
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("VOICE_LEARNING_WORKER_ENABLED", "true")
+    with pytest.raises(ValidationError, match="VOICE_LEARNING_WORKER_ENABLED"):
+        Settings()
+
+
 def test_local_auth_switch_refused_on_cloud_run(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "development")
     monkeypatch.setenv("ALLOW_INSECURE_LOCAL_AUTH", "true")

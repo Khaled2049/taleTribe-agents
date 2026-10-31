@@ -42,16 +42,20 @@ def test_read_tools_are_always_available_and_others_are_gated():
             )
         )
 
-    assert offered(edits_enabled=False, research_enabled=False) == set(READ_TOOLS)
+    assert offered(edits_enabled=False, research_enabled=False) == set(READ_TOOLS) | {
+        "update_story_voice_profile"
+    }
     both = offered(edits_enabled=True, research_enabled=True)
-    assert both == set(READ_TOOLS) | set(MODEL_EDIT_TOOLS) | set(RESEARCH_TOOLS)
+    assert both == set(READ_TOOLS) | set(MODEL_EDIT_TOOLS) | set(RESEARCH_TOOLS) | {
+        "update_story_voice_profile"
+    }
     assert "apply_editor_edit" not in both
     assert offered(edits_enabled=True, research_enabled=False) == set(READ_TOOLS) | set(
         MODEL_EDIT_TOOLS
-    )
+    ) | {"update_story_voice_profile"}
     assert offered(edits_enabled=False, research_enabled=True) == set(READ_TOOLS) | set(
         RESEARCH_TOOLS
-    )
+    ) | {"update_story_voice_profile"}
 
 
 def test_model_edit_draft_cannot_supply_editor_coordinates():

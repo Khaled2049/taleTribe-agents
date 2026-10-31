@@ -194,6 +194,18 @@ class ResearchWebArgs(StrictModel):
     max_results: int = Field(default=3, ge=1, le=MAX_RESEARCH_RESULTS)
 
 
+class UpdateStoryVoiceProfileArgs(StrictModel):
+    """Remember one clearly story-wide prose instruction as an assistant note.
+
+    The current writer message must explicitly scope the preference to the
+    whole story. Scene or chapter directions remain local. This changes no
+    manuscript text, point of view, tense, or writer-authored note.
+    """
+
+    note: str = Field(min_length=8, max_length=240)
+    reason: str = Field(min_length=8, max_length=500)
+
+
 # Read tools are always available; the other two families are gated on the
 # server flags declared in P0-T4, which today gate nothing else because no
 # executor exists yet.
@@ -236,6 +248,10 @@ RESEARCH_TOOLS: dict[str, type[BaseModel]] = {
     "research_web": ResearchWebArgs,
 }
 
+VOICE_TOOLS: dict[str, type[BaseModel]] = {
+    "update_story_voice_profile": UpdateStoryVoiceProfileArgs,
+}
+
 # Adding a tool here also requires a ``Capability`` in ``assistant/help.py``:
 # the browser renders /help from that catalog without asking the model, and
 # ``tests/test_assistant_help.py`` asserts the catalog partitions this map, so
@@ -246,6 +262,7 @@ TOOL_SCHEMAS: dict[str, type[BaseModel]] = {
     **ENTITY_TOOLS,
     **SPECIALIST_TOOLS,
     **RESEARCH_TOOLS,
+    **VOICE_TOOLS,
 }
 
 # Tools whose effect requires explicit user approval before it is applied.
@@ -266,6 +283,7 @@ def available_tools(
 ) -> dict[str, type[BaseModel]]:
     """The allowlist for one run. Server-owned; a model cannot widen it."""
     tools = dict(READ_TOOLS)
+    tools.update(VOICE_TOOLS)
     if edits_enabled:
         tools.update(MODEL_EDIT_TOOLS)
     if entity_proposals_enabled:

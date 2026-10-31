@@ -82,6 +82,62 @@ def owned(factory):
     factory.return_value.close = AsyncMock()
 
 
+def test_voice_learning_endpoint_checks_identity_and_forwards_byok():
+    app = FastAPI()
+    pool = SimpleNamespace(execute=AsyncMock())
+    app.state.agent = SimpleNamespace(
+        postgres_context=SimpleNamespace(pool=pool), llm_provider=TextProvider()
+    )
+
+    async def verify():
+        return None
+
+    register_assistant(app, settings(assistant_api_enabled=True), verify)
+    api = TestClient(app)
+    body = {
+        "userId": "u1",
+        "storyId": "143d1f5f-07b7-46ab-8c76-775e8c8c6f84",
+        "chapterId": "baadf72d-f646-47bb-a45b-1f8528645745",
+        "sourceRevision": 2,
+    }
+    with (
+        patch("assistant.api.StoryDataClient") as factory,
+        patch("assistant.voice_learning.VoiceLearningWorker") as worker,
+    ):
+        factory.return_value.get_story = AsyncMock(
+            return_value={"id": body["storyId"], "ownerId": "u1"}
+        )
+        factory.return_value.close = AsyncMock()
+        worker.return_value.eligible = AsyncMock(return_value=True)
+        worker.return_value._process = AsyncMock(return_value="updated")
+        assert api.post("/voice-learning/pass?preflight=true", json=body).json() == {
+            "eligible": True
+        }
+        assert api.post("/voice-learning/pass", json=body).status_code == 401
+        response = api.post(
+            "/voice-learning/pass",
+            json={
+                **body,
+                "provider_config": {
+                    "provider": "gemini",
+                    "api_key": "writer-key",
+                    "model": "gemini-2.5-flash",
+                },
+            },
+            headers={"X-Firebase-Token": "firebase-token"},
+        )
+        assert response.status_code == 200
+        assert response.json() == {"status": "updated"}
+        args = worker.return_value._process.call_args.args
+        assert args[1] == {
+            "provider": "gemini",
+            "api_key": "writer-key",
+            "model": "gemini-2.5-flash",
+        }
+        assert args[2] == "firebase-token"
+        pool.execute.assert_awaited_once()
+
+
 @pytest.mark.parametrize(
     "enabled,authorized,status", [(False, True, 404), (True, False, 401)]
 )

@@ -144,6 +144,20 @@ class StoryDataClient:
     async def get_story(self, uid: str, story_id: str) -> dict:
         return await self._get(f"/v1/stories/{story_id}", uid)
 
+    async def get_voice_profile(self, uid: str, story_id: str) -> dict:
+        return await self._get(f"/v1/stories/{story_id}/voice-profile", uid)
+
+    async def update_story_voice_note(
+        self, uid: str, story_id: str, revision: int, operation: dict
+    ) -> dict:
+        return await self._request(
+            "POST",
+            f"/v1/stories/{story_id}/voice-profile/agent-note",
+            uid,
+            revision=str(revision),
+            json=operation,
+        )
+
     async def list_chapter_index(self, uid: str, story_id: str) -> list[dict]:
         """Chapter metadata in reading order, without the bodies.
 

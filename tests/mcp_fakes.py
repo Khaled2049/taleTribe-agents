@@ -317,6 +317,7 @@ class FakeStoryData:
         self.threads: dict[str, dict] = {}
         self.thread_messages: dict[str, list[dict]] = {}
         self.profiles: dict[str, dict] = {}
+        self.voice_profiles: dict[str, dict] = {}
         # Every path requested, so a test can assert on content=false.
         self.requests: list[tuple[str, dict]] = []
         self.writes: list[tuple[str, dict]] = []
@@ -438,6 +439,26 @@ class FakeStoryData:
     async def get_story(self, uid: str, story_id: str) -> dict:
         self.requests.append((f"/v1/stories/{story_id}", {}))
         return self._visible_story(uid, story_id)
+
+    async def get_voice_profile(self, uid: str, story_id: str) -> dict:
+        from mcp_server import story_data
+
+        self.requests.append((f"/v1/stories/{story_id}/voice-profile", {}))
+        story = self.stories.get(story_id)
+        if not story or story["ownerId"] != uid:
+            raise story_data.NotFound(story_id)
+        return copy.deepcopy(
+            self.voice_profiles.get(
+                story_id,
+                {
+                    "storyId": story_id,
+                    "revision": 0,
+                    "pointOfView": "unspecified",
+                    "tense": "unspecified",
+                    "notes": [],
+                },
+            )
+        )
 
     async def list_chapter_index(self, uid: str, story_id: str) -> list[dict]:
         self.requests.append((f"/v1/stories/{story_id}/chapters", {"content": "false"}))

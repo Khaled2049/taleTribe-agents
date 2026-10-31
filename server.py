@@ -265,7 +265,9 @@ def create_app() -> FastAPI:
             # The MCP read tools serve story content from story-data. Installed
             # here rather than at import so tests can supply their own.
             if (
-                mcp_bundle is not None or settings.assistant_api_enabled
+                mcp_bundle is not None
+                or settings.assistant_api_enabled
+                or settings.voice_learning_worker_enabled
             ) and settings.story_data_url.strip():
                 story_data.configure(
                     story_data.StoryDataClient(
@@ -274,6 +276,7 @@ def create_app() -> FastAPI:
                     )
                 )
             worker_task = None
+            voice_worker_task = None
             if settings.indexing_worker_enabled:
                 import asyncio
 
@@ -286,6 +289,28 @@ def create_app() -> FastAPI:
                         await asyncio.sleep(settings.indexing_worker_interval_seconds)
 
                 worker_task = asyncio.create_task(run_indexer())
+            if (
+                settings.voice_learning_worker_enabled
+                and app.state.agent.postgres_context.pool is not None
+                and settings.story_data_url.strip()
+            ):
+                from assistant.voice_learning import VoiceLearningWorker
+
+                voice_worker = VoiceLearningWorker(
+                    app.state.agent.postgres_context.pool, app.state.agent.llm_provider
+                )
+
+                async def run_voice_learner():
+                    while True:
+                        try:
+                            await voice_worker.run_once()
+                        except Exception:
+                            logger.exception("voice_learning_worker_failed")
+                        await asyncio.sleep(
+                            settings.voice_learning_worker_interval_seconds
+                        )
+
+                voice_worker_task = asyncio.create_task(run_voice_learner())
             if mcp_bundle is not None:
                 await stack.enter_async_context(mcp_bundle.mcp.session_manager.run())
             yield
@@ -293,6 +318,12 @@ def create_app() -> FastAPI:
                 worker_task.cancel()
                 try:
                     await worker_task
+                except asyncio.CancelledError:
+                    pass
+            if voice_worker_task is not None:
+                voice_worker_task.cancel()
+                try:
+                    await voice_worker_task
                 except asyncio.CancelledError:
                     pass
         await app.state.agent.aclose()
