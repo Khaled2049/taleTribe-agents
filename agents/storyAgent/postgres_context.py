@@ -68,14 +68,15 @@ class PostgresStoryContext:
                 story_id,
             )
             events = await conn.fetch(
-                "SELECT e.id,e.plot_line_id,e.name,e.content,e.tension_level,e.pacing,e.story_beat,e.emotional_tone,e.notes,e.position,e.chapter_number,e.revision FROM plot_events e JOIN plot_lines l ON l.id=e.plot_line_id WHERE l.story_id=$1 ORDER BY e.position",
+                "SELECT e.id,e.plot_line_id,e.name,e.content,e.tension_level,e.pacing,e.story_beat,e.emotional_tone,e.notes,e.position,e.chapter_id,e.status,e.revision FROM plot_events e JOIN plot_lines l ON l.id=e.plot_line_id WHERE l.story_id=$1 ORDER BY e.position",
                 story_id,
             )
+        chapter_labels = _chapter_labels(chapters)
         by_line: dict[str, list[dict[str, Any]]] = {}
         for event in events:
             data = _record(event)
             data["orderIndex"] = int(data.pop("position"))
-            data["chapterNumber"] = data.pop("chapter_number")
+            data.update(_event_chapter(data.pop("chapter_id"), chapter_labels))
             by_line.setdefault(str(event["plot_line_id"]), []).append(data)
         return {
             "story": _camel(_record(story)),
@@ -473,6 +474,29 @@ def _index_budget_limit() -> int:
     except ValueError:
         return 300
     return parsed if parsed > 0 else 300
+
+
+def _chapter_labels(chapters: Any) -> dict[str, tuple[int, str]]:
+    """Chapter id -> (1-based number in reading order, title).
+
+    ``chapters`` must already be in ``position`` order; the number is derived
+    from that order because no chapter number is stored."""
+    return {
+        str(row["id"]): (number, row["title"] or "")
+        for number, row in enumerate(chapters, start=1)
+    }
+
+
+def _event_chapter(
+    chapter_id: str | None, labels: dict[str, tuple[int, str]]
+) -> dict[str, Any]:
+    """The chapter fields an event carries in context; all None when unassigned."""
+    label = labels.get(chapter_id) if chapter_id else None
+    return {
+        "chapterId": chapter_id,
+        "chapterNumber": label[0] if label else None,
+        "chapterTitle": label[1] if label else None,
+    }
 
 
 def _record(row: asyncpg.Record) -> dict[str, Any]:

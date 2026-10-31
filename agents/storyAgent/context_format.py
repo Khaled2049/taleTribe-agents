@@ -64,6 +64,15 @@ def _append_prompt_fields(info: str, data: Dict[str, Any], kind: str, skip):
     return info
 
 
+def _event_chapter_label(event: Dict[str, Any]) -> str:
+    """`` (Chapter 3 · The Ford)`` for a planned event, or "" when unassigned."""
+    number = event.get("chapterNumber")
+    if not isinstance(number, int) or isinstance(number, bool):
+        return ""
+    title = sanitize_for_prompt(event.get("chapterTitle") or "", 200)
+    return f" (Chapter {number} · {title})" if title else f" (Chapter {number})"
+
+
 def _chapter_order(chapter: Dict[str, Any]) -> float:
     value = chapter.get("order")
     if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -167,7 +176,7 @@ def format_context_for_prompt(context: Dict[str, Any]) -> str:
                     ec = ev.get("content", "")
                     if en or ec:
                         line = sanitize_for_prompt(f"{en}: {ec}".strip(), 600)
-                        plot_info += f"\n  Event - {line}"
+                        plot_info += f"\n  Event - {line}{_event_chapter_label(ev)}"
             prompt_parts.append(plot_info)
         if more_plots:
             prompt_parts.append(f"... and {more_plots} more plots not shown")
