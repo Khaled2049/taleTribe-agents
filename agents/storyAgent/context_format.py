@@ -177,6 +177,12 @@ def format_context_for_prompt(context: Dict[str, Any]) -> str:
                     if en or ec:
                         line = sanitize_for_prompt(f"{en}: {ec}".strip(), 600)
                         plot_info += f"\n  Event - {line}{_event_chapter_label(ev)}"
+                        requires = [
+                            sanitize_for_prompt(str(name), 200)
+                            for name in ev.get("requires") or []
+                        ]
+                        if requires:
+                            plot_info += f"\n    Requires: {'; '.join(requires)}"
             prompt_parts.append(plot_info)
         if more_plots:
             prompt_parts.append(f"... and {more_plots} more plots not shown")

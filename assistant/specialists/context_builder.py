@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
+from assistant.plot_links import name_plot_requirements
 from assistant.executors import _encode, _fit
 from assistant.specialists.base import Specialist
 from assistant.tools import FocusRef, ToolContext
@@ -135,7 +136,10 @@ class _Story:
             rows = await self._client.list_entities(
                 self._ctx.user_id, self._ctx.story_id, collection
             )
-            self._rosters[collection] = [row for row in rows if isinstance(row, dict)]
+            rows = [row for row in rows if isinstance(row, dict)]
+            if collection == "plots":
+                rows = name_plot_requirements(rows)
+            self._rosters[collection] = rows
         return self._rosters[collection]
 
     async def chapter_index(self) -> list[dict[str, Any]]:

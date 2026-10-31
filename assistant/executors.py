@@ -42,6 +42,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from pydantic import BaseModel
 
+from assistant.plot_links import event_names, name_requirements
 from assistant.errors import ErrorCode, safe_message
 from assistant.protocol import EditorContext, SourcePart
 from assistant.tools import (
@@ -345,6 +346,16 @@ async def get_story_entity(
         )
     except data.EntityNotFoundError:
         return ToolResult(_not_found(args.kind, args.entity_id))
+
+    if args.kind == "plot" and isinstance(entity.get("events"), list):
+        # Requirements can point at events in other plot lines; name them all.
+        plots = await story_data.client().list_entities(
+            runtime.ctx.user_id, runtime.ctx.story_id, "plots"
+        )
+        entity["events"] = name_requirements(
+            entity["events"],
+            event_names([p for p in plots or [] if isinstance(p, dict)]),
+        )
 
     name = str(entity.get("name") or "Unnamed")
     reference = SourcePart(

@@ -382,3 +382,36 @@ async def test_get_story_entity_emits_a_citation(fake):
     assert reference.kind == "story"
     assert reference.title == "Character: Mina"
     assert reference.snippet == "Guarded."
+
+
+async def test_get_story_entity_names_plot_requirements(fake):
+    """Requirements reach the model by name, including ones in other plot lines."""
+    fake.seed_entity(
+        STORY,
+        "plots",
+        "plot-main",
+        name="The Mutiny",
+        events=[
+            {"id": "ev-letter", "name": "Finds the letter", "dependencies": []},
+        ],
+    )
+    fake.seed_entity(
+        STORY,
+        "plots",
+        "plot-sub",
+        name="The Rumour",
+        events=[
+            {
+                "id": "ev-rumour",
+                "name": "Rumour spreads",
+                "dependencies": [{"eventId": "ev-letter", "plotLineId": "plot-main"}],
+                "dependents": [],
+            }
+        ],
+    )
+    result = await run(
+        "get_story_entity", {"kind": "plot", "entityId": "plot-sub"}, runtime()
+    )
+    (event,) = result.result["events"]
+    assert event["requires"] == ["Finds the letter"]
+    assert "dependencies" not in event and "dependents" not in event

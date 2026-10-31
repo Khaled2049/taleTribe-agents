@@ -71,12 +71,18 @@ class PostgresStoryContext:
                 "SELECT e.id,e.plot_line_id,e.name,e.content,e.tension_level,e.pacing,e.story_beat,e.emotional_tone,e.notes,e.position,e.chapter_id,e.status,e.revision FROM plot_events e JOIN plot_lines l ON l.id=e.plot_line_id WHERE l.story_id=$1 ORDER BY e.position",
                 story_id,
             )
+            links = await conn.fetch(
+                "SELECT d.plot_event_id,d.depends_on_event_id FROM plot_event_dependencies d JOIN plot_events e ON e.id=d.plot_event_id JOIN plot_lines l ON l.id=e.plot_line_id WHERE l.story_id=$1",
+                story_id,
+            )
         chapter_labels = _chapter_labels(chapters)
+        requires = _requirement_names(events, links)
         by_line: dict[str, list[dict[str, Any]]] = {}
         for event in events:
             data = _record(event)
             data["orderIndex"] = int(data.pop("position"))
             data.update(_event_chapter(data.pop("chapter_id"), chapter_labels))
+            data["requires"] = requires.get(str(event["id"]), [])
             by_line.setdefault(str(event["plot_line_id"]), []).append(data)
         return {
             "story": _camel(_record(story)),
@@ -485,6 +491,17 @@ def _chapter_labels(chapters: Any) -> dict[str, tuple[int, str]]:
         str(row["id"]): (number, row["title"] or "")
         for number, row in enumerate(chapters, start=1)
     }
+
+
+def _requirement_names(events: Any, links: Any) -> dict[str, list[str]]:
+    """Event id -> names of the events it requires (its prerequisites)."""
+    names = {str(e["id"]): e["name"] or "Untitled event" for e in events}
+    out: dict[str, list[str]] = {}
+    for link in links:
+        target = names.get(str(link["depends_on_event_id"]))
+        if target:
+            out.setdefault(str(link["plot_event_id"]), []).append(target)
+    return out
 
 
 def _event_chapter(
