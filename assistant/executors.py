@@ -42,7 +42,12 @@ from typing import Any, Awaitable, Callable, Optional
 
 from pydantic import BaseModel
 
-from assistant.plot_links import event_names, name_requirements
+from assistant.plot_links import (
+    chapter_labels,
+    event_names,
+    label_event_chapters,
+    name_requirements,
+)
 from assistant.errors import ErrorCode, safe_message
 from assistant.protocol import EditorContext, SourcePart
 from assistant.tools import (
@@ -352,9 +357,15 @@ async def get_story_entity(
         plots = await story_data.client().list_entities(
             runtime.ctx.user_id, runtime.ctx.story_id, "plots"
         )
-        entity["events"] = name_requirements(
-            entity["events"],
-            event_names([p for p in plots or [] if isinstance(p, dict)]),
+        chapters = await story_data.client().list_chapter_index(
+            runtime.ctx.user_id, runtime.ctx.story_id
+        )
+        entity["events"] = label_event_chapters(
+            name_requirements(
+                entity["events"],
+                event_names([p for p in plots or [] if isinstance(p, dict)]),
+            ),
+            chapter_labels(chapters if isinstance(chapters, list) else []),
         )
 
     name = str(entity.get("name") or "Unnamed")

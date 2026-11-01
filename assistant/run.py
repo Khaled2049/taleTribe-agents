@@ -128,7 +128,9 @@ change or accepts one you suggested. Name what you are changing by its exact
 name from the roster, or by an id a tool returned; never invent an id, and
 never show an id to the writer. Include only the fields that change and keep
 each one concise. An event may
-only reference characters and places that already exist. You cannot delete
+only reference characters and places that already exist. An event's chapter is
+a chapter title or number, or "unassigned"; its requires is the full list of
+events it needs first, by name, from any plot line. You cannot delete
 anything. Call propose_story_changes alone, never alongside another tool. A
 proposal never applies itself: the writer reviews it, so never say a change was
 made unless a later message reports it was saved."""
@@ -320,11 +322,12 @@ async def _system_prompt(
     entity_proposals_enabled: bool = False,
     max_consults: int = 0,
     room: bool = False,
+    chapter_id: Optional[str] = None,
 ) -> str:
     slim = ""
     if postgres is not None and getattr(postgres, "pool", None) is not None:
         try:
-            slim = await postgres.slim_context(story_id)
+            slim = await postgres.slim_context(story_id, chapter_id=chapter_id)
         except Exception:
             logger.warning("assistant_slim_context_unavailable story_scoped=1")
     rules = (
@@ -651,6 +654,11 @@ async def run_assistant(
                 entity_proposals_enabled=entity_proposals_enabled,
                 max_consults=budget.max_consults,
                 room=room,
+                chapter_id=(
+                    request.editor_context.chapter_id
+                    if request.editor_context
+                    else None
+                ),
             )
             user_text = "\n".join(part.text for part in request.message.parts)
             if continuation is not None:

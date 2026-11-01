@@ -385,7 +385,9 @@ async def test_get_story_entity_emits_a_citation(fake):
 
 
 async def test_get_story_entity_names_plot_requirements(fake):
-    """Requirements reach the model by name, including ones in other plot lines."""
+    """Requirements and chapters reach the model by name, never as ids."""
+    fake.seed_chapter(STORY, "ch-harbour", title="The Harbour")
+    fake.seed_chapter(STORY, "ch-ford", title="The Ford")
     fake.seed_entity(
         STORY,
         "plots",
@@ -406,12 +408,20 @@ async def test_get_story_entity_names_plot_requirements(fake):
                 "name": "Rumour spreads",
                 "dependencies": [{"eventId": "ev-letter", "plotLineId": "plot-main"}],
                 "dependents": [],
-            }
+                "chapterId": "ch-ford",
+                "chapterPosition": 1.0,
+                "status": "planned",
+            },
+            {"id": "ev-later", "name": "Later", "chapterId": None},
         ],
     )
     result = await run(
         "get_story_entity", {"kind": "plot", "entityId": "plot-sub"}, runtime()
     )
-    (event,) = result.result["events"]
+    event, later = result.result["events"]
     assert event["requires"] == ["Finds the letter"]
     assert "dependencies" not in event and "dependents" not in event
+    # The fixture story already has two chapters, so these are 3 and 4.
+    assert event["chapter"] == "4 · The Ford" and event["status"] == "planned"
+    assert "chapterId" not in event and "chapterPosition" not in event
+    assert later["chapter"] == "Unassigned"

@@ -28,6 +28,7 @@ from assistant.protocol import (
     MAX_ENTITY_PROSE_CHARS,
     MAX_ENTITY_SHORT_CHARS,
     MAX_EVENT_CHARACTERS,
+    MAX_EVENT_REQUIREMENTS,
     MAX_ID_CHARS,
     MAX_MESSAGE_CHARS,
     MAX_PARTS_PER_MESSAGE,
@@ -83,6 +84,7 @@ def build() -> dict[str, Any]:
             "entityShortChars": MAX_ENTITY_SHORT_CHARS,
             "entityProseChars": MAX_ENTITY_PROSE_CHARS,
             "eventCharacters": MAX_EVENT_CHARACTERS,
+            "eventRequirements": MAX_EVENT_REQUIREMENTS,
         },
         # Writer-facing copy, not JSON Schema, so it sits beside "limits"
         # rather than under "definitions". The browser renders /help from this

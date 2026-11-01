@@ -9,12 +9,16 @@ ENTITY_CONTEXT_LIMIT bounds how many of each entity kind reach a prompt, so a
 story with 400 characters cannot blow the context window.
 """
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .entity_schema import ENTITY_FIELD_SCHEMA
+from .plot_selection import (
+    ENTITY_CONTEXT_LIMIT,
+    chapter_label,
+    chapter_numbers,
+    select_plot_context,
+)
 from .utils import sanitize_for_prompt
-
-ENTITY_CONTEXT_LIMIT = 12
 
 
 def _entity_sort_ts(entity: Dict[str, Any]) -> float:
@@ -80,12 +84,140 @@ def _chapter_order(chapter: Dict[str, Any]) -> float:
     return 0.0
 
 
-def format_context_for_prompt(context: Dict[str, Any]) -> str:
+_SECTION_TITLES = {
+    "prerequisites": "=== WHAT THIS CHAPTER'S EVENTS REQUIRE ===",
+    "previous_chapter": "=== PLANNED FOR THE PREVIOUS CHAPTER ({label}) ===",
+    "next_chapter": "=== PLANNED FOR THE NEXT CHAPTER ({label}) ===",
+}
+
+
+def _plan_event(plot: Dict[str, Any], event: Dict[str, Any]) -> str:
+    """One planned event with its plot line, status, tension and beat."""
+    name = sanitize_for_prompt(event.get("name") or "Untitled event", 200)
+    line = f"- {name}"
+    if event.get("content"):
+        line += f": {sanitize_for_prompt(event.get('content'), 600)}"
+    line += _event_chapter_label(event)
+    details = [
+        f"Plot line: {sanitize_for_prompt(plot.get('name') or 'Untitled Plot', 200)}"
+    ]
+    if event.get("status"):
+        details.append(f"Status: {sanitize_for_prompt(event.get('status'), 40)}")
+    tension = event.get("tension_level", event.get("tensionLevel"))
+    if isinstance(tension, int) and not isinstance(tension, bool) and tension > 0:
+        details.append(f"Tension: {tension}/10")
+    beat = event.get("story_beat") or event.get("storyBeat")
+    if beat:
+        details.append(f"Beat: {sanitize_for_prompt(beat, 100)}")
+    line += "\n  " + " · ".join(details)
+    requires = [sanitize_for_prompt(str(n), 200) for n in event.get("requires") or []]
+    if requires:
+        line += f"\n  Requires: {'; '.join(requires)}"
+    return line
+
+
+def _full_plot_line(plot: Dict[str, Any]) -> str:
+    """A plot line with its description and every event (no active chapter)."""
+    info = f"- {sanitize_for_prompt(plot.get('name', 'Untitled Plot'), 200)}"
+    if plot.get("description"):
+        info += f": {sanitize_for_prompt(plot.get('description'), 1200)}"
+    info = _append_prompt_fields(info, plot, "plot", skip={"description"})
+    for ev in plot.get("events") or []:
+        if isinstance(ev, dict):
+            en = ev.get("name", "")
+            ec = ev.get("content", "")
+            if en or ec:
+                line = sanitize_for_prompt(f"{en}: {ec}".strip(), 600)
+                info += f"\n  Event - {line}{_event_chapter_label(ev)}"
+                requires = [
+                    sanitize_for_prompt(str(name), 200)
+                    for name in ev.get("requires") or []
+                ]
+                if requires:
+                    info += f"\n    Requires: {'; '.join(requires)}"
+    return info
+
+
+def _format_plot_sections(
+    context: Dict[str, Any], chapter_id: Optional[str]
+) -> List[str]:
+    numbers = chapter_numbers(context)
+    parts: List[str] = []
+    for section in select_plot_context(context, chapter_id):
+        kind = section["kind"]
+        if kind == "plot_lines":
+            plots = section["plots"]
+            if not plots:
+                continue
+            with_events = section["with_events"]
+            parts.append("\n=== PLOTS ===" if with_events else "\n=== PLOT LINES ===")
+            for plot in plots:
+                if with_events:
+                    parts.append(_full_plot_line(plot))
+                else:
+                    info = f"- {sanitize_for_prompt(plot.get('name', 'Untitled Plot'), 200)}"
+                    if plot.get("description"):
+                        info += (
+                            f": {sanitize_for_prompt(plot.get('description'), 1200)}"
+                        )
+                    parts.append(info)
+            if section["omitted"]:
+                parts.append(f"... and {section['omitted']} more plots not shown")
+            continue
+        chapter = section.get("chapter")
+        label = (
+            sanitize_for_prompt(
+                chapter_label(chapter, numbers.get(str(chapter.get("id")), 0)), 260
+            )
+            if chapter
+            else ""
+        )
+        if kind == "chapter_plan":
+            parts.append(f"\n=== PLAN FOR THIS CHAPTER ({label}) ===")
+            if not section["events"]:
+                parts.append("No events are planned for this chapter yet.")
+        else:
+            parts.append("\n" + _SECTION_TITLES[kind].format(label=label))
+        parts.extend(_plan_event(plot, event) for plot, event in section["events"])
+    return parts
+
+
+def format_chapter_plan(context: Dict[str, Any], chapter_id: Optional[str]) -> str:
+    """Just the active chapter's plan and its prerequisites, for short prompts.
+
+    Empty when there is no such chapter or nothing is planned for it."""
+    sections = [
+        s
+        for s in select_plot_context(context, chapter_id)
+        if s["kind"] in ("chapter_plan", "prerequisites") and s["events"]
+    ]
+    if not sections:
+        return ""
+    numbers = chapter_numbers(context)
+    parts: List[str] = []
+    for section in sections:
+        if section["kind"] == "chapter_plan":
+            chapter = section["chapter"]
+            label = sanitize_for_prompt(
+                chapter_label(chapter, numbers.get(str(chapter.get("id")), 0)), 260
+            )
+            parts.append(f"Planned for this chapter ({label}):")
+        else:
+            parts.append("What those events require:")
+        parts.extend(_plan_event(plot, event) for plot, event in section["events"])
+    return "\n".join(parts)
+
+
+def format_context_for_prompt(
+    context: Dict[str, Any], chapter_id: Optional[str] = None
+) -> str:
     """
     Format context into a readable prompt string for the AI model.
 
     Args:
         context: The dict postgres_context.context() returns
+        chapter_id: The chapter being written, whose plan the plot section
+            is built around
 
     Returns:
         Formatted string with all context information
@@ -157,35 +289,9 @@ def format_context_for_prompt(context: Dict[str, Any]) -> str:
         if more_places:
             prompt_parts.append(f"... and {more_places} more places not shown")
 
-    # Plots. Fields from ENTITY_FIELD_SCHEMA; description inline, events bespoke.
+    # Plots: chosen around the active chapter when there is one.
     if plots:
-        capped_plots, more_plots = _cap_entities(plots)
-        prompt_parts.append("\n=== PLOTS ===")
-        for plot in capped_plots:
-            plot_info = (
-                f"- {sanitize_for_prompt(plot.get('name', 'Untitled Plot'), 200)}"
-            )
-            if plot.get("description"):
-                plot_info += f": {sanitize_for_prompt(plot.get('description'), 1200)}"
-            plot_info = _append_prompt_fields(
-                plot_info, plot, "plot", skip={"description"}
-            )
-            for ev in plot.get("events") or []:
-                if isinstance(ev, dict):
-                    en = ev.get("name", "")
-                    ec = ev.get("content", "")
-                    if en or ec:
-                        line = sanitize_for_prompt(f"{en}: {ec}".strip(), 600)
-                        plot_info += f"\n  Event - {line}{_event_chapter_label(ev)}"
-                        requires = [
-                            sanitize_for_prompt(str(name), 200)
-                            for name in ev.get("requires") or []
-                        ]
-                        if requires:
-                            plot_info += f"\n    Requires: {'; '.join(requires)}"
-            prompt_parts.append(plot_info)
-        if more_plots:
-            prompt_parts.append(f"... and {more_plots} more plots not shown")
+        prompt_parts.extend(_format_plot_sections(context, chapter_id))
 
     # Existing chapters summary
     if chapters:

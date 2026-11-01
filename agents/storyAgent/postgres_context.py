@@ -68,21 +68,27 @@ class PostgresStoryContext:
                 story_id,
             )
             events = await conn.fetch(
-                "SELECT e.id,e.plot_line_id,e.name,e.content,e.tension_level,e.pacing,e.story_beat,e.emotional_tone,e.notes,e.position,e.chapter_id,e.status,e.revision FROM plot_events e JOIN plot_lines l ON l.id=e.plot_line_id WHERE l.story_id=$1 ORDER BY e.position",
+                "SELECT e.id,e.plot_line_id,e.name,e.content,e.tension_level,e.pacing,e.story_beat,e.emotional_tone,e.notes,e.position,e.chapter_id,e.chapter_position,e.status,e.revision FROM plot_events e JOIN plot_lines l ON l.id=e.plot_line_id WHERE l.story_id=$1 ORDER BY e.position",
                 story_id,
             )
             links = await conn.fetch(
-                "SELECT d.plot_event_id,d.depends_on_event_id FROM plot_event_dependencies d JOIN plot_events e ON e.id=d.plot_event_id JOIN plot_lines l ON l.id=e.plot_line_id WHERE l.story_id=$1",
+                "SELECT d.plot_event_id,d.depends_on_event_id FROM plot_event_dependencies d JOIN plot_events e ON e.id=d.plot_event_id JOIN plot_lines l ON l.id=e.plot_line_id WHERE l.story_id=$1 ORDER BY d.plot_event_id,d.depends_on_event_id",
                 story_id,
             )
         chapter_labels = _chapter_labels(chapters)
         requires = _requirement_names(events, links)
+        required_ids = _requirement_ids(events, links)
         by_line: dict[str, list[dict[str, Any]]] = {}
         for event in events:
             data = _record(event)
             data["orderIndex"] = int(data.pop("position"))
             data.update(_event_chapter(data.pop("chapter_id"), chapter_labels))
+            chapter_position = data.pop("chapter_position")
+            data["chapterPosition"] = (
+                float(chapter_position) if chapter_position is not None else None
+            )
             data["requires"] = requires.get(str(event["id"]), [])
+            data["requiresIds"] = required_ids.get(str(event["id"]), [])
             by_line.setdefault(str(event["plot_line_id"]), []).append(data)
         return {
             "story": _camel(_record(story)),
@@ -95,7 +101,7 @@ class PostgresStoryContext:
             ],
         }
 
-    async def slim_context(self, story_id: str) -> str:
+    async def slim_context(self, story_id: str, chapter_id: str | None = None) -> str:
         """Fetch only the bounded roster used in an assistant system prompt.
 
         ``context`` intentionally loads complete chapter and entity prose for
@@ -126,6 +132,19 @@ class PostgresStoryContext:
                 "SELECT id,title FROM chapters WHERE story_id=$1 ORDER BY position LIMIT 12",
                 story_id,
             )
+            # Positions are unique per story, so the count is the chapter number.
+            current = (
+                await conn.fetchrow(
+                    """SELECT c.title,
+                              (SELECT count(*) FROM chapters o WHERE o.story_id=c.story_id AND o.position<=c.position) AS number,
+                              (SELECT count(*) FROM plot_events e WHERE e.chapter_id=c.id) AS planned
+                       FROM chapters c WHERE c.id=$2 AND c.story_id=$1""",
+                    story_id,
+                    chapter_id,
+                )
+                if chapter_id
+                else None
+            )
         return self.format_slim_context(
             {
                 "story": dict(story),
@@ -133,6 +152,7 @@ class PostgresStoryContext:
                 "places": [dict(row) for row in places],
                 "plots": [dict(row) for row in plots],
                 "chapters": [dict(row) for row in chapters],
+                "current_chapter": dict(current) if current else None,
             }
         )
 
@@ -207,6 +227,15 @@ class PostgresStoryContext:
             "Description: "
             + _bounded(story.get("description", ""), MAX_SLIM_DESCRIPTION_CHARS),
         ]
+        current = context.get("current_chapter")
+        if current:
+            title = _bounded(current.get("title") or "", MAX_SLIM_LABEL_CHARS)
+            label = (
+                f"{current['number']} · {title}" if title else str(current["number"])
+            )
+            planned = int(current.get("planned") or 0)
+            noun = "planned event" if planned == 1 else "planned events"
+            lines.append(f"Current chapter: {label}, {planned} {noun}.")
         for label, items in (
             ("Characters", context["characters"]),
             ("Places", context["places"]),
@@ -500,6 +529,17 @@ def _requirement_names(events: Any, links: Any) -> dict[str, list[str]]:
     for link in links:
         target = names.get(str(link["depends_on_event_id"]))
         if target:
+            out.setdefault(str(link["plot_event_id"]), []).append(target)
+    return out
+
+
+def _requirement_ids(events: Any, links: Any) -> dict[str, list[str]]:
+    """Event id -> ids of the events it requires, skipping links to missing events."""
+    known = {str(e["id"]) for e in events}
+    out: dict[str, list[str]] = {}
+    for link in links:
+        target = str(link["depends_on_event_id"])
+        if target in known:
             out.setdefault(str(link["plot_event_id"]), []).append(target)
     return out
 

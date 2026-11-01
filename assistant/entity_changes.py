@@ -13,10 +13,14 @@ tool result rather than failing the run.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 
+from assistant.plot_links import chapter_labels
 from assistant.protocol import (
     MAX_ENTITY_NAME_CHARS,
+    UNASSIGNED_CHAPTER,
+    BoundReference,
     EntityContinuation,
     ProposeStoryChangesArgs,
     StoryChange,
@@ -53,6 +57,34 @@ class _StoryReader:
         self._client = story_data.client()
         self._rosters: dict[str, list[dict[str, Any]]] = {}
         self._plots: dict[str, Optional[dict[str, Any]]] = {}
+        self._chapters: Optional[list[dict[str, Any]]] = None
+        # Event id -> ids it requires, with this proposal's earlier changes
+        # applied, so two changes cannot form a loop between them.
+        self._requirements: Optional[dict[str, set[str]]] = None
+        # Names of events this proposal creates; they have no id to require yet.
+        self.created_events: set[str] = set()
+
+    async def chapters(self) -> list[dict[str, Any]]:
+        if self._chapters is None:
+            rows = await self._client.list_chapter_index(
+                self._ctx.user_id, self._ctx.story_id
+            )
+            self._chapters = [row for row in rows or [] if isinstance(row, dict)]
+        return self._chapters
+
+    async def requirements(self) -> dict[str, set[str]]:
+        if self._requirements is None:
+            self._requirements = {
+                str(event["id"]): {
+                    str(link.get("eventId"))
+                    for link in event.get("dependencies") or []
+                    if isinstance(link, dict) and link.get("eventId")
+                }
+                for line in await self.roster("plots")
+                for event in line.get("events") or []
+                if isinstance(event, dict) and event.get("id")
+            }
+        return self._requirements
 
     async def roster(self, collection: str) -> list[dict[str, Any]]:
         if collection not in self._rosters:
@@ -135,6 +167,143 @@ def _plot_holding_event(
     return found[0] if len(found) == 1 else None
 
 
+_CHAPTER_NUMBER = re.compile(r"^(?:chapter\s*)?(\d+)$", re.IGNORECASE)
+
+
+async def _bind_chapter(ref: str, reader: _StoryReader) -> BoundReference:
+    """A chapter by id, exact title or number in reading order; or unassigned."""
+    if ref.strip().casefold() == UNASSIGNED_CHAPTER:
+        return BoundReference(id=None, label="Unassigned")
+    chapters = await reader.chapters()
+    labels = chapter_labels(chapters)
+    ordered = list(labels)  # chapter ids in reading order
+    listing = ", ".join(list(labels.values())[:MAX_LISTED_NAMES]) or "none yet"
+
+    matches = [c for c in chapters if str(c.get("id")) == ref]
+    if not matches:
+        wanted = ref.strip().casefold()
+        matches = [
+            c
+            for c in chapters
+            if str(c.get("title") or "").strip().casefold() == wanted
+        ]
+    if len(matches) > 1:
+        raise ProposalRejected(
+            f"More than one chapter is called {ref!r}. Name it by number: "
+            + ", ".join(labels[str(c.get("id"))] for c in matches[:MAX_LISTED_NAMES])
+            + "."
+        )
+    if not matches:
+        number = _CHAPTER_NUMBER.match(ref.strip())
+        if number and 1 <= int(number.group(1)) <= len(ordered):
+            chapter_id = ordered[int(number.group(1)) - 1]
+            return BoundReference(id=chapter_id, label=labels[chapter_id])
+        raise ProposalRejected(
+            f"No chapter is called {ref!r}. This story's chapters: {listing}. "
+            'Use "unassigned" to take the event out of its chapter.'
+        )
+    chapter_id = str(matches[0].get("id"))
+    return BoundReference(id=chapter_id, label=labels[chapter_id])
+
+
+def _event_matches(
+    plots: list[dict[str, Any]], ref: str
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    events = [
+        (line, event)
+        for line in plots
+        for event in line.get("events") or []
+        if isinstance(event, dict) and event.get("id")
+    ]
+    by_id = [pair for pair in events if str(pair[1].get("id")) == ref]
+    if by_id:
+        return by_id
+    wanted = ref.strip().casefold()
+    return [
+        pair
+        for pair in events
+        if str(pair[1].get("name") or "").strip().casefold() == wanted
+    ]
+
+
+def _reaches(graph: dict[str, set[str]], start: str, target: str) -> bool:
+    """Whether ``start`` requires ``target``, directly or through other events."""
+    stack, seen = [start], set()
+    while stack:
+        node = stack.pop()
+        if node == target:
+            return True
+        if node in seen:
+            continue
+        seen.add(node)
+        stack.extend(graph.get(node, ()))
+    return False
+
+
+async def _bind_requires(
+    refs: list[str], event_id: Optional[str], reader: _StoryReader
+) -> list[BoundReference]:
+    """Each requirement to exactly one event in the story, loop-free.
+
+    The loop check is story-data's own, run here so the model hears about it
+    before the writer sees a card."""
+    plots = await reader.roster("plots")
+    bound: list[BoundReference] = []
+    for ref in refs:
+        matches = _event_matches(plots, ref)
+        if len(matches) > 1:
+            raise ProposalRejected(
+                f"More than one event is called {ref!r} (in plot lines "
+                + ", ".join(
+                    _label(line.get("name")) for line, _ in matches[:MAX_LISTED_NAMES]
+                )
+                + "). Use its id: "
+                + ", ".join(
+                    str(event.get("id")) for _, event in matches[:MAX_LISTED_NAMES]
+                )
+                + "."
+            )
+        if not matches:
+            if ref.strip().casefold() in reader.created_events:
+                raise ProposalRejected(
+                    f"The event {ref!r} is created in this same proposal, so it "
+                    "cannot be required yet. Add the requirement in a later "
+                    "proposal, once it is saved."
+                )
+            names = ", ".join(
+                _label(e.get("name"))
+                for line in plots
+                for e in line.get("events") or []
+                if isinstance(e, dict)
+            )
+            raise ProposalRejected(
+                f"No event is called {ref!r}. An event can only require events "
+                f"that already exist. This story's events: {names or 'none yet'}."
+            )
+        _, event = matches[0]
+        target = str(event.get("id"))
+        if target == event_id:
+            raise ProposalRejected("An event cannot require itself.")
+        if any(ref_.id == target for ref_ in bound):
+            raise ProposalRejected(
+                f"{_label(event.get('name'))!r} is listed as a requirement twice."
+            )
+        bound.append(BoundReference(id=target, label=_label(event.get("name"))))
+
+    if event_id is not None:
+        graph = await reader.requirements()
+        for ref_ in bound:
+            assert ref_.id is not None
+            if _reaches(graph, ref_.id, event_id):
+                raise ProposalRejected(
+                    f"Requiring {ref_.label!r} would make a loop: it already "
+                    "requires this event, directly or through other events."
+                )
+        # Later changes in the proposal see this one's requirements.
+        graph[event_id] = {str(ref_.id) for ref_ in bound}
+    return bound
+
+
 async def _bind_change(change: StoryChangeDraft, reader: _StoryReader) -> StoryChange:
     """Resolve one change's targets.
 
@@ -146,6 +315,8 @@ async def _bind_change(change: StoryChangeDraft, reader: _StoryReader) -> StoryC
     label = _label(change.fields.name)
     entity_id = change.entity_id
     plot_line_id = change.plot_line_id
+    bound_chapter: Optional[BoundReference] = None
+    bound_requires: Optional[list[BoundReference]] = None
 
     if change.kind == "event":
         assert plot_line_id is not None  # enforced by the schema
@@ -187,6 +358,16 @@ async def _bind_change(change: StoryChangeDraft, reader: _StoryReader) -> StoryC
             entity_id = str(event.get("id"))
             base_revision = _revision(event)
             label = _label(event.get("name"))
+        if change.fields.chapter is not None:
+            bound_chapter = await _bind_chapter(change.fields.chapter, reader)
+        if change.fields.requires is not None:
+            bound_requires = await _bind_requires(
+                change.fields.requires,
+                None if change.is_create else entity_id,
+                reader,
+            )
+        if change.is_create:
+            reader.created_events.add(label.strip().casefold())
     else:
         collection = COLLECTION_BY_KIND[change.kind]
         rows = await reader.roster(collection)
@@ -227,6 +408,8 @@ async def _bind_change(change: StoryChangeDraft, reader: _StoryReader) -> StoryC
         fields=change.fields,
         base_revision=base_revision,
         label=label,
+        bound_chapter=bound_chapter,
+        bound_requires=bound_requires,
     )
 
 

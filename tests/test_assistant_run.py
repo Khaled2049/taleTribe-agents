@@ -55,7 +55,7 @@ class FakeProvider:
 class FakePostgres:
     pool = object()
 
-    async def slim_context(self, story_id):
+    async def slim_context(self, story_id, chapter_id=None):
         assert story_id == "story-1"
         return "Story: Saltmarsh\nCharacters: Mina\nChapters: The Lamp Room"
 
@@ -384,8 +384,7 @@ async def test_explicit_selection_edit_requires_a_direct_proposal_tool(owned_sto
             {
                 "type": "text",
                 "text": (
-                    "Suggest a tighter revision for the text I selected in "
-                    "the editor."
+                    "Suggest a tighter revision for the text I selected in the editor."
                 ),
             }
         ],

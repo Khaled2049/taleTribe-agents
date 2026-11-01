@@ -53,6 +53,9 @@ MAX_ENTITY_NAME_CHARS = 200
 MAX_ENTITY_SHORT_CHARS = 100
 MAX_ENTITY_PROSE_CHARS = 4_000
 MAX_EVENT_CHARACTERS = 20
+MAX_EVENT_REQUIREMENTS = 20
+# What ``chapter`` says to take an event out of every chapter.
+UNASSIGNED_CHAPTER = "unassigned"
 
 
 class StrictModel(BaseModel):
@@ -252,6 +255,8 @@ STORY_CHANGE_FIELDS: dict[str, frozenset[str]] = {
             "character_ids",
             "location_id",
             "notes",
+            "chapter",
+            "requires",
         }
     ),
 }
@@ -305,6 +310,25 @@ class StoryChangeFields(StrictModel):
         default=None, min_length=1, max_length=MAX_ID_CHARS
     )
     notes: Optional[str] = _prose()
+    chapter: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=MAX_ENTITY_NAME_CHARS,
+        description=(
+            "The chapter the event is planned for: its exact title, its number "
+            'in reading order, or its id. "unassigned" removes it from its chapter.'
+        ),
+    )
+    requires: Optional[
+        list[Annotated[str, Field(min_length=1, max_length=MAX_ENTITY_NAME_CHARS)]]
+    ] = Field(
+        default=None,
+        max_length=MAX_EVENT_REQUIREMENTS,
+        description=(
+            "Every event this one requires after the change, by exact name or id, "
+            "from any plot line. This replaces the current list; [] clears it."
+        ),
+    )
 
     def set_names(self) -> frozenset[str]:
         return frozenset(
@@ -367,11 +391,28 @@ class StoryChangeDraft(StrictModel):
         return self
 
 
+class BoundReference(StrictModel):
+    """A name the model wrote, resolved by the server: the row and its label.
+
+    ``id`` is null only for a chapter reference that means "unassigned"."""
+
+    id: Optional[str] = Field(default=None, min_length=1, max_length=MAX_ID_CHARS)
+    label: str = Field(min_length=1, max_length=MAX_SUMMARY_CHARS)
+
+
 class StoryChange(StoryChangeDraft):
-    """A draft plus what the server bound: the target's revision and a label."""
+    """A draft plus what the server bound: the target's revision and a label.
+
+    An event's ``chapter`` and ``requires`` are names as the model wrote them;
+    ``bound_chapter`` and ``bound_requires`` are what they resolved to, which is
+    what the browser saves and shows."""
 
     base_revision: Optional[int] = Field(default=None, ge=0)
     label: str = Field(min_length=1, max_length=MAX_ENTITY_NAME_CHARS)
+    bound_chapter: Optional[BoundReference] = None
+    bound_requires: Optional[list[BoundReference]] = Field(
+        default=None, max_length=MAX_EVENT_REQUIREMENTS
+    )
 
     @model_validator(mode="after")
     def _check_revision(self) -> "StoryChange":
@@ -379,6 +420,19 @@ class StoryChange(StoryChangeDraft):
             raise ValueError(
                 "baseRevision is required for updates and only for updates"
             )
+        if (self.fields.chapter is None) != (self.bound_chapter is None):
+            raise ValueError("boundChapter is required with chapter and only with it")
+        if self.fields.requires is None:
+            if self.bound_requires is not None:
+                raise ValueError(
+                    "boundRequires is only for a change that sets requires"
+                )
+        elif self.bound_requires is None or len(self.bound_requires) != len(
+            self.fields.requires
+        ):
+            raise ValueError("boundRequires must resolve every entry of requires")
+        elif any(ref.id is None for ref in self.bound_requires):
+            raise ValueError("every bound requirement names an event")
         return self
 
 
