@@ -129,8 +129,7 @@ name from the roster, or by an id a tool returned; never invent an id, and
 never show an id to the writer. Include only the fields that change and keep
 each one concise. An event may
 only reference characters and places that already exist. An event's chapter is
-a chapter title or number, or "unassigned"; its requires is the full list of
-events it needs first, by name, from any plot line. You cannot delete
+a chapter title or number, or "unassigned". You cannot delete
 anything. Call propose_story_changes alone, never alongside another tool. A
 proposal never applies itself: the writer reviews it, so never say a change was
 made unless a later message reports it was saved."""

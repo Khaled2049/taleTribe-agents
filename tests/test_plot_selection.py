@@ -20,7 +20,7 @@ CHAPTERS = [
 ]
 
 
-def _event(event_id, name, chapter=None, position=None, requires=()):
+def _event(event_id, name, chapter=None, position=None):
     numbers = {c["id"]: n for n, c in enumerate(CHAPTERS, start=1)}
     return {
         "id": event_id,
@@ -33,9 +33,6 @@ def _event(event_id, name, chapter=None, position=None, requires=()):
         ),
         "chapterPosition": position,
         "status": "planned",
-        "tension_level": 6,
-        "requiresIds": list(requires),
-        "requires": [],
     }
 
 
@@ -48,7 +45,7 @@ def _story(extra_lines=0):
             "description": "Mara turns the crew.",
             "updatedAt": 1,
             "events": [
-                _event("e-cross", "Crossing", "c2", 2, requires=["e-letter"]),
+                _event("e-cross", "Crossing", "c2", 2),
                 _event("e-confront", "Mara confronts the captain", "c2", 1),
                 _event("e-harbour", "Leaving port", "c1", 1),
                 _event("e-pass", "Ambush in the pass", "c3", 1),
@@ -89,13 +86,12 @@ def test_active_chapter_plan_survives_many_plot_lines():
     assert lines["kind"] == "plot_lines" and not lines["with_events"]
     assert len(lines["plots"]) == ENTITY_CONTEXT_LIMIT
     # Lines already shown lead, so the active line's description is never lost.
-    assert [p["name"] for p in lines["plots"][:2]] == ["The Mutiny", "Letters"]
+    assert lines["plots"][0]["name"] == "The Mutiny"
 
 
-def test_prerequisites_from_another_plot_line_are_included():
+def test_neighbouring_chapters_are_included_once():
     sections = select_plot_context(_story(), "c2")
     kinds = {s["kind"]: s for s in sections}
-    assert _names(kinds["prerequisites"]) == ["Finds the letter"]
     assert _names(kinds["previous_chapter"]) == ["Leaving port"]
     assert _names(kinds["next_chapter"]) == ["Ambush in the pass"]
     shown = [name for s in sections if "events" in s for name in _names(s)]
@@ -128,9 +124,9 @@ def test_without_a_known_chapter_the_prompt_lists_plot_lines_with_events():
 def test_prompt_and_enhance_plan_render_the_chapter():
     prompt = format_context_for_prompt(_story(), "c2")
     assert "=== PLAN FOR THIS CHAPTER (2 · The Ford) ===" in prompt
-    assert "Plot line: The Mutiny · Status: planned · Tension: 6/10" in prompt
+    assert "Plot line: The Mutiny · Status: planned" in prompt
 
     plan = format_chapter_plan(_story(), "c2")
     assert plan.startswith("Planned for this chapter (2 · The Ford):")
-    assert "Finds the letter" in plan and "Ambush in the pass" not in plan
+    assert "Crossing" in plan and "Ambush in the pass" not in plan
     assert format_chapter_plan(_story(), None) == ""

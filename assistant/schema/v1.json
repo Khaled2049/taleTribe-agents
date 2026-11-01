@@ -41,8 +41,7 @@
     "entityNameChars": 200,
     "entityShortChars": 100,
     "entityProseChars": 4000,
-    "eventCharacters": 20,
-    "eventRequirements": 20
+    "eventCharacters": 20
   },
   "capabilities": {
     "preamble": "I read this story and answer questions about it. Here is what I can do.",
@@ -718,7 +717,7 @@
         },
         "StoryChange": {
           "additionalProperties": false,
-          "description": "A draft plus what the server bound: the target's revision and a label.\n\nAn event's ``chapter`` and ``requires`` are names as the model wrote them;\n``bound_chapter`` and ``bound_requires`` are what they resolved to, which is\nwhat the browser saves and shows.",
+          "description": "A draft plus what the server bound: the target's revision and a label.\n\nAn event's ``chapter`` is a name as the model wrote it; ``bound_chapter`` is\nwhat it resolved to, which is what the browser saves and shows.",
           "properties": {
             "operation": {
               "enum": [
@@ -796,22 +795,6 @@
                 }
               ],
               "default": null
-            },
-            "boundRequires": {
-              "anyOf": [
-                {
-                  "items": {
-                    "$ref": "#/$defs/BoundReference"
-                  },
-                  "maxItems": 20,
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Boundrequires"
             }
           },
           "required": [
@@ -1008,20 +991,6 @@
               "default": null,
               "title": "Content"
             },
-            "tensionLevel": {
-              "anyOf": [
-                {
-                  "maximum": 10,
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Tensionlevel"
-            },
             "pacing": {
               "anyOf": [
                 {
@@ -1134,25 +1103,6 @@
               "default": null,
               "description": "The chapter the event is planned for: its exact title, its number in reading order, or its id. \"unassigned\" removes it from its chapter.",
               "title": "Chapter"
-            },
-            "requires": {
-              "anyOf": [
-                {
-                  "items": {
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "maxItems": 20,
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "description": "Every event this one requires after the change, by exact name or id, from any plot line. This replaces the current list; [] clears it.",
-              "title": "Requires"
             }
           },
           "title": "StoryChangeFields",
@@ -1933,7 +1883,7 @@
         },
         "StoryChange": {
           "additionalProperties": false,
-          "description": "A draft plus what the server bound: the target's revision and a label.\n\nAn event's ``chapter`` and ``requires`` are names as the model wrote them;\n``bound_chapter`` and ``bound_requires`` are what they resolved to, which is\nwhat the browser saves and shows.",
+          "description": "A draft plus what the server bound: the target's revision and a label.\n\nAn event's ``chapter`` is a name as the model wrote it; ``bound_chapter`` is\nwhat it resolved to, which is what the browser saves and shows.",
           "properties": {
             "operation": {
               "enum": [
@@ -2011,22 +1961,6 @@
                 }
               ],
               "default": null
-            },
-            "boundRequires": {
-              "anyOf": [
-                {
-                  "items": {
-                    "$ref": "#/$defs/BoundReference"
-                  },
-                  "maxItems": 20,
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Boundrequires"
             }
           },
           "required": [
@@ -2223,20 +2157,6 @@
               "default": null,
               "title": "Content"
             },
-            "tensionLevel": {
-              "anyOf": [
-                {
-                  "maximum": 10,
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Tensionlevel"
-            },
             "pacing": {
               "anyOf": [
                 {
@@ -2349,25 +2269,6 @@
               "default": null,
               "description": "The chapter the event is planned for: its exact title, its number in reading order, or its id. \"unassigned\" removes it from its chapter.",
               "title": "Chapter"
-            },
-            "requires": {
-              "anyOf": [
-                {
-                  "items": {
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "maxItems": 20,
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "description": "Every event this one requires after the change, by exact name or id, from any plot line. This replaces the current list; [] clears it.",
-              "title": "Requires"
             }
           },
           "title": "StoryChangeFields",
@@ -3794,7 +3695,7 @@
           },
           "StoryChange": {
             "additionalProperties": false,
-            "description": "A draft plus what the server bound: the target's revision and a label.\n\nAn event's ``chapter`` and ``requires`` are names as the model wrote them;\n``bound_chapter`` and ``bound_requires`` are what they resolved to, which is\nwhat the browser saves and shows.",
+            "description": "A draft plus what the server bound: the target's revision and a label.\n\nAn event's ``chapter`` is a name as the model wrote it; ``bound_chapter`` is\nwhat it resolved to, which is what the browser saves and shows.",
             "properties": {
               "operation": {
                 "enum": [
@@ -3872,22 +3773,6 @@
                   }
                 ],
                 "default": null
-              },
-              "boundRequires": {
-                "anyOf": [
-                  {
-                    "items": {
-                      "$ref": "#/$defs/BoundReference"
-                    },
-                    "maxItems": 20,
-                    "type": "array"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Boundrequires"
               }
             },
             "required": [
@@ -4084,20 +3969,6 @@
                 "default": null,
                 "title": "Content"
               },
-              "tensionLevel": {
-                "anyOf": [
-                  {
-                    "maximum": 10,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Tensionlevel"
-              },
               "pacing": {
                 "anyOf": [
                   {
@@ -4210,25 +4081,6 @@
                 "default": null,
                 "description": "The chapter the event is planned for: its exact title, its number in reading order, or its id. \"unassigned\" removes it from its chapter.",
                 "title": "Chapter"
-              },
-              "requires": {
-                "anyOf": [
-                  {
-                    "items": {
-                      "maxLength": 200,
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "maxItems": 20,
-                    "type": "array"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "Every event this one requires after the change, by exact name or id, from any plot line. This replaces the current list; [] clears it.",
-                "title": "Requires"
               }
             },
             "title": "StoryChangeFields",

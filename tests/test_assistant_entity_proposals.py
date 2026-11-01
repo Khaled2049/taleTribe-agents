@@ -105,7 +105,7 @@ def proposal_round(*changes, call_id="call-1"):
             "operation": "event.update",
             "entityId": "e",
             "plotLineId": "p",
-            "fields": {"tensionLevel": 11},
+            "fields": {"pacing": "glacial"},
         },
         {
             "operation": "event.update",
@@ -181,7 +181,7 @@ async def test_binding_an_event_update_uses_the_events_own_revision(story):
             "operation": "event.update",
             "entityId": "event-1",
             "plotLineId": "plot-1",
-            "fields": {"tensionLevel": 9, "characterIds": ["char-1"]},
+            "fields": {"pacing": "fast", "characterIds": ["char-1"]},
         }
     )
     assert (bound.changes[0].base_revision, bound.changes[0].label) == (7, "The storm")
@@ -526,7 +526,7 @@ async def test_an_event_update_can_name_the_plot_line_and_event(story):
             "operation": "event.update",
             "entityId": "the storm",
             "plotLineId": "The Wreck",
-            "fields": {"tensionLevel": 9},
+            "fields": {"pacing": "fast"},
         }
     )
     change = bound.changes[0]
@@ -541,7 +541,7 @@ async def test_an_event_finds_its_own_plot_line_when_the_one_given_is_wrong(stor
             "operation": "event.update",
             "entityId": "event-1",
             "plotLineId": "event-1",
-            "fields": {"tensionLevel": 9},
+            "fields": {"pacing": "fast"},
         }
     )
     assert bound.changes[0].plot_line_id == "plot-1"
@@ -574,12 +574,12 @@ async def test_an_ambiguous_name_asks_for_an_id(story):
         await bind({**UPDATE_MINA, "entityId": "Mina"})
 
 
-# -- chapters and requirements ---------------------------------------------
+# -- chapters ----------------------------------------------------------------
 
 
 @pytest.fixture
 def planned(story):
-    """Two chapters and a second plot line, so requirements can cross lines."""
+    """Two chapters and a second plot line."""
     story.seed_chapter("story-1", "ch-harbour", title="The Harbour", position=1.0)
     story.seed_chapter("story-1", "ch-ford", title="The Ford", position=2.0)
     story.seed_entity(
@@ -589,12 +589,7 @@ def planned(story):
         name="The Letters",
         events=[
             {"id": "event-letter", "name": "Finds the letter", "revision": 2},
-            {
-                "id": "event-reply",
-                "name": "Sends a reply",
-                "revision": 3,
-                "dependencies": [{"eventId": "event-1", "plotLineId": "plot-1"}],
-            },
+            {"id": "event-reply", "name": "Sends a reply", "revision": 3},
         ],
     )
     return story
@@ -639,89 +634,23 @@ async def test_an_ambiguous_chapter_title_asks_for_its_number(planned):
         await bind(update_storm(chapter="The Ford"))
 
 
-async def test_requirements_bind_by_name_across_plot_lines(planned):
-    (change,) = (await bind(update_storm(requires=["finds the letter"]))).changes
-    assert [(r.id, r.label) for r in change.bound_requires] == [
-        ("event-letter", "Finds the letter")
-    ]
-    (cleared,) = (await bind(update_storm(requires=[]))).changes
-    assert cleared.bound_requires == []
-
-
-async def test_a_new_event_can_be_planned_with_chapter_and_requirements(planned):
+async def test_a_new_event_can_be_planned_into_a_chapter(planned):
     (change,) = (
         await bind(
             {
                 "operation": "event.create",
                 "plotLineId": "The Letters",
-                "fields": {
-                    "name": "Burns the letter",
-                    "chapter": "2",
-                    "requires": ["Finds the letter", "event-1"],
-                },
+                "fields": {"name": "Burns the letter", "chapter": "2"},
             }
         )
     ).changes
     assert change.bound_chapter.id == "ch-ford"
-    assert [r.id for r in change.bound_requires] == ["event-letter", "event-1"]
-
-
-@pytest.mark.parametrize(
-    "requires, fragment",
-    [
-        (["Sends a reply"], "would make a loop"),
-        (["The storm"], "cannot require itself"),
-        (["Finds the letter", "event-letter"], "listed as a requirement twice"),
-        (["The flood"], "No event is called 'The flood'"),
-    ],
-)
-async def test_bad_requirements_are_rejected_at_bind_time(planned, requires, fragment):
-    with pytest.raises(ProposalRejected, match=fragment):
-        await bind(update_storm(requires=requires))
-
-
-async def test_an_ambiguous_requirement_names_the_plot_lines(planned):
-    planned.seed_entity(
-        "story-1",
-        "plots",
-        "plot-3",
-        name="Echoes",
-        events=[{"id": "event-echo", "name": "Finds the letter", "revision": 1}],
-    )
-    with pytest.raises(ProposalRejected, match="The Letters, Echoes"):
-        await bind(update_storm(requires=["Finds the letter"]))
-
-
-async def test_two_changes_cannot_form_a_loop_between_them(planned):
-    with pytest.raises(ProposalRejected, match="would make a loop"):
-        await bind(
-            {
-                "operation": "event.update",
-                "entityId": "Finds the letter",
-                "plotLineId": "The Letters",
-                "fields": {"requires": ["The storm"]},
-            },
-            update_storm(requires=["Finds the letter"]),
-        )
-
-
-async def test_an_event_created_in_the_proposal_cannot_be_required_yet(planned):
-    with pytest.raises(ProposalRejected, match="created in this same proposal"):
-        await bind(
-            {
-                "operation": "event.create",
-                "plotLineId": "The Letters",
-                "fields": {"name": "Burns the letter"},
-            },
-            update_storm(requires=["Burns the letter"]),
-        )
 
 
 def test_a_bound_change_must_resolve_what_it_sets():
     base = {**update_storm(chapter="2"), "baseRevision": 1, "label": "The storm"}
     with pytest.raises(ValidationError, match="boundChapter"):
         StoryChange.model_validate(base)
-    with pytest.raises(ValidationError, match="boundRequires"):
-        StoryChange.model_validate(
-            {**update_storm(requires=["x"]), "baseRevision": 1, "label": "The storm"}
-        )
+    # Prerequisites were removed; the model can no longer set them.
+    with pytest.raises(ValidationError):
+        StoryChangeDraft.model_validate(update_storm(requires=["The storm"]))

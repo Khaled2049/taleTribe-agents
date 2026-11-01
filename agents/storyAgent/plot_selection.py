@@ -5,9 +5,8 @@ lines used to lose the very events planned for the chapter being written. With
 an active chapter, selection starts from that chapter and works outwards:
 
 1. the chapter's own planned events, always, in chapter order;
-2. the events those require, from any plot line or chapter;
-3. the events planned for the previous and next chapter;
-4. plot lines by name and description, those already shown first, then by
+2. the events planned for the previous and next chapter;
+3. plot lines by name and description, those already shown first, then by
    most recent update.
 
 Pure and deterministic: equal input gives equal output, with ties broken by id.
@@ -66,22 +65,6 @@ def _in_chapter_order(events: List[Event]) -> List[Event]:
     return sorted(events, key=key)
 
 
-def _in_reading_order(events: List[Event]) -> List[Event]:
-    """Assigned events by chapter then chapter order; unassigned ones last."""
-
-    def key(event: Event) -> Tuple[float, float, float, str]:
-        chapter = _number(event.get("chapterNumber"))
-        position = _number(event.get("chapterPosition"))
-        return (
-            chapter if chapter is not None else float("inf"),
-            position if position is not None else float("inf"),
-            _number(event.get("orderIndex")) or 0.0,
-            str(event.get("id") or ""),
-        )
-
-    return sorted(events, key=key)
-
-
 def select_plot_context(
     context: Dict[str, Any], chapter_id: Optional[str]
 ) -> List[Dict[str, Any]]:
@@ -89,8 +72,8 @@ def select_plot_context(
 
     Each section is ``{"kind": ..., ...}``:
 
-    - ``{"kind": "chapter_plan" | "prerequisites" | "previous_chapter" |
-      "next_chapter", "chapter": {...} | None, "events": [(plot, event), ...]}``
+    - ``{"kind": "chapter_plan" | "previous_chapter" | "next_chapter",
+      "chapter": {...}, "events": [(plot, event), ...]}``
     - ``{"kind": "plot_lines", "plots": [plot, ...], "with_events": bool,
       "omitted": int}``
 
@@ -120,14 +103,12 @@ def select_plot_context(
         ]
 
     line_of: Dict[str, Plot] = {}
-    by_id: Dict[str, Event] = {}
     by_chapter: Dict[str, List[Event]] = {}
     for plot in plots:
         for event in plot.get("events") or []:
             if not isinstance(event, dict) or not event.get("id"):
                 continue
             event_id = str(event["id"])
-            by_id[event_id] = event
             line_of[event_id] = plot
             if event.get("chapterId"):
                 by_chapter.setdefault(str(event["chapterId"]), []).append(event)
@@ -150,18 +131,6 @@ def select_plot_context(
     active = chapters[index]
     planned = take(_in_chapter_order(by_chapter.get(str(active["id"]), [])), None)
     sections.append({"kind": "chapter_plan", "chapter": active, "events": planned})
-
-    required = [
-        by_id[req]
-        for _, event in planned
-        for req in event.get("requiresIds") or []
-        if req in by_id
-    ]
-    prerequisites = take(_in_reading_order(required), ENTITY_CONTEXT_LIMIT)
-    if prerequisites:
-        sections.append(
-            {"kind": "prerequisites", "chapter": None, "events": prerequisites}
-        )
 
     for kind, neighbour in (
         ("previous_chapter", index - 1),

@@ -68,16 +68,10 @@ class PostgresStoryContext:
                 story_id,
             )
             events = await conn.fetch(
-                "SELECT e.id,e.plot_line_id,e.name,e.content,e.tension_level,e.pacing,e.story_beat,e.emotional_tone,e.notes,e.position,e.chapter_id,e.chapter_position,e.status,e.revision FROM plot_events e JOIN plot_lines l ON l.id=e.plot_line_id WHERE l.story_id=$1 ORDER BY e.position",
-                story_id,
-            )
-            links = await conn.fetch(
-                "SELECT d.plot_event_id,d.depends_on_event_id FROM plot_event_dependencies d JOIN plot_events e ON e.id=d.plot_event_id JOIN plot_lines l ON l.id=e.plot_line_id WHERE l.story_id=$1 ORDER BY d.plot_event_id,d.depends_on_event_id",
+                "SELECT e.id,e.plot_line_id,e.name,e.content,e.pacing,e.story_beat,e.emotional_tone,e.notes,e.position,e.chapter_id,e.chapter_position,e.status,e.revision FROM plot_events e JOIN plot_lines l ON l.id=e.plot_line_id WHERE l.story_id=$1 ORDER BY e.position",
                 story_id,
             )
         chapter_labels = _chapter_labels(chapters)
-        requires = _requirement_names(events, links)
-        required_ids = _requirement_ids(events, links)
         by_line: dict[str, list[dict[str, Any]]] = {}
         for event in events:
             data = _record(event)
@@ -87,8 +81,6 @@ class PostgresStoryContext:
             data["chapterPosition"] = (
                 float(chapter_position) if chapter_position is not None else None
             )
-            data["requires"] = requires.get(str(event["id"]), [])
-            data["requiresIds"] = required_ids.get(str(event["id"]), [])
             by_line.setdefault(str(event["plot_line_id"]), []).append(data)
         return {
             "story": _camel(_record(story)),
@@ -520,28 +512,6 @@ def _chapter_labels(chapters: Any) -> dict[str, tuple[int, str]]:
         str(row["id"]): (number, row["title"] or "")
         for number, row in enumerate(chapters, start=1)
     }
-
-
-def _requirement_names(events: Any, links: Any) -> dict[str, list[str]]:
-    """Event id -> names of the events it requires (its prerequisites)."""
-    names = {str(e["id"]): e["name"] or "Untitled event" for e in events}
-    out: dict[str, list[str]] = {}
-    for link in links:
-        target = names.get(str(link["depends_on_event_id"]))
-        if target:
-            out.setdefault(str(link["plot_event_id"]), []).append(target)
-    return out
-
-
-def _requirement_ids(events: Any, links: Any) -> dict[str, list[str]]:
-    """Event id -> ids of the events it requires, skipping links to missing events."""
-    known = {str(e["id"]) for e in events}
-    out: dict[str, list[str]] = {}
-    for link in links:
-        target = str(link["depends_on_event_id"])
-        if target in known:
-            out.setdefault(str(link["plot_event_id"]), []).append(target)
-    return out
 
 
 def _event_chapter(

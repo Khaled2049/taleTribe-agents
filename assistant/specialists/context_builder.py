@@ -17,7 +17,6 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
-from assistant.plot_links import name_plot_requirements
 from assistant.executors import _encode, _fit
 from assistant.specialists.base import Specialist
 from assistant.tools import FocusRef, ToolContext
@@ -40,7 +39,6 @@ _DROPPED = frozenset(
         "storyId",
         "createdAt",
         "updatedAt",
-        "dependents",
         "revision",
     }
 )
@@ -137,8 +135,6 @@ class _Story:
                 self._ctx.user_id, self._ctx.story_id, collection
             )
             rows = [row for row in rows if isinstance(row, dict)]
-            if collection == "plots":
-                rows = name_plot_requirements(rows)
             self._rosters[collection] = rows
         return self._rosters[collection]
 

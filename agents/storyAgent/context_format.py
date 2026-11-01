@@ -85,14 +85,13 @@ def _chapter_order(chapter: Dict[str, Any]) -> float:
 
 
 _SECTION_TITLES = {
-    "prerequisites": "=== WHAT THIS CHAPTER'S EVENTS REQUIRE ===",
     "previous_chapter": "=== PLANNED FOR THE PREVIOUS CHAPTER ({label}) ===",
     "next_chapter": "=== PLANNED FOR THE NEXT CHAPTER ({label}) ===",
 }
 
 
 def _plan_event(plot: Dict[str, Any], event: Dict[str, Any]) -> str:
-    """One planned event with its plot line, status, tension and beat."""
+    """One planned event with its plot line, status and beat."""
     name = sanitize_for_prompt(event.get("name") or "Untitled event", 200)
     line = f"- {name}"
     if event.get("content"):
@@ -103,16 +102,10 @@ def _plan_event(plot: Dict[str, Any], event: Dict[str, Any]) -> str:
     ]
     if event.get("status"):
         details.append(f"Status: {sanitize_for_prompt(event.get('status'), 40)}")
-    tension = event.get("tension_level", event.get("tensionLevel"))
-    if isinstance(tension, int) and not isinstance(tension, bool) and tension > 0:
-        details.append(f"Tension: {tension}/10")
     beat = event.get("story_beat") or event.get("storyBeat")
     if beat:
         details.append(f"Beat: {sanitize_for_prompt(beat, 100)}")
     line += "\n  " + " · ".join(details)
-    requires = [sanitize_for_prompt(str(n), 200) for n in event.get("requires") or []]
-    if requires:
-        line += f"\n  Requires: {'; '.join(requires)}"
     return line
 
 
@@ -129,12 +122,6 @@ def _full_plot_line(plot: Dict[str, Any]) -> str:
             if en or ec:
                 line = sanitize_for_prompt(f"{en}: {ec}".strip(), 600)
                 info += f"\n  Event - {line}{_event_chapter_label(ev)}"
-                requires = [
-                    sanitize_for_prompt(str(name), 200)
-                    for name in ev.get("requires") or []
-                ]
-                if requires:
-                    info += f"\n    Requires: {'; '.join(requires)}"
     return info
 
 
@@ -183,28 +170,24 @@ def _format_plot_sections(
 
 
 def format_chapter_plan(context: Dict[str, Any], chapter_id: Optional[str]) -> str:
-    """Just the active chapter's plan and its prerequisites, for short prompts.
+    """Just the active chapter's plan, for short prompts.
 
     Empty when there is no such chapter or nothing is planned for it."""
-    sections = [
-        s
-        for s in select_plot_context(context, chapter_id)
-        if s["kind"] in ("chapter_plan", "prerequisites") and s["events"]
-    ]
-    if not sections:
+    plan = next(
+        (
+            s
+            for s in select_plot_context(context, chapter_id)
+            if s["kind"] == "chapter_plan" and s["events"]
+        ),
+        None,
+    )
+    if plan is None:
         return ""
-    numbers = chapter_numbers(context)
-    parts: List[str] = []
-    for section in sections:
-        if section["kind"] == "chapter_plan":
-            chapter = section["chapter"]
-            label = sanitize_for_prompt(
-                chapter_label(chapter, numbers.get(str(chapter.get("id")), 0)), 260
-            )
-            parts.append(f"Planned for this chapter ({label}):")
-        else:
-            parts.append("What those events require:")
-        parts.extend(_plan_event(plot, event) for plot, event in section["events"])
+    chapter = plan["chapter"]
+    number = chapter_numbers(context).get(str(chapter.get("id")), 0)
+    label = sanitize_for_prompt(chapter_label(chapter, number), 260)
+    parts = [f"Planned for this chapter ({label}):"]
+    parts.extend(_plan_event(plot, event) for plot, event in plan["events"])
     return "\n".join(parts)
 
 
