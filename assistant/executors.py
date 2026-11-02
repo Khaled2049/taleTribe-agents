@@ -42,8 +42,8 @@ from typing import Any, Awaitable, Callable, Optional
 
 from pydantic import BaseModel
 
-from assistant.plot_links import chapter_labels, label_event_chapters
 from assistant.errors import ErrorCode, safe_message
+from assistant.plot_links import chapter_labels, label_event_chapters
 from assistant.protocol import EditorContext, SourcePart
 from assistant.tools import (
     GetStoryEntityArgs,

@@ -117,7 +117,7 @@ def select_plot_context(
     sections: List[Dict[str, Any]] = []
 
     def take(events: List[Event], limit: Optional[int]) -> List[Tuple[Plot, Event]]:
-        picked = []
+        picked: List[Tuple[Plot, Event]] = []
         for event in events:
             event_id = str(event["id"])
             if event_id in shown:
