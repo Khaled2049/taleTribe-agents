@@ -140,8 +140,17 @@ async def test_stale_reference_is_ignored(monkeypatch):
     assert context["referenceExcerpts"].count("Quiet voices") == 1
 
 
+CLAIM = "6f1d7a52-2b7c-4c5e-9b4e-2f0c8a1d3e10"
+PROPOSAL = '{"operation":"add","text":"Let emotional shifts follow actions rather than explanation.","reason":"Repeated in both saved chapters","evidence_indices":[0,1,2]}'
+
+
 @pytest.mark.asyncio
-async def test_learning_pass_uses_saved_evidence_and_writer_billing_choice(monkeypatch):
+@pytest.mark.parametrize(
+    "reply", [PROPOSAL, "```json\n" + PROPOSAL + "\n```"], ids=["plain", "fenced"]
+)
+async def test_learning_pass_uses_saved_evidence_and_writer_billing_choice(
+    monkeypatch, reply
+):
     class LearningClient:
         def __init__(self):
             self.saved = []
@@ -175,7 +184,7 @@ async def test_learning_pass_uses_saved_evidence_and_writer_billing_choice(monke
             assert _usage_feature.get() == "voice_analysis"
             assert _byok_config.get()["model"] == "gemini-2.5-flash"
             assert _firebase_token.get() == "firebase-token"
-            return '{"operation":"add","text":"Let emotional shifts follow actions rather than explanation.","reason":"Repeated in both saved chapters","evidence_indices":[0,1,2]}'
+            return reply
 
     client = LearningClient()
     monkeypatch.setattr(story_data, "client", lambda: client)
@@ -188,6 +197,7 @@ async def test_learning_pass_uses_saved_evidence_and_writer_billing_choice(monke
             "chapter_id": "a",
             "source_revision": 4,
         },
+        CLAIM,
         {"provider": "gemini", "api_key": "writer-key", "model": "gemini-2.5-flash"},
         "firebase-token",
     )
@@ -195,3 +205,88 @@ async def test_learning_pass_uses_saved_evidence_and_writer_billing_choice(monke
     assert client.saved[0][0] == 2
     assert client.saved[0][1]["source"] == "passive"
     assert len(client.saved[0][1]["evidence"]) == 3
+
+
+class ClaimPool:
+    """Grants one claim per story and lets each claim be spent once."""
+
+    def __init__(self):
+        self.claims = {}
+
+    async def fetchrow(self, query, story_id, *args):
+        if query.lstrip().startswith("INSERT"):
+            if story_id in self.claims:
+                return None
+            self.claims[story_id] = CLAIM
+            return {"claim_id": CLAIM}
+        if self.claims.get(story_id) == str(args[0]):
+            self.claims[story_id] = None
+            return {"story_id": story_id}
+        return None
+
+
+class NeverCalledProvider:
+    async def generate_content_async(self, *_args, **_kwargs):
+        raise AssertionError("model must not run without a live claim")
+
+
+@pytest.mark.asyncio
+async def test_only_one_concurrent_preflight_gets_a_claim(monkeypatch):
+    worker = VoiceLearningWorker(ClaimPool(), NeverCalledProvider())
+
+    async def material(_job):
+        return {"notes": []}, []
+
+    monkeypatch.setattr(worker, "_material", material)
+    job = {"story_id": "story"}
+    assert await worker.claim(job) == CLAIM
+    assert await worker.claim(job) is None
+
+
+@pytest.mark.asyncio
+async def test_pass_without_a_live_claim_skips_before_any_work(monkeypatch):
+    pool = ClaimPool()
+    pool.claims["story"] = CLAIM
+    worker = VoiceLearningWorker(pool, NeverCalledProvider())
+
+    async def material(_job):
+        raise AssertionError("no story-data reads without a claim")
+
+    monkeypatch.setattr(worker, "_material", material)
+    monkeypatch.setattr(story_data, "client", lambda: None)
+    job = {"owner_id": "writer", "story_id": "story"}
+    assert await worker._process(job, "not-a-uuid") == "skipped"
+    assert (
+        await worker._process(job, "0b1e7f3c-0000-4000-8000-000000000000") == "skipped"
+    )
+    pool.claims["story"] = None  # already spent by an earlier pass
+    assert await worker._process(job, CLAIM) == "skipped"
+
+
+@pytest.mark.asyncio
+async def test_reference_chapters_are_fetched_concurrently():
+    import asyncio
+
+    started = []
+    release = asyncio.Event()
+
+    class SlowClient:
+        async def get_voice_profile(self, uid, story_id):
+            return {
+                "references": [
+                    {"chapterId": c, "sourceRevision": 1, "start": 0, "end": 20}
+                    for c in ("a", "b", "c")
+                ]
+            }
+
+        async def get_chapter(self, uid, story_id, chapter_id):
+            started.append(chapter_id)
+            if len(started) == 3:
+                release.set()
+            # Sequential fetches would wait here forever for the other two.
+            await asyncio.wait_for(release.wait(), timeout=1)
+            return {"revision": 1, "content": "<p>Quiet voices carry.</p>"}
+
+    context = await load_voice_context(SlowClient(), "writer", "story")
+    assert sorted(started) == ["a", "b", "c"]
+    assert context["referenceExcerpts"].count("Quiet voices") == 3

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from html.parser import HTMLParser
 from typing import Any
 
@@ -36,36 +37,45 @@ async def load_voice_context(
     references = profile.get("references") if isinstance(profile, dict) else None
     if not isinstance(references, list):
         return context or None
-    samples: list[str] = []
-    for ref in references[:3]:
-        if not isinstance(ref, dict):
-            continue
-        chapter_id = ref.get("chapterId")
-        try:
-            chapter = await client.get_chapter(uid, story_id, chapter_id)
-            if int(chapter.get("revision")) != int(ref.get("sourceRevision")):
-                continue
-            content = chapter.get("content", "")
-            start, end = int(ref.get("start")), int(ref.get("end"))
-            if (
-                not isinstance(content, str)
-                or start < 0
-                or end <= start
-                or end - start > 1600
-                or end > len(content)
-            ):
-                continue
-            parser = _TextOnly()
-            parser.feed(content[start:end])
-            sample = sanitize_for_prompt(" ".join(parser.parts).strip(), 1000)
-            if sample:
-                samples.append(sample)
-        except Exception:
-            # The profile is still useful if one source was deleted or revised.
-            continue
+    refs = [ref for ref in references[:3] if isinstance(ref, dict)]
+    # Fetched concurrently: this runs on every next-line and enhance request.
+    chapters = await asyncio.gather(
+        *(client.get_chapter(uid, story_id, ref.get("chapterId")) for ref in refs),
+        return_exceptions=True,
+    )
+    samples = [
+        sample
+        for ref, chapter in zip(refs, chapters)
+        if (sample := _reference_sample(ref, chapter))
+    ]
     if samples:
         context["referenceExcerpts"] = sanitize_for_prompt("\n\n".join(samples), 3000)
     return context or None
+
+
+def _reference_sample(ref: dict[str, Any], chapter: Any) -> str:
+    """The excerpt's text, or "" when its chapter failed, moved on or is too short."""
+    # The profile is still useful if one source was deleted or revised.
+    if not isinstance(chapter, dict):
+        return ""
+    try:
+        if int(chapter.get("revision")) != int(ref.get("sourceRevision")):
+            return ""
+        start, end = int(ref.get("start")), int(ref.get("end"))
+    except (TypeError, ValueError):
+        return ""
+    content = chapter.get("content", "")
+    if (
+        not isinstance(content, str)
+        or start < 0
+        or end <= start
+        or end - start > 1600
+        or end > len(content)
+    ):
+        return ""
+    parser = _TextOnly()
+    parser.feed(content[start:end])
+    return sanitize_for_prompt(" ".join(parser.parts).strip(), 1000)
 
 
 POV_LABELS = {

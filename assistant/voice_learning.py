@@ -1,7 +1,7 @@
 """Conservative background learning from successfully saved chapter revisions.
 
-The queue is created by a story-data chapter trigger. This worker only claims
-jobs in PostgreSQL; it reads chapters and writes voice notes through story-data.
+The Function path starts each pass after a chapter save. Rate state lives in
+PostgreSQL; chapters are read and voice notes written through story-data.
 No raw passage or profile note is logged. A model proposes, and the checks here
 and in story-data decide whether anything may change.
 """
@@ -9,7 +9,6 @@ and in story-data decide whether anything may change.
 from __future__ import annotations
 
 import json
-import logging
 import re
 import uuid
 from dataclasses import dataclass
@@ -20,9 +19,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, ValidationError
 
 from agents.storyAgent.llm_provider import _byok_config, _firebase_token, _usage_feature
+from agents.storyAgent.tools.story_choices import _safe_json_parse
 from mcp_server import story_data
-
-logger = logging.getLogger(__name__)
 
 
 class _Text(HTMLParser):
@@ -125,47 +123,29 @@ class VoiceLearningWorker:
     def __init__(self, pool: Any, provider: Any) -> None:
         self.pool, self.provider = pool, provider
 
-    async def run_once(self) -> int:
-        if self.pool is None:
-            return 0
-        jobs = await self.pool.fetch("""WITH next AS (
-                 SELECT id FROM story_voice_learning_jobs WHERE processed_at IS NULL
-                   AND available_at <= now()
-                   AND (lease_expires_at IS NULL OR lease_expires_at < now())
-                   AND attempts < 3 ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 3
-               ) UPDATE story_voice_learning_jobs j
-               SET lease_expires_at=now()+interval '5 minutes', attempts=attempts+1
-               FROM next, stories s WHERE j.id=next.id AND s.id=j.story_id
-               RETURNING j.id,j.story_id,j.chapter_id,j.source_revision,s.owner_id""")
-        for job in jobs:
-            try:
-                await self._process(job)
-                await self.pool.execute(
-                    "UPDATE story_voice_learning_jobs SET processed_at=now(),lease_expires_at=NULL WHERE id=$1",
-                    job["id"],
-                )
-            except Exception:
-                # A transient API/model failure can retry. The log never holds text.
-                logger.exception(
-                    "voice_learning_job_failed", extra={"job_id": str(job["id"])}
-                )
-                await self.pool.execute(
-                    "UPDATE story_voice_learning_jobs SET lease_expires_at=NULL,available_at=now()+interval '30 minutes' WHERE id=$1",
-                    job["id"],
-                )
-        return len(jobs)
+    async def claim(self, job: Any) -> str | None:
+        """Cheap evidence check, then atomically take the story's rate slot.
 
-    async def eligible(self, job: Any) -> bool:
-        """Cheap preflight before a frontend request spends daily AI quota."""
+        Runs before the Function spends daily AI quota. Only one concurrent
+        caller gets a claim, and the pass itself runs only with that claim.
+        """
         if await self._material(job) is None:
-            return False
-        state = await self.pool.fetchrow(
-            "SELECT last_analyzed_at < now()-interval '30 minutes' AND "
-            "(day <> (now() AT TIME ZONE 'utc')::date OR pass_count < 3) AS allowed "
-            "FROM story_voice_learning_state WHERE story_id=$1",
+            return None
+        row = await self.pool.fetchrow(
+            """INSERT INTO story_voice_learning_state(story_id,last_analyzed_at,day,pass_count,claim_id)
+               VALUES($1,now(),(now() AT TIME ZONE 'utc')::date,1,gen_random_uuid())
+               ON CONFLICT(story_id) DO UPDATE SET
+                 last_analyzed_at=now(), day=(now() AT TIME ZONE 'utc')::date,
+                 pass_count=CASE WHEN story_voice_learning_state.day=(now() AT TIME ZONE 'utc')::date
+                   THEN story_voice_learning_state.pass_count+1 ELSE 1 END,
+                 claim_id=gen_random_uuid()
+               WHERE story_voice_learning_state.last_analyzed_at < now()-interval '30 minutes'
+                 AND (story_voice_learning_state.day <> (now() AT TIME ZONE 'utc')::date
+                   OR story_voice_learning_state.pass_count < 3)
+               RETURNING claim_id""",
             job["story_id"],
         )
-        return state is None or bool(state["allowed"])
+        return str(row["claim_id"]) if row else None
 
     async def _material(self, job: Any):
         uid, story_id, chapter_id = (
@@ -194,31 +174,29 @@ class VoiceLearningWorker:
     async def _process(
         self,
         job: Any,
+        claim_id: str,
         provider_config: dict | None = None,
         firebase_token: str | None = None,
     ) -> str:
         uid, story_id = str(job["owner_id"]), str(job["story_id"])
         client = story_data.client()
+        # Spend the claim first so it cannot run twice; quota is already paid.
+        try:
+            claim = uuid.UUID(claim_id)
+        except (TypeError, ValueError):
+            return "skipped"
+        taken = await self.pool.fetchrow(
+            "UPDATE story_voice_learning_state SET claim_id=NULL "
+            "WHERE story_id=$1 AND claim_id=$2 RETURNING story_id",
+            job["story_id"],
+            claim,
+        )
+        if taken is None:
+            return "skipped"
         material = await self._material(job)
         if material is None:
             return "skipped"
         profile, passages = material
-        # Cost and frequency are enforced durably before model inference.
-        allowed = await self.pool.fetchrow(
-            """INSERT INTO story_voice_learning_state(story_id,last_analyzed_at,day,pass_count)
-               VALUES($1,now(),(now() AT TIME ZONE 'utc')::date,1)
-               ON CONFLICT(story_id) DO UPDATE SET
-                 last_analyzed_at=now(), day=(now() AT TIME ZONE 'utc')::date,
-                 pass_count=CASE WHEN story_voice_learning_state.day=(now() AT TIME ZONE 'utc')::date
-                   THEN story_voice_learning_state.pass_count+1 ELSE 1 END
-               WHERE story_voice_learning_state.last_analyzed_at < now()-interval '30 minutes'
-                 AND (story_voice_learning_state.day <> (now() AT TIME ZONE 'utc')::date
-                   OR story_voice_learning_state.pass_count < 3)
-               RETURNING pass_count""",
-            job["story_id"],
-        )
-        if allowed is None:
-            return "skipped"
         notes = profile.get("notes") if isinstance(profile.get("notes"), list) else []
         prompt = (
             "Analyze repeated, story-wide prose patterns across three independent saved passages "
@@ -242,8 +220,9 @@ class VoiceLearningWorker:
             _usage_feature.reset(feature)
             _byok_config.reset(billing)
             _firebase_token.reset(identity)
+        # Models often wrap JSON in a markdown fence despite the prompt.
         try:
-            proposal = VoiceProposal.model_validate_json(raw)
+            proposal = VoiceProposal.model_validate(_safe_json_parse(raw or ""))
         except (ValidationError, ValueError):
             return "analyzed"
         if not validate_proposal(proposal, notes):

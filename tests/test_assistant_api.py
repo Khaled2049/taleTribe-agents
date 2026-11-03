@@ -108,20 +108,30 @@ def test_voice_learning_endpoint_checks_identity_and_forwards_byok():
             return_value={"id": body["storyId"], "ownerId": "u1"}
         )
         factory.return_value.close = AsyncMock()
-        worker.return_value.eligible = AsyncMock(return_value=True)
+        claim = "6f1d7a52-2b7c-4c5e-9b4e-2f0c8a1d3e10"
+        worker.return_value.claim = AsyncMock(return_value=claim)
         worker.return_value._process = AsyncMock(return_value="updated")
         assert api.post("/voice-learning/pass?preflight=true", json=body).json() == {
-            "eligible": True
+            "claim_id": claim
         }
         assert api.post("/voice-learning/pass", json=body).status_code == 401
+        no_claim = api.post(
+            "/voice-learning/pass",
+            json=body,
+            headers={"X-Firebase-Token": "firebase-token"},
+        )
+        assert no_claim.status_code == 400
+        worker.return_value._process.assert_not_awaited()
         response = api.post(
             "/voice-learning/pass",
             json={
                 **body,
+                "claim_id": claim,
+                # The Function canonicalizes a Claude key to "anthropic".
                 "provider_config": {
-                    "provider": "gemini",
+                    "provider": "anthropic",
                     "api_key": "writer-key",
-                    "model": "gemini-2.5-flash",
+                    "model": "claude-sonnet-4-6",
                 },
             },
             headers={"X-Firebase-Token": "firebase-token"},
@@ -129,13 +139,13 @@ def test_voice_learning_endpoint_checks_identity_and_forwards_byok():
         assert response.status_code == 200
         assert response.json() == {"status": "updated"}
         args = worker.return_value._process.call_args.args
-        assert args[1] == {
-            "provider": "gemini",
+        assert args[1] == claim
+        assert args[2] == {
+            "provider": "anthropic",
             "api_key": "writer-key",
-            "model": "gemini-2.5-flash",
+            "model": "claude-sonnet-4-6",
         }
-        assert args[2] == "firebase-token"
-        pool.execute.assert_awaited_once()
+        assert args[3] == "firebase-token"
 
 
 @pytest.mark.parametrize(
@@ -259,7 +269,7 @@ def test_byok_credentials_reach_the_provider_context():
             json={
                 **BODY,
                 "providerConfig": {
-                    "provider": "claude",
+                    "provider": "anthropic",
                     "apiKey": "user-supplied-key",
                     "model": "claude-sonnet-4-6",
                 },
@@ -271,7 +281,7 @@ def test_byok_credentials_reach_the_provider_context():
     assert provider.context == (
         {
             "user_id": "u1",
-            "provider": "claude",
+            "provider": "anthropic",
             "api_key": "user-supplied-key",
             "model": "claude-sonnet-4-6",
         },

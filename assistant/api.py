@@ -30,6 +30,8 @@ class VoiceLearningPass(StrictModel):
     story_id: str = Field(min_length=1, max_length=128)
     chapter_id: str = Field(min_length=1, max_length=128)
     source_revision: int = Field(ge=1)
+    # Returned by the preflight; the pass runs only with a live claim.
+    claim_id: str | None = Field(default=None, max_length=64)
     provider_config: ProviderConfig | None = None
 
 
@@ -78,12 +80,15 @@ def register_assistant(
             "source_revision": body.source_revision,
         }
         if preflight:
-            return {"eligible": await worker.eligible(job)}
+            return {"claim_id": await worker.claim(job)}
         if not request.headers.get("X-Firebase-Token", "").strip():
             raise HTTPException(401, "Firebase identity required")
+        if not body.claim_id:
+            raise HTTPException(400, "Learning claim required")
         config = body.provider_config
         result = await worker._process(
             job,
+            body.claim_id,
             (
                 {
                     "provider": config.provider,
@@ -94,12 +99,6 @@ def register_assistant(
                 else None
             ),
             request.headers.get("X-Firebase-Token", "").strip(),
-        )
-        await pool.execute(
-            "UPDATE story_voice_learning_jobs SET processed_at=now(),lease_expires_at=NULL "
-            "WHERE chapter_id=$1 AND source_revision=$2 AND processed_at IS NULL",
-            chapter_uuid,
-            body.source_revision,
         )
         return {"status": result}
 

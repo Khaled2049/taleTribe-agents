@@ -1788,7 +1788,7 @@
             "provider": {
               "enum": [
                 "gemini",
-                "claude",
+                "anthropic",
                 "openai"
               ],
               "title": "Provider",

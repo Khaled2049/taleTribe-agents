@@ -104,9 +104,6 @@ class Settings(BaseSettings):
     story_data_database_url: str = ""
     indexing_worker_enabled: bool = False
     indexing_worker_interval_seconds: float = 2.0
-    # Enabled explicitly during feature testing; production rollout is separate.
-    voice_learning_worker_enabled: bool = False
-    voice_learning_worker_interval_seconds: float = 15.0
 
     # story-data's HTTP API, which the MCP read tools go through. Separate from
     # story_data_database_url above: the indexing worker owns rows directly,
@@ -172,11 +169,6 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def check_production_fields(self) -> "Settings":
         if self.environment == "production":
-            if self.voice_learning_worker_enabled:
-                raise ValueError(
-                    "VOICE_LEARNING_WORKER_ENABLED is local-only; production learning "
-                    "requires the authenticated /voice-learning/pass route"
-                )
             if not self.agent_service_url.strip():
                 raise ValueError(
                     "AGENT_SERVICE_URL must be set when ENVIRONMENT=production "

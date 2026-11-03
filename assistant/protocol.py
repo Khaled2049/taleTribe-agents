@@ -510,7 +510,7 @@ class ProviderConfig(StrictModel):
     which bills the user's provider instead of platform credits.
     """
 
-    provider: Literal["gemini", "claude", "openai"]
+    provider: Literal["gemini", "anthropic", "openai"]
     api_key: str = Field(min_length=1, max_length=MAX_API_KEY_CHARS)
     model: Optional[str] = Field(default=None, min_length=1, max_length=MAX_ID_CHARS)
 
