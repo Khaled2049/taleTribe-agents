@@ -311,17 +311,36 @@ async def get_story_overview(
     return ToolResult(payload, truncated=truncated)
 
 
+async def _chapter_labels(runtime: ToolRuntime) -> dict[str, str]:
+    """Chapter id -> ``3 · The Ford`` for this story, for labelling plot events."""
+    chapters = await story_data.client().list_chapter_index(
+        runtime.ctx.user_id, runtime.ctx.story_id
+    )
+    return chapter_labels(chapters if isinstance(chapters, list) else [])
+
+
 async def list_story_entities(
     args: ListStoryEntitiesArgs, runtime: ToolRuntime
 ) -> ToolResult:
     collection = COLLECTION_BY_ENTITY_KIND[args.kind]
     page = await data.list_entities(
-        runtime.ctx.story_id, runtime.ctx.user_id, collection
+        runtime.ctx.story_id,
+        runtime.ctx.user_id,
+        collection,
+        with_events=args.kind == "plot",
     )
     # The schema's `limit` bounds what the model asked for; data.list_entities
     # applies its own, larger page cap. Report both truncations as one flag so a
     # partial list is never presented as a complete roster.
     items = page.items[: args.limit]
+    if any(item.get("events") for item in items):
+        labels = await _chapter_labels(runtime)
+        items = [
+            {**item, "events": label_event_chapters(item["events"], labels)}
+            if "events" in item
+            else item
+            for item in items
+        ]
     payload, clipped = _fit(
         {
             "kind": args.kind,
@@ -348,12 +367,8 @@ async def get_story_entity(
         return ToolResult(_not_found(args.kind, args.entity_id))
 
     if args.kind == "plot" and isinstance(entity.get("events"), list):
-        chapters = await story_data.client().list_chapter_index(
-            runtime.ctx.user_id, runtime.ctx.story_id
-        )
         entity["events"] = label_event_chapters(
-            entity["events"],
-            chapter_labels(chapters if isinstance(chapters, list) else []),
+            entity["events"], await _chapter_labels(runtime)
         )
 
     name = str(entity.get("name") or "Unnamed")

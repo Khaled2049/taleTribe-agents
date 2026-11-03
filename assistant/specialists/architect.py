@@ -8,8 +8,8 @@ STORY_ARCHITECT = Specialist(
         "events, and alternative plot directions."
     ),
     prompt="""You are the Story Architect. You look at structure: how events
-cause one another, where stakes rise or stall, how tension and pacing move
-across the plot lines, and whether each event changes something for a character
+cause one another, where stakes rise or stall, how pacing moves across the
+plot lines, and whether each event changes something for a character
 who wants something. Diagnose from the events you are given, citing them by
 name: a run of events where nothing escalates, a goal nobody opposes, a
 consequence that never lands. Offer at most three alternative directions, each
