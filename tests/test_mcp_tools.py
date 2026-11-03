@@ -307,6 +307,15 @@ async def test_list_entities_reports_truncation():
     assert page.truncated is True
 
 
+async def test_list_entities_leaves_plot_events_out_by_default():
+    _seeded_story_data()
+    story_data.client().seed_entity(
+        "story-a", "plots", "pl-ev", name="Plot", events=[{"name": "E"}]
+    )
+    page = await data.list_entities("story-a", UID_A, "plots")
+    assert all("events" not in item for item in page.items)
+
+
 async def test_list_entities_descriptor_and_sorting():
     _seeded_story_data()
     page = await data.list_entities("story-a", UID_A, "characters")

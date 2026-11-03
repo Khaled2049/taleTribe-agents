@@ -68,14 +68,19 @@ class PostgresStoryContext:
                 story_id,
             )
             events = await conn.fetch(
-                "SELECT e.id,e.plot_line_id,e.name,e.content,e.tension_level,e.pacing,e.story_beat,e.emotional_tone,e.notes,e.position,e.chapter_number,e.revision FROM plot_events e JOIN plot_lines l ON l.id=e.plot_line_id WHERE l.story_id=$1 ORDER BY e.position",
+                "SELECT e.id,e.plot_line_id,e.name,e.content,e.pacing,e.story_beat,e.emotional_tone,e.notes,e.position,e.chapter_id,e.chapter_position,e.status,e.revision FROM plot_events e JOIN plot_lines l ON l.id=e.plot_line_id WHERE l.story_id=$1 ORDER BY e.position",
                 story_id,
             )
+        chapter_labels = _chapter_labels(chapters)
         by_line: dict[str, list[dict[str, Any]]] = {}
         for event in events:
             data = _record(event)
             data["orderIndex"] = int(data.pop("position"))
-            data["chapterNumber"] = data.pop("chapter_number")
+            data.update(_event_chapter(data.pop("chapter_id"), chapter_labels))
+            chapter_position = data.pop("chapter_position")
+            data["chapterPosition"] = (
+                float(chapter_position) if chapter_position is not None else None
+            )
             by_line.setdefault(str(event["plot_line_id"]), []).append(data)
         return {
             "story": _camel(_record(story)),
@@ -88,7 +93,7 @@ class PostgresStoryContext:
             ],
         }
 
-    async def slim_context(self, story_id: str) -> str:
+    async def slim_context(self, story_id: str, chapter_id: str | None = None) -> str:
         """Fetch only the bounded roster used in an assistant system prompt.
 
         ``context`` intentionally loads complete chapter and entity prose for
@@ -119,6 +124,19 @@ class PostgresStoryContext:
                 "SELECT id,title FROM chapters WHERE story_id=$1 ORDER BY position LIMIT 12",
                 story_id,
             )
+            # Positions are unique per story, so the count is the chapter number.
+            current = (
+                await conn.fetchrow(
+                    """SELECT c.title,
+                              (SELECT count(*) FROM chapters o WHERE o.story_id=c.story_id AND o.position<=c.position) AS number,
+                              (SELECT count(*) FROM plot_events e WHERE e.chapter_id=c.id) AS planned
+                       FROM chapters c WHERE c.id=$2 AND c.story_id=$1""",
+                    story_id,
+                    chapter_id,
+                )
+                if chapter_id
+                else None
+            )
         return self.format_slim_context(
             {
                 "story": dict(story),
@@ -126,6 +144,7 @@ class PostgresStoryContext:
                 "places": [dict(row) for row in places],
                 "plots": [dict(row) for row in plots],
                 "chapters": [dict(row) for row in chapters],
+                "current_chapter": dict(current) if current else None,
             }
         )
 
@@ -200,6 +219,15 @@ class PostgresStoryContext:
             "Description: "
             + _bounded(story.get("description", ""), MAX_SLIM_DESCRIPTION_CHARS),
         ]
+        current = context.get("current_chapter")
+        if current:
+            title = _bounded(current.get("title") or "", MAX_SLIM_LABEL_CHARS)
+            label = (
+                f"{current['number']} · {title}" if title else str(current["number"])
+            )
+            planned = int(current.get("planned") or 0)
+            noun = "planned event" if planned == 1 else "planned events"
+            lines.append(f"Current chapter: {label}, {planned} {noun}.")
         for label, items in (
             ("Characters", context["characters"]),
             ("Places", context["places"]),
@@ -473,6 +501,29 @@ def _index_budget_limit() -> int:
     except ValueError:
         return 300
     return parsed if parsed > 0 else 300
+
+
+def _chapter_labels(chapters: Any) -> dict[str, tuple[int, str]]:
+    """Chapter id -> (1-based number in reading order, title).
+
+    ``chapters`` must already be in ``position`` order; the number is derived
+    from that order because no chapter number is stored."""
+    return {
+        str(row["id"]): (number, row["title"] or "")
+        for number, row in enumerate(chapters, start=1)
+    }
+
+
+def _event_chapter(
+    chapter_id: str | None, labels: dict[str, tuple[int, str]]
+) -> dict[str, Any]:
+    """The chapter fields an event carries in context; all None when unassigned."""
+    label = labels.get(chapter_id) if chapter_id else None
+    return {
+        "chapterId": chapter_id,
+        "chapterNumber": label[0] if label else None,
+        "chapterTitle": label[1] if label else None,
+    }
 
 
 def _record(row: asyncpg.Record) -> dict[str, Any]:

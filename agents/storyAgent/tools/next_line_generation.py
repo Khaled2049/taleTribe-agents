@@ -198,7 +198,7 @@ Respond ONLY with the JSON array containing the {NUMBER_OF_SUGGESTIONS} generate
                     "Previous chapters context length=%s", len(previous_chapters_text)
                 )
 
-        formatted_context = format_context_for_prompt(context)
+        formatted_context = format_context_for_prompt(context, chapter_id)
 
         # Build Micro Context
         prefix_text, suffix_text = self._slice_content(content, cursorPosition)

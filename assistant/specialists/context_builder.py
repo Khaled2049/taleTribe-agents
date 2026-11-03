@@ -39,7 +39,6 @@ _DROPPED = frozenset(
         "storyId",
         "createdAt",
         "updatedAt",
-        "dependents",
         "revision",
     }
 )
@@ -135,7 +134,8 @@ class _Story:
             rows = await self._client.list_entities(
                 self._ctx.user_id, self._ctx.story_id, collection
             )
-            self._rosters[collection] = [row for row in rows if isinstance(row, dict)]
+            rows = [row for row in rows if isinstance(row, dict)]
+            self._rosters[collection] = rows
         return self._rosters[collection]
 
     async def chapter_index(self) -> list[dict[str, Any]]:

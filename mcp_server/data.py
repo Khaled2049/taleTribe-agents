@@ -336,12 +336,17 @@ def _require_entity_type(entity_type: str) -> str:
     return entity_type
 
 
-async def list_entities(story_id: str, uid: str, entity_type: str) -> Page:
+async def list_entities(
+    story_id: str, uid: str, entity_type: str, *, with_events: bool = False
+) -> Page:
     """Entities for one story, alphabetical, capped at COLLECTION_FETCH_LIMIT.
 
     story-data orders characters and places by name and plot lines by creation
     time, so unlike the Firestore path a truncated page is a real prefix rather
     than an arbitrary slice. Sorted again here so all three kinds agree.
+
+    ``with_events`` adds each plot line's events (name, status, chapterId) in
+    plot-line order; the Assistant uses it, the MCP listing does not.
     """
     _require_entity_type(entity_type)
     await get_owned_story(story_id, uid)
@@ -354,13 +359,22 @@ async def list_entities(story_id: str, uid: str, entity_type: str) -> Page:
             descriptor = _truncate(record.get(field))
             if descriptor:
                 break
-        entities.append(
-            {
-                "entity_id": record.get("id"),
-                "name": _display_name(record),
-                "descriptor": descriptor,
-            }
-        )
+        entity = {
+            "entity_id": record.get("id"),
+            "name": _display_name(record),
+            "descriptor": descriptor,
+        }
+        if with_events and entity_type == "plots":
+            entity["events"] = [
+                {
+                    "name": _display_name(event),
+                    "status": event.get("status"),
+                    "chapterId": event.get("chapterId"),
+                }
+                for event in record.get("events") or []
+                if isinstance(event, dict)
+            ]
+        entities.append(entity)
     entities.sort(key=lambda e: e["name"].lower())
     return Page(entities, truncated)
 

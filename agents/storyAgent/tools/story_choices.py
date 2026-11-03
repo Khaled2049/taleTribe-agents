@@ -182,7 +182,7 @@ class StoryChoicesTool:
             story_id: story-data (PostgreSQL) story ID
             mode: "opening", "continuation", or "ending"
             current_content: HTML content already in the editor (empty for opening)
-            chapter_id: Optional chapter document ID (reserved for future chapter-scoped context)
+            chapter_id: Optional chapter id; its planned events lead the plot context
             turn_count: How many choices the user has selected so far (used for arc guidance)
 
         Returns:
@@ -207,7 +207,7 @@ class StoryChoicesTool:
         if context_override is None:
             raise ValueError("story context is required")
         context = context_override
-        formatted_context = format_context_for_prompt(context)
+        formatted_context = format_context_for_prompt(context, chapter_id)
         plain_text = _strip_html(current_content) if current_content else ""
 
         if mode == "opening":

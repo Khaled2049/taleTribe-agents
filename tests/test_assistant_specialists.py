@@ -120,7 +120,6 @@ async def test_large_context_keeps_focused_event_chapter_and_review(story):
             "content": "Background action. " * 200,
             "characterIds": ["char-1"],
             "orderIndex": n,
-            "tensionLevel": 5,
             "pacing": "moderate",
             "storyBeat": "rising_action",
         }

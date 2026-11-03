@@ -167,6 +167,37 @@
   "definitions": {
     "RunRequest": {
       "$defs": {
+        "BoundReference": {
+          "additionalProperties": false,
+          "description": "A name the model wrote, resolved by the server: the row and its label.\n\n``id`` is null only for a chapter reference that means \"unassigned\".",
+          "properties": {
+            "id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Id"
+            },
+            "label": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            }
+          },
+          "required": [
+            "label"
+          ],
+          "title": "BoundReference",
+          "type": "object"
+        },
         "EditorApplyResult": {
           "additionalProperties": false,
           "description": "Bounded browser report. It never authorizes or performs a server write.",
@@ -686,7 +717,7 @@
         },
         "StoryChange": {
           "additionalProperties": false,
-          "description": "A draft plus what the server bound: the target's revision and a label.",
+          "description": "A draft plus what the server bound: the target's revision and a label.\n\nAn event's ``chapter`` is a name as the model wrote it; ``bound_chapter`` is\nwhat it resolved to, which is what the browser saves and shows.",
           "properties": {
             "operation": {
               "enum": [
@@ -753,6 +784,17 @@
               "minLength": 1,
               "title": "Label",
               "type": "string"
+            },
+            "boundChapter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BoundReference"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             }
           },
           "required": [
@@ -949,20 +991,6 @@
               "default": null,
               "title": "Content"
             },
-            "tensionLevel": {
-              "anyOf": [
-                {
-                  "maximum": 10,
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Tensionlevel"
-            },
             "pacing": {
               "anyOf": [
                 {
@@ -1060,6 +1088,21 @@
               ],
               "default": null,
               "title": "Notes"
+            },
+            "chapter": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The chapter the event is planned for: its exact title, its number in reading order, or its id. \"unassigned\" removes it from its chapter.",
+              "title": "Chapter"
             }
           },
           "title": "StoryChangeFields",
@@ -1249,6 +1292,37 @@
     },
     "AgentRunRequest": {
       "$defs": {
+        "BoundReference": {
+          "additionalProperties": false,
+          "description": "A name the model wrote, resolved by the server: the row and its label.\n\n``id`` is null only for a chapter reference that means \"unassigned\".",
+          "properties": {
+            "id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Id"
+            },
+            "label": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            }
+          },
+          "required": [
+            "label"
+          ],
+          "title": "BoundReference",
+          "type": "object"
+        },
         "EditorApplyResult": {
           "additionalProperties": false,
           "description": "Bounded browser report. It never authorizes or performs a server write.",
@@ -1809,7 +1883,7 @@
         },
         "StoryChange": {
           "additionalProperties": false,
-          "description": "A draft plus what the server bound: the target's revision and a label.",
+          "description": "A draft plus what the server bound: the target's revision and a label.\n\nAn event's ``chapter`` is a name as the model wrote it; ``bound_chapter`` is\nwhat it resolved to, which is what the browser saves and shows.",
           "properties": {
             "operation": {
               "enum": [
@@ -1876,6 +1950,17 @@
               "minLength": 1,
               "title": "Label",
               "type": "string"
+            },
+            "boundChapter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BoundReference"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             }
           },
           "required": [
@@ -2072,20 +2157,6 @@
               "default": null,
               "title": "Content"
             },
-            "tensionLevel": {
-              "anyOf": [
-                {
-                  "maximum": 10,
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Tensionlevel"
-            },
             "pacing": {
               "anyOf": [
                 {
@@ -2183,6 +2254,21 @@
               ],
               "default": null,
               "title": "Notes"
+            },
+            "chapter": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The chapter the event is planned for: its exact title, its number in reading order, or its id. \"unassigned\" removes it from its chapter.",
+              "title": "Chapter"
             }
           },
           "title": "StoryChangeFields",
@@ -3576,9 +3662,40 @@
       },
       "propose_story_changes": {
         "$defs": {
+          "BoundReference": {
+            "additionalProperties": false,
+            "description": "A name the model wrote, resolved by the server: the row and its label.\n\n``id`` is null only for a chapter reference that means \"unassigned\".",
+            "properties": {
+              "id": {
+                "anyOf": [
+                  {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Id"
+              },
+              "label": {
+                "maxLength": 500,
+                "minLength": 1,
+                "title": "Label",
+                "type": "string"
+              }
+            },
+            "required": [
+              "label"
+            ],
+            "title": "BoundReference",
+            "type": "object"
+          },
           "StoryChange": {
             "additionalProperties": false,
-            "description": "A draft plus what the server bound: the target's revision and a label.",
+            "description": "A draft plus what the server bound: the target's revision and a label.\n\nAn event's ``chapter`` is a name as the model wrote it; ``bound_chapter`` is\nwhat it resolved to, which is what the browser saves and shows.",
             "properties": {
               "operation": {
                 "enum": [
@@ -3645,6 +3762,17 @@
                 "minLength": 1,
                 "title": "Label",
                 "type": "string"
+              },
+              "boundChapter": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/BoundReference"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
               }
             },
             "required": [
@@ -3841,20 +3969,6 @@
                 "default": null,
                 "title": "Content"
               },
-              "tensionLevel": {
-                "anyOf": [
-                  {
-                    "maximum": 10,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Tensionlevel"
-              },
               "pacing": {
                 "anyOf": [
                   {
@@ -3952,6 +4066,21 @@
                 ],
                 "default": null,
                 "title": "Notes"
+              },
+              "chapter": {
+                "anyOf": [
+                  {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The chapter the event is planned for: its exact title, its number in reading order, or its id. \"unassigned\" removes it from its chapter.",
+                "title": "Chapter"
               }
             },
             "title": "StoryChangeFields",

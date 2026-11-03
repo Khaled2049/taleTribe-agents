@@ -65,7 +65,7 @@ CASES: list[tuple[str, set[str]]] = [
 class _Roster:
     pool = object()
 
-    async def slim_context(self, story_id: str) -> str:
+    async def slim_context(self, story_id: str, chapter_id: str | None = None) -> str:
         return ROSTER
 
 

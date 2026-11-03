@@ -70,3 +70,34 @@ def test_slim_roster_preserves_chapter_ids_when_titles_are_shortened():
         assert f"[chapter_id: {chapter_id}]" in context
     chapter_labels = context.split("Chapters: ", 1)[1].split(", ")
     assert all(len(label) <= MAX_SLIM_LABEL_CHARS for label in chapter_labels)
+
+
+def test_slim_roster_names_the_current_chapter_and_its_plan():
+    ids = [f"00000000-0000-4000-8000-{i:012d}" for i in range(12)]
+    huge = "x" * MAX_SLIM_CONTEXT_CHARS
+    roster = {
+        "story": {"title": huge, "description": huge},
+        "characters": [{"name": huge} for _ in range(12)],
+        "places": [{"name": huge} for _ in range(12)],
+        "plots": [{"name": huge} for _ in range(12)],
+        "chapters": [{"id": chapter_id, "title": huge} for chapter_id in ids],
+    }
+    small = PostgresStoryContext.format_slim_context(
+        {
+            "story": {"title": "T", "description": ""},
+            "characters": [],
+            "places": [],
+            "plots": [],
+            "chapters": [],
+            "current_chapter": {"title": "The Ford", "number": 3, "planned": 4},
+        }
+    )
+    assert "Current chapter: 3 · The Ford, 4 planned events." in small
+
+    context = PostgresStoryContext.format_slim_context(
+        {**roster, "current_chapter": {"title": huge, "number": 3, "planned": 1}}
+    )
+    assert len(context) <= MAX_SLIM_CONTEXT_CHARS
+    assert ", 1 planned event." in context
+    for chapter_id in ids:
+        assert f"[chapter_id: {chapter_id}]" in context

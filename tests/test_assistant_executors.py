@@ -382,3 +382,66 @@ async def test_get_story_entity_emits_a_citation(fake):
     assert reference.kind == "story"
     assert reference.title == "Character: Mina"
     assert reference.snippet == "Guarded."
+
+
+async def test_get_story_entity_labels_plot_event_chapters(fake):
+    """Chapters reach the model by number and title, never as ids."""
+    fake.seed_chapter(STORY, "ch-harbour", title="The Harbour")
+    fake.seed_chapter(STORY, "ch-ford", title="The Ford")
+    fake.seed_entity(
+        STORY,
+        "plots",
+        "plot-sub",
+        name="The Rumour",
+        events=[
+            {
+                "id": "ev-rumour",
+                "name": "Rumour spreads",
+                "chapterId": "ch-ford",
+                "chapterPosition": 1.0,
+                "status": "planned",
+            },
+            {"id": "ev-later", "name": "Later", "chapterId": None},
+        ],
+    )
+    result = await run(
+        "get_story_entity", {"kind": "plot", "entityId": "plot-sub"}, runtime()
+    )
+    event, later = result.result["events"]
+    # The fixture story already has two chapters, so these are 3 and 4.
+    assert event["chapter"] == "4 · The Ford" and event["status"] == "planned"
+    assert "chapterId" not in event and "chapterPosition" not in event
+    assert later["chapter"] == "Unassigned"
+
+
+async def test_list_story_entities_names_each_plot_events_chapter(fake):
+    """The plot roster shows where each event is planned without a second read."""
+    fake.seed_chapter(STORY, "ch-ford", title="The Ford")
+    fake.seed_entity(
+        STORY,
+        "plots",
+        "plot-main",
+        name="The Crossing",
+        events=[
+            {
+                "id": "ev-1",
+                "name": "Ford the river",
+                "chapterId": "ch-ford",
+                "chapterPosition": 0.0,
+                "status": "drafted",
+                "content": "Long.",
+            },
+            {"id": "ev-2", "name": "Aftermath", "chapterId": None},
+        ],
+    )
+    result = await run("list_story_entities", {"kind": "plot"}, runtime())
+    (line,) = result.result["entities"]
+    assert line["events"] == [
+        {"name": "Ford the river", "status": "drafted", "chapter": "3 · The Ford"},
+        {"name": "Aftermath", "status": None, "chapter": "Unassigned"},
+    ]
+
+
+async def test_list_story_entities_skips_chapters_for_other_kinds(fake):
+    await run("list_story_entities", {"kind": "character"}, runtime())
+    assert not any(path.endswith("/chapters") for path, _ in fake.requests)

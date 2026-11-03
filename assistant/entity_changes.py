@@ -13,10 +13,14 @@ tool result rather than failing the run.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 
+from assistant.plot_links import chapter_labels
 from assistant.protocol import (
     MAX_ENTITY_NAME_CHARS,
+    UNASSIGNED_CHAPTER,
+    BoundReference,
     EntityContinuation,
     ProposeStoryChangesArgs,
     StoryChange,
@@ -53,6 +57,15 @@ class _StoryReader:
         self._client = story_data.client()
         self._rosters: dict[str, list[dict[str, Any]]] = {}
         self._plots: dict[str, Optional[dict[str, Any]]] = {}
+        self._chapters: Optional[list[dict[str, Any]]] = None
+
+    async def chapters(self) -> list[dict[str, Any]]:
+        if self._chapters is None:
+            rows = await self._client.list_chapter_index(
+                self._ctx.user_id, self._ctx.story_id
+            )
+            self._chapters = [row for row in rows or [] if isinstance(row, dict)]
+        return self._chapters
 
     async def roster(self, collection: str) -> list[dict[str, Any]]:
         if collection not in self._rosters:
@@ -135,6 +148,45 @@ def _plot_holding_event(
     return found[0] if len(found) == 1 else None
 
 
+_CHAPTER_NUMBER = re.compile(r"^(?:chapter\s*)?(\d+)$", re.IGNORECASE)
+
+
+async def _bind_chapter(ref: str, reader: _StoryReader) -> BoundReference:
+    """A chapter by id, exact title or number in reading order; or unassigned."""
+    if ref.strip().casefold() == UNASSIGNED_CHAPTER:
+        return BoundReference(id=None, label="Unassigned")
+    chapters = await reader.chapters()
+    labels = chapter_labels(chapters)
+    ordered = list(labels)  # chapter ids in reading order
+    listing = ", ".join(list(labels.values())[:MAX_LISTED_NAMES]) or "none yet"
+
+    matches = [c for c in chapters if str(c.get("id")) == ref]
+    if not matches:
+        wanted = ref.strip().casefold()
+        matches = [
+            c
+            for c in chapters
+            if str(c.get("title") or "").strip().casefold() == wanted
+        ]
+    if len(matches) > 1:
+        raise ProposalRejected(
+            f"More than one chapter is called {ref!r}. Name it by number: "
+            + ", ".join(labels[str(c.get("id"))] for c in matches[:MAX_LISTED_NAMES])
+            + "."
+        )
+    if not matches:
+        number = _CHAPTER_NUMBER.match(ref.strip())
+        if number and 1 <= int(number.group(1)) <= len(ordered):
+            chapter_id = ordered[int(number.group(1)) - 1]
+            return BoundReference(id=chapter_id, label=labels[chapter_id])
+        raise ProposalRejected(
+            f"No chapter is called {ref!r}. This story's chapters: {listing}. "
+            'Use "unassigned" to take the event out of its chapter.'
+        )
+    chapter_id = str(matches[0].get("id"))
+    return BoundReference(id=chapter_id, label=labels[chapter_id])
+
+
 async def _bind_change(change: StoryChangeDraft, reader: _StoryReader) -> StoryChange:
     """Resolve one change's targets.
 
@@ -146,6 +198,7 @@ async def _bind_change(change: StoryChangeDraft, reader: _StoryReader) -> StoryC
     label = _label(change.fields.name)
     entity_id = change.entity_id
     plot_line_id = change.plot_line_id
+    bound_chapter: Optional[BoundReference] = None
 
     if change.kind == "event":
         assert plot_line_id is not None  # enforced by the schema
@@ -187,6 +240,8 @@ async def _bind_change(change: StoryChangeDraft, reader: _StoryReader) -> StoryC
             entity_id = str(event.get("id"))
             base_revision = _revision(event)
             label = _label(event.get("name"))
+        if change.fields.chapter is not None:
+            bound_chapter = await _bind_chapter(change.fields.chapter, reader)
     else:
         collection = COLLECTION_BY_KIND[change.kind]
         rows = await reader.roster(collection)
@@ -227,6 +282,7 @@ async def _bind_change(change: StoryChangeDraft, reader: _StoryReader) -> StoryC
         fields=change.fields,
         base_revision=base_revision,
         label=label,
+        bound_chapter=bound_chapter,
     )
 
 
