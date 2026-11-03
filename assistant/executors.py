@@ -336,9 +336,11 @@ async def list_story_entities(
     if any(item.get("events") for item in items):
         labels = await _chapter_labels(runtime)
         items = [
-            {**item, "events": label_event_chapters(item["events"], labels)}
-            if "events" in item
-            else item
+            (
+                {**item, "events": label_event_chapters(item["events"], labels)}
+                if "events" in item
+                else item
+            )
             for item in items
         ]
     payload, clipped = _fit(
