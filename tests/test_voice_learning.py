@@ -89,17 +89,19 @@ class FakeClient:
             "revision": 2,
             "pointOfView": "first",
             "references": [
-                {"chapterId": "current", "sourceRevision": 3, "start": 0, "end": 40},
-                {"chapterId": "stale", "sourceRevision": 1, "start": 0, "end": 40},
+                {
+                    "chapterId": "edited-since",
+                    "sourceRevision": 1,
+                    "start": 0,
+                    "end": 40,
+                    "text": "Quiet voices carried through the room.",
+                },
+                {"chapterId": "no-text", "sourceRevision": 3, "start": 0, "end": 40},
             ],
         }
 
     async def get_chapter(self, uid, story_id, chapter_id):
-        return {
-            "id": chapter_id,
-            "revision": 4 if chapter_id == "stale" else 3,
-            "content": "<p>Quiet voices carried through the room.</p>",
-        }
+        raise AssertionError("prose tools use the copied text, not the chapter")
 
     async def update_story_voice_note(self, uid, story_id, revision, operation):
         self.saved.append((uid, story_id, revision, operation))
@@ -134,7 +136,7 @@ async def test_explicit_tool_requires_current_story_scope(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_stale_reference_is_ignored(monkeypatch):
+async def test_reference_text_is_used_without_reading_chapters(monkeypatch):
     context = await load_voice_context(FakeClient(), "writer", "story")
     assert context and "Quiet voices" in context["referenceExcerpts"]
     assert context["referenceExcerpts"].count("Quiet voices") == 1
@@ -261,32 +263,3 @@ async def test_pass_without_a_live_claim_skips_before_any_work(monkeypatch):
     )
     pool.claims["story"] = None  # already spent by an earlier pass
     assert await worker._process(job, CLAIM) == "skipped"
-
-
-@pytest.mark.asyncio
-async def test_reference_chapters_are_fetched_concurrently():
-    import asyncio
-
-    started = []
-    release = asyncio.Event()
-
-    class SlowClient:
-        async def get_voice_profile(self, uid, story_id):
-            return {
-                "references": [
-                    {"chapterId": c, "sourceRevision": 1, "start": 0, "end": 20}
-                    for c in ("a", "b", "c")
-                ]
-            }
-
-        async def get_chapter(self, uid, story_id, chapter_id):
-            started.append(chapter_id)
-            if len(started) == 3:
-                release.set()
-            # Sequential fetches would wait here forever for the other two.
-            await asyncio.wait_for(release.wait(), timeout=1)
-            return {"revision": 1, "content": "<p>Quiet voices carry.</p>"}
-
-    context = await load_voice_context(SlowClient(), "writer", "story")
-    assert sorted(started) == ["a", "b", "c"]
-    assert context["referenceExcerpts"].count("Quiet voices") == 3

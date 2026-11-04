@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-from html.parser import HTMLParser
 from typing import Any
 
 from agents.storyAgent.utils import sanitize_for_prompt
@@ -19,63 +17,29 @@ PROSE_SKILL_V1 = (
 )
 
 
-class _TextOnly(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self.parts: list[str] = []
-
-    def handle_data(self, data: str) -> None:
-        self.parts.append(data)
-
-
 async def load_voice_context(
     client: Any, uid: str, story_id: str
 ) -> dict[str, str] | None:
-    """Read current style data. Stale or missing reference chapters are skipped."""
+    """Read current style data, including the reference passages' copied text.
+
+    story-data copies each passage when the writer picks it, so later chapter
+    edits do not invalidate it and no chapter needs to be fetched here.
+    """
     profile = await client.get_voice_profile(uid, story_id)
     context = voice_context(profile) or {}
     references = profile.get("references") if isinstance(profile, dict) else None
     if not isinstance(references, list):
         return context or None
-    refs = [ref for ref in references[:3] if isinstance(ref, dict)]
-    # Fetched concurrently: this runs on every next-line and enhance request.
-    chapters = await asyncio.gather(
-        *(client.get_chapter(uid, story_id, ref.get("chapterId")) for ref in refs),
-        return_exceptions=True,
-    )
     samples = [
         sample
-        for ref, chapter in zip(refs, chapters)
-        if (sample := _reference_sample(ref, chapter))
+        for ref in references[:3]
+        if isinstance(ref, dict)
+        and isinstance(ref.get("text"), str)
+        and (sample := sanitize_for_prompt(ref["text"].strip(), 1000))
     ]
     if samples:
         context["referenceExcerpts"] = sanitize_for_prompt("\n\n".join(samples), 3000)
     return context or None
-
-
-def _reference_sample(ref: dict[str, Any], chapter: Any) -> str:
-    """The excerpt's text, or "" when its chapter failed, moved on or is too short."""
-    # The profile is still useful if one source was deleted or revised.
-    if not isinstance(chapter, dict):
-        return ""
-    try:
-        if int(chapter.get("revision")) != int(ref.get("sourceRevision")):
-            return ""
-        start, end = int(ref.get("start")), int(ref.get("end"))
-    except (TypeError, ValueError):
-        return ""
-    content = chapter.get("content", "")
-    if (
-        not isinstance(content, str)
-        or start < 0
-        or end <= start
-        or end - start > 1600
-        or end > len(content)
-    ):
-        return ""
-    parser = _TextOnly()
-    parser.feed(content[start:end])
-    return sanitize_for_prompt(" ".join(parser.parts).strip(), 1000)
 
 
 POV_LABELS = {
