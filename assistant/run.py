@@ -110,7 +110,8 @@ Reading steps are limited; if you spend them all the writer gets no answer."""
 
 VOICE_RULES = """
 When the writer clearly gives a durable prose preference for this whole story,
-call update_story_voice_profile with one short, specific note. The current
+call update_story_voice_profile with one short, specific note quoted exactly
+from that direction in the current writer message. The current
 message must say this is for the story, not just this scene or chapter. If
 scope is uncertain, follow the direction for this response only. This tool
 changes only an assistant-authored voice note; tell the writer when it saves

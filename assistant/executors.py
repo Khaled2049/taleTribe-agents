@@ -574,15 +574,38 @@ def _stale_chunk(chunk: dict[str, Any]) -> bool:
 Executor = Callable[[Any, ToolRuntime], Awaitable[ToolResult]]
 
 
+_STORY_SCOPE = re.compile(
+    r"\b(?:for|throughout|across|in) (?:this|the|my) (?:whole |entire )?story\b|\bstory[- ]wide\b",
+    re.IGNORECASE,
+)
+_VOICE_DIRECTION = re.compile(
+    r"\b(?:keep|use|write|make|avoid|prefer|favor|favour|maintain|always|never|should|must)\b|\b(?:do not|don't)\b",
+    re.IGNORECASE,
+)
+_POLITE_REQUEST = re.compile(
+    r"\b(?:(?:can|could|would|will) you (?:please )?|please )"
+    r"(?:keep|use|write|make|avoid|prefer|favor|favour|maintain)\b",
+    re.IGNORECASE,
+)
+
+
+def _writer_requested_voice_note(message: str, note: str) -> bool:
+    """Require a quoted direction in the same sentence as its story-wide scope."""
+    for sentence in re.findall(r"[^.!?\n]+[.!?]?", message):
+        if not _STORY_SCOPE.search(sentence) or not _VOICE_DIRECTION.search(sentence):
+            continue
+        if sentence.rstrip().endswith("?") and not _POLITE_REQUEST.search(sentence):
+            continue
+        if note.strip().casefold() in sentence.casefold():
+            return True
+    return False
+
+
 async def update_story_voice_profile(
     args: UpdateStoryVoiceProfileArgs, runtime: ToolRuntime
 ) -> ToolResult:
     """Save only an explicit story-wide instruction from the current writer turn."""
-    current = runtime.current_user_text.casefold()
-    if not re.search(
-        r"\b(for|throughout|across|in) (this|the|my) (whole |entire )?story\b|\bstory[- ]wide\b",
-        current,
-    ):
+    if not _writer_requested_voice_note(runtime.current_user_text, args.note):
         return ToolResult(
             {
                 "saved": False,

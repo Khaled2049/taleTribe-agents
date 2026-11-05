@@ -197,9 +197,9 @@ class ResearchWebArgs(StrictModel):
 class UpdateStoryVoiceProfileArgs(StrictModel):
     """Remember one clearly story-wide prose instruction as an assistant note.
 
-    The current writer message must explicitly scope the preference to the
-    whole story. Scene or chapter directions remain local. This changes no
-    manuscript text, point of view, tense, or writer-authored note.
+    The note must quote the writer's exact words from a story-wide direction
+    in the current message. Scene or chapter directions remain local. This
+    changes no manuscript text, point of view, tense, or writer-authored note.
     """
 
     note: str = Field(min_length=8, max_length=240)

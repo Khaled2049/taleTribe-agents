@@ -4229,7 +4229,7 @@
       },
       "update_story_voice_profile": {
         "additionalProperties": false,
-        "description": "Remember one clearly story-wide prose instruction as an assistant note.\n\nThe current writer message must explicitly scope the preference to the\nwhole story. Scene or chapter directions remain local. This changes no\nmanuscript text, point of view, tense, or writer-authored note.",
+        "description": "Remember one clearly story-wide prose instruction as an assistant note.\n\nThe note must quote the writer's exact words from a story-wide direction\nin the current message. Scene or chapter directions remain local. This\nchanges no manuscript text, point of view, tense, or writer-authored note.",
         "properties": {
           "note": {
             "maxLength": 240,

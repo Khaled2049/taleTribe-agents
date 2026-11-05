@@ -136,6 +136,38 @@ async def test_explicit_tool_requires_current_story_scope(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message,note",
+    [
+        ("What style should I use in this story?", "What style should I use in this story?"),
+        (
+            "Please tell me what style I should use in this story?",
+            "Please tell me what style I should use in this story?",
+        ),
+        ("For this story, use short sentences.", "Keep narration restrained."),
+        ("What should I use in this story? Keep narration restrained.", "Keep narration restrained."),
+    ],
+)
+async def test_explicit_tool_rejects_questions_and_unquoted_notes(
+    monkeypatch, message, note
+):
+    client = FakeClient()
+    monkeypatch.setattr(story_data, "client", lambda: client)
+    result = await update_story_voice_profile(
+        UpdateStoryVoiceProfileArgs(
+            note=note, reason="Writer requested a lasting voice preference."
+        ),
+        ToolRuntime(
+            ctx=ToolContext(user_id="writer", story_id="story"),
+            current_user_text=message,
+            run_id="run-1",
+        ),
+    )
+    assert result.result["saved"] is False
+    assert client.saved == []
+
+
+@pytest.mark.asyncio
 async def test_reference_text_is_used_without_reading_chapters(monkeypatch):
     context = await load_voice_context(FakeClient(), "writer", "story")
     assert context and "Quiet voices" in context["referenceExcerpts"]
