@@ -139,13 +139,19 @@ async def test_explicit_tool_requires_current_story_scope(monkeypatch):
 @pytest.mark.parametrize(
     "message,note",
     [
-        ("What style should I use in this story?", "What style should I use in this story?"),
+        (
+            "What style should I use in this story?",
+            "What style should I use in this story?",
+        ),
         (
             "Please tell me what style I should use in this story?",
             "Please tell me what style I should use in this story?",
         ),
         ("For this story, use short sentences.", "Keep narration restrained."),
-        ("What should I use in this story? Keep narration restrained.", "Keep narration restrained."),
+        (
+            "What should I use in this story? Keep narration restrained.",
+            "Keep narration restrained.",
+        ),
     ],
 )
 async def test_explicit_tool_rejects_questions_and_unquoted_notes(

@@ -56,8 +56,10 @@ def voice_context(profile: dict[str, Any] | None) -> dict[str, str] | None:
     if not isinstance(profile, dict):
         return None
     result: dict[str, str] = {}
-    pov = POV_LABELS.get(profile.get("pointOfView"))
-    tense = TENSE_LABELS.get(profile.get("tense"))
+    pov_key = profile.get("pointOfView")
+    tense_key = profile.get("tense")
+    pov = POV_LABELS.get(pov_key) if isinstance(pov_key, str) else None
+    tense = TENSE_LABELS.get(tense_key) if isinstance(tense_key, str) else None
     notes = profile.get("notes")
     if pov:
         result["pointOfView"] = pov
