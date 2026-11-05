@@ -59,6 +59,30 @@ def story():
     story_data.configure(None)
 
 
+async def test_drafter_reads_only_its_story_voice(story):
+    story.voice_profiles["story-1"] = {
+        "pointOfView": "first",
+        "tense": "past",
+        "notes": [
+            {
+                "id": "note-1",
+                "text": "Leave emotion beneath the dialogue.",
+                "origin": "writer",
+                "pinned": True,
+            }
+        ],
+    }
+    context = await build_context(
+        SPECIALISTS["drafter"], [FocusRef(kind="chapter", ref="chapter-1")], CTX
+    )
+    assert context["storyVoice"] == {
+        "pointOfView": "first person",
+        "tense": "past",
+        "notes": "Pinned: Leave emotion beneath the dialogue.",
+    }
+    assert ("/v1/stories/story-1/voice-profile", {}) in story.requests
+
+
 def focus(*pairs):
     return [FocusRef(kind=kind, ref=ref) for kind, ref in pairs]
 

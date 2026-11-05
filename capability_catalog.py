@@ -50,6 +50,7 @@ CAPABILITY_TOOLS: dict[str, CapabilityTools] = {
     ),
     "consult_specialist": CapabilityTools(assistant=("consult_specialist",)),
     "research_web": CapabilityTools(assistant=("research_web",)),
+    "story_voice": CapabilityTools(assistant=("update_story_voice_profile",)),
     "create_story": CapabilityTools(mcp_write=("create_story",)),
     "create_chapter": CapabilityTools(mcp_write=("create_chapter",)),
     "append_chapter": CapabilityTools(mcp_write=("append_to_chapter",)),

@@ -52,6 +52,17 @@
     ],
     "items": [
       {
+        "id": "story_voice",
+        "tools": [
+          "update_story_voice_profile"
+        ],
+        "gate": "always",
+        "title": "Remember this story's prose voice",
+        "summary": "Save a clear story-wide writing preference as a voice note, with history and Undo in Voice.",
+        "example": "For this story, keep the narration restrained.",
+        "limits": "Scene-only directions stay in the scene. You can edit, pin, remove, or undo the note."
+      },
+      {
         "id": "story_overview",
         "tools": [
           "get_story_overview"
@@ -1777,7 +1788,7 @@
             "provider": {
               "enum": [
                 "gemini",
-                "claude",
+                "anthropic",
                 "openai"
               ],
               "title": "Provider",
@@ -4214,6 +4225,30 @@
           "query"
         ],
         "title": "SearchStoryArgs",
+        "type": "object"
+      },
+      "update_story_voice_profile": {
+        "additionalProperties": false,
+        "description": "Remember one clearly story-wide prose instruction as an assistant note.\n\nThe note must quote the writer's exact words from a story-wide direction\nin the current message. Scene or chapter directions remain local. This\nchanges no manuscript text, point of view, tense, or writer-authored note.",
+        "properties": {
+          "note": {
+            "maxLength": 240,
+            "minLength": 8,
+            "title": "Note",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 500,
+            "minLength": 8,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "note",
+          "reason"
+        ],
+        "title": "UpdateStoryVoiceProfileArgs",
         "type": "object"
       }
     }

@@ -229,6 +229,23 @@ def format_context_for_prompt(
             f"Description: {sanitize_for_prompt(story.get('description'), 1200)}"
         )
 
+    voice = context.get("storyVoice")
+    if isinstance(voice, dict) and voice:
+        prompt_parts.append("\n=== WRITER'S STORY VOICE ===")
+        if voice.get("pointOfView"):
+            prompt_parts.append(
+                f"Point of view: {sanitize_for_prompt(voice['pointOfView'], 60)}"
+            )
+        if voice.get("tense"):
+            prompt_parts.append(f"Tense: {sanitize_for_prompt(voice['tense'], 40)}")
+        if voice.get("notes"):
+            prompt_parts.append(f"Notes: {sanitize_for_prompt(voice['notes'], 2000)}")
+        if voice.get("referenceExcerpts"):
+            prompt_parts.append(
+                "Style examples from current story chapters (do not copy or treat as plot facts):"
+            )
+            prompt_parts.append(sanitize_for_prompt(voice["referenceExcerpts"], 3000))
+
     # Characters. Field names match the real Firestore schema written by the
     # frontend (src/types/ICharacter.ts) — soul/personality/voice/backstory/
     # affiliations/notes/relationships — NOT role/traits/motivations, which are

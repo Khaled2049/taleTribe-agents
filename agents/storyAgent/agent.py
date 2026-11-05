@@ -108,6 +108,7 @@ class StoryAgent:
         content: str,
         cursorPosition: int,
         chapter_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Generate 3 next line suggestions based on chapter content and cursor position.
@@ -122,6 +123,7 @@ class StoryAgent:
             Dictionary containing the suggestions array.
         """
         context = await self.postgres_context.context(story_id)
+        await self._add_story_voice(context, story_id, user_id)
         return await self.next_line_tool.execute(
             story_id, content, cursorPosition, chapter_id, context
         )
@@ -156,6 +158,7 @@ class StoryAgent:
         action: str,
         selected_text: str,
         chapter_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Enhance selected text based on action type.
@@ -170,9 +173,26 @@ class StoryAgent:
             Dictionary containing enhanced text
         """
         context = await self.postgres_context.context(story_id)
+        await self._add_story_voice(context, story_id, user_id)
         return await self.enhance_text_tool.execute(
             story_id, action, selected_text, chapter_id, context
         )
+
+    @staticmethod
+    async def _add_story_voice(
+        context: dict, story_id: str, user_id: Optional[str]
+    ) -> None:
+        if not user_id or user_id == "anonymous":
+            return
+        from assistant.prose_voice import load_voice_context
+        from mcp_server import story_data
+
+        try:
+            voice = await load_voice_context(story_data.client(), user_id, story_id)
+        except story_data.StoryDataError:
+            return  # Writing still works if the optional profile is unavailable.
+        if voice:
+            context["storyVoice"] = voice
 
     async def summarize_chapter(
         self,
@@ -272,12 +292,9 @@ class StoryAgent:
             sorted(parameters.keys()),
         )
 
-        # effective_user_id is only plumbed to actions that need the caller
-        # memory system or are billed per user (chat, story choices, wizard input,
-        # clear memory). The other actions (summarizeChapter,
-        # brainstorm*, generateNextLines, enhanceText) are stateless from the brain's
-        # perspective and don't take a user_id parameter — adding one here would be
-        # dead plumbing until those actions opt in.
+        # The prose tools use the authenticated request user_id for the private
+        # story voice read. Never use a userId supplied in action parameters
+        # for that owner-gated lookup.
         param_user_id = self._param(parameters, "userId", "user_id")
         effective_user_id = param_user_id or user_id
 
@@ -300,6 +317,7 @@ class StoryAgent:
                 self._param(parameters, "content"),
                 self._param(parameters, "cursorPosition", "cursor_position"),
                 self._param(parameters, "chapterId", "chapter_id"),
+                user_id,
             )
         if action == "enhanceText":
             return await self.enhance_text(
@@ -307,6 +325,7 @@ class StoryAgent:
                 self._param(parameters, "action"),
                 self._param(parameters, "selectedText", "selected_text"),
                 self._param(parameters, "chapterId", "chapter_id"),
+                user_id,
             )
         if action == "enhanceWizardInput":
             return await self.enhance_wizard_input(

@@ -39,6 +39,7 @@ USAGE_FEATURES = frozenset(
         "assistant",
         "assistant_specialist",
         "assistant_drafting",
+        "voice_analysis",
         "other",
     }
 )
@@ -52,6 +53,13 @@ ACTION_FEATURES = {
 }
 # Set once per request by each entry point, like _byok_config.
 _usage_feature: ContextVar[str] = ContextVar("usage_feature", default="other")
+
+TASK_ROUTES_V1 = {
+    "assistant_drafting": "prose_draft_v1",
+    "enhance": "prose_rewrite_v1",
+    "next_line": "next_line_v1",
+    "voice_analysis": "voice_analysis_v1",
+}
 
 # Conservative default output cap. Each tool passes its own max_output_tokens
 # (see tools/*); this default only applies to callers that don't specify one, so
@@ -249,6 +257,11 @@ class CreditProxyProvider(LLMProvider):
             "byok_api_key": api_key,
             "byok_model": model,
             "feature": _usage_feature.get(),
+            **(
+                {"route_alias": TASK_ROUTES_V1[_usage_feature.get()]}
+                if _usage_feature.get() in TASK_ROUTES_V1
+                else {}
+            ),
         }
 
     async def chat_stream(
@@ -283,6 +296,8 @@ class CreditProxyProvider(LLMProvider):
         }
         if feature:
             payload["feature"] = feature
+            if feature in TASK_ROUTES_V1:
+                payload["route_alias"] = TASK_ROUTES_V1[feature]
         headers = await self._auth_headers(_firebase_token.get())
         try:
             async with self._client.stream(

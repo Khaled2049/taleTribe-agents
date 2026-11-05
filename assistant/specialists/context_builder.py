@@ -18,6 +18,7 @@ import re
 from typing import Any, Optional
 
 from assistant.executors import _encode, _fit
+from assistant.prose_voice import load_voice_context
 from assistant.specialists.base import Specialist
 from assistant.tools import FocusRef, ToolContext
 from mcp_server import data, story_data
@@ -316,6 +317,7 @@ def _fit_context(context: dict[str, Any], cap: int, character_editor: bool) -> d
         "setting",
         "priorFindings",
         "focusNotFound",
+        "storyVoice",
     }
     if character_editor:
         keys.add("characters")
@@ -454,6 +456,14 @@ async def build_context(
         context.update(await _scene_material(story, focused.get("event", [])))
         if focused.get("character"):
             context["focusCharacters"] = _clean(focused["character"])
+        try:
+            voice = await load_voice_context(
+                story_data.client(), ctx.user_id, ctx.story_id
+            )
+        except story_data.StoryDataError:
+            voice = None  # A profile outage must not stop a draft.
+        if voice:
+            context["storyVoice"] = voice
     else:
         context["plotLines"] = _clean(await story.roster("plots"))
         context["characters"] = [

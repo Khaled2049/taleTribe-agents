@@ -3,6 +3,8 @@
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
+from assistant.prose_voice import PROSE_SKILL_V1
+
 from ..context_format import format_context_for_prompt
 from ..llm_provider import LLMProvider, get_llm_provider
 
@@ -90,7 +92,9 @@ You are a highly skilled, creative, and observant Novelist Assistant AI. Your so
 3.  **Suggestion Length:** Each suggestion must be a single, logical sentence or a short, cohesive thought, ready to be dropped directly into the text. Do NOT output full paragraphs or multiple sentences.
 4.  **Coherence:** Maintain the established story's Genre, Tone, and the immediate preceding text's flow, pacing, and point-of-view.
 5.  **Focus:** Use the "CURRENT CHAPTER CONTEXT" as the primary guide. Use the "GLOBAL STORY CONTEXT" only for world/character consistency.
+    When the current passage does not settle style, use the writer's story voice preferences in that context.
 6.  **DO NOT output any pre-amble, explanation, or text outside of the required JSON object.**
+{PROSE_SKILL_V1}
 """
 
     def _build_user_prompt(

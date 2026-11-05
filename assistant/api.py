@@ -8,7 +8,7 @@ from typing import Any, Callable
 from fastapi import Depends, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import StreamingResponse
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 
 from agents.storyAgent.llm_provider import (
     _byok_config,
@@ -18,16 +18,90 @@ from agents.storyAgent.llm_provider import (
 from assistant.errors import ErrorCode, safe_message
 from assistant.events import encode_sse
 from assistant.history import HistoryLimits
-from assistant.protocol import AgentRunRequest
+from assistant.protocol import AgentRunRequest, ProviderConfig, StrictModel
 from assistant.run import RunLimits, run_assistant
 from assistant.version import ASSISTANT_PROTOCOL_VERSION
 from mcp_server.data import StoryNotFoundError, get_owned_story
 from mcp_server.story_data import StoryDataClient, StoryDataError
 
 
+class VoiceLearningPass(StrictModel):
+    user_id: str = Field(min_length=1, max_length=128)
+    story_id: str = Field(min_length=1, max_length=128)
+    chapter_id: str = Field(min_length=1, max_length=128)
+    source_revision: int = Field(ge=1)
+    # Returned by the preflight; the pass runs only with a live claim.
+    claim_id: str | None = Field(default=None, max_length=64)
+    provider_config: ProviderConfig | None = None
+
+
 def register_assistant(
     app: Any, settings: Any, verify_internal_token: Callable[..., Any]
 ) -> None:
+    @app.post("/voice-learning/pass")
+    async def voice_learning_pass(
+        body: VoiceLearningPass,
+        request: Request,
+        preflight: bool = False,
+        _: None = Depends(verify_internal_token),
+    ):
+        if not settings.assistant_api_enabled or not settings.story_data_url.strip():
+            raise HTTPException(503, "Voice learning unavailable")
+        pool = request.app.state.agent.postgres_context.pool
+        if pool is None:
+            raise HTTPException(503, "Voice learning unavailable")
+        try:
+            story_uuid = uuid.UUID(body.story_id)
+            chapter_uuid = uuid.UUID(body.chapter_id)
+        except ValueError:
+            raise HTTPException(400, "Invalid story or chapter ID") from None
+        client = StoryDataClient(
+            settings.story_data_url.strip(), settings.story_data_service_token.strip()
+        )
+        try:
+            await get_owned_story(body.story_id, body.user_id, story_client=client)
+        except StoryNotFoundError:
+            raise HTTPException(403, "Story access denied") from None
+        except StoryDataError:
+            raise HTTPException(503, "Story service unavailable") from None
+        finally:
+            await client.close()
+        from assistant.voice_learning import VoiceLearningWorker
+
+        worker = VoiceLearningWorker(pool, request.app.state.agent.llm_provider)
+        job = {
+            "id": uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"{body.story_id}:{body.chapter_id}:{body.source_revision}",
+            ),
+            "owner_id": body.user_id,
+            "story_id": story_uuid,
+            "chapter_id": chapter_uuid,
+            "source_revision": body.source_revision,
+        }
+        if preflight:
+            return {"claim_id": await worker.claim(job)}
+        if not request.headers.get("X-Firebase-Token", "").strip():
+            raise HTTPException(401, "Firebase identity required")
+        if not body.claim_id:
+            raise HTTPException(400, "Learning claim required")
+        config = body.provider_config
+        result = await worker._process(
+            job,
+            body.claim_id,
+            (
+                {
+                    "provider": config.provider,
+                    "api_key": config.api_key,
+                    "model": config.model or "",
+                }
+                if config
+                else None
+            ),
+            request.headers.get("X-Firebase-Token", "").strip(),
+        )
+        return {"status": result}
+
     @app.post("/assistant/run")
     async def assistant_run(
         raw_body: dict[str, Any],

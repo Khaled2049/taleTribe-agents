@@ -82,6 +82,72 @@ def owned(factory):
     factory.return_value.close = AsyncMock()
 
 
+def test_voice_learning_endpoint_checks_identity_and_forwards_byok():
+    app = FastAPI()
+    pool = SimpleNamespace(execute=AsyncMock())
+    app.state.agent = SimpleNamespace(
+        postgres_context=SimpleNamespace(pool=pool), llm_provider=TextProvider()
+    )
+
+    async def verify():
+        return None
+
+    register_assistant(app, settings(assistant_api_enabled=True), verify)
+    api = TestClient(app)
+    body = {
+        "userId": "u1",
+        "storyId": "143d1f5f-07b7-46ab-8c76-775e8c8c6f84",
+        "chapterId": "baadf72d-f646-47bb-a45b-1f8528645745",
+        "sourceRevision": 2,
+    }
+    with (
+        patch("assistant.api.StoryDataClient") as factory,
+        patch("assistant.voice_learning.VoiceLearningWorker") as worker,
+    ):
+        factory.return_value.get_story = AsyncMock(
+            return_value={"id": body["storyId"], "ownerId": "u1"}
+        )
+        factory.return_value.close = AsyncMock()
+        claim = "6f1d7a52-2b7c-4c5e-9b4e-2f0c8a1d3e10"
+        worker.return_value.claim = AsyncMock(return_value=claim)
+        worker.return_value._process = AsyncMock(return_value="updated")
+        assert api.post("/voice-learning/pass?preflight=true", json=body).json() == {
+            "claim_id": claim
+        }
+        assert api.post("/voice-learning/pass", json=body).status_code == 401
+        no_claim = api.post(
+            "/voice-learning/pass",
+            json=body,
+            headers={"X-Firebase-Token": "firebase-token"},
+        )
+        assert no_claim.status_code == 400
+        worker.return_value._process.assert_not_awaited()
+        response = api.post(
+            "/voice-learning/pass",
+            json={
+                **body,
+                "claim_id": claim,
+                # The Function canonicalizes a Claude key to "anthropic".
+                "provider_config": {
+                    "provider": "anthropic",
+                    "api_key": "writer-key",
+                    "model": "claude-sonnet-4-6",
+                },
+            },
+            headers={"X-Firebase-Token": "firebase-token"},
+        )
+        assert response.status_code == 200
+        assert response.json() == {"status": "updated"}
+        args = worker.return_value._process.call_args.args
+        assert args[1] == claim
+        assert args[2] == {
+            "provider": "anthropic",
+            "api_key": "writer-key",
+            "model": "claude-sonnet-4-6",
+        }
+        assert args[3] == "firebase-token"
+
+
 @pytest.mark.parametrize(
     "enabled,authorized,status", [(False, True, 404), (True, False, 401)]
 )
@@ -203,7 +269,7 @@ def test_byok_credentials_reach_the_provider_context():
             json={
                 **BODY,
                 "providerConfig": {
-                    "provider": "claude",
+                    "provider": "anthropic",
                     "apiKey": "user-supplied-key",
                     "model": "claude-sonnet-4-6",
                 },
@@ -215,7 +281,7 @@ def test_byok_credentials_reach_the_provider_context():
     assert provider.context == (
         {
             "user_id": "u1",
-            "provider": "claude",
+            "provider": "anthropic",
             "api_key": "user-supplied-key",
             "model": "claude-sonnet-4-6",
         },

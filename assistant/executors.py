@@ -37,6 +37,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import uuid
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
@@ -54,6 +56,7 @@ from assistant.tools import (
     SearchStoryArgs,
     ToolContext,
     UnknownToolError,
+    UpdateStoryVoiceProfileArgs,
 )
 from mcp_server import data, story_data
 
@@ -113,6 +116,8 @@ class ToolRuntime:
     embedder: Optional[Any] = None
     editor_context: Optional[EditorContext] = None
     max_result_chars: int = DEFAULT_MAX_TOOL_RESULT_CHARS
+    current_user_text: str = ""
+    run_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -568,11 +573,76 @@ def _stale_chunk(chunk: dict[str, Any]) -> bool:
 
 Executor = Callable[[Any, ToolRuntime], Awaitable[ToolResult]]
 
+
+_STORY_SCOPE = re.compile(
+    r"\b(?:for|throughout|across|in) (?:this|the|my) (?:whole |entire )?story\b|\bstory[- ]wide\b",
+    re.IGNORECASE,
+)
+_VOICE_DIRECTION = re.compile(
+    r"\b(?:keep|use|write|make|avoid|prefer|favor|favour|maintain|always|never|should|must)\b|\b(?:do not|don't)\b",
+    re.IGNORECASE,
+)
+_POLITE_REQUEST = re.compile(
+    r"\b(?:(?:can|could|would|will) you (?:please )?|please )"
+    r"(?:keep|use|write|make|avoid|prefer|favor|favour|maintain)\b",
+    re.IGNORECASE,
+)
+
+
+def _writer_requested_voice_note(message: str, note: str) -> bool:
+    """Require a quoted direction in the same sentence as its story-wide scope."""
+    for sentence in re.findall(r"[^.!?\n]+[.!?]?", message):
+        if not _STORY_SCOPE.search(sentence) or not _VOICE_DIRECTION.search(sentence):
+            continue
+        if sentence.rstrip().endswith("?") and not _POLITE_REQUEST.search(sentence):
+            continue
+        if note.strip().casefold() in sentence.casefold():
+            return True
+    return False
+
+
+async def update_story_voice_profile(
+    args: UpdateStoryVoiceProfileArgs, runtime: ToolRuntime
+) -> ToolResult:
+    """Save only an explicit story-wide instruction from the current writer turn."""
+    if not _writer_requested_voice_note(runtime.current_user_text, args.note):
+        return ToolResult(
+            {
+                "saved": False,
+                "reason": "The writer did not clearly make this a story-wide preference.",
+            }
+        )
+    client = story_data.client()
+    profile = await client.get_voice_profile(runtime.ctx.user_id, runtime.ctx.story_id)
+    key = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{runtime.run_id}:{args.note}"))
+    result = await client.update_story_voice_note(
+        runtime.ctx.user_id,
+        runtime.ctx.story_id,
+        int(profile["revision"]),
+        {
+            "operation": "add",
+            "text": args.note,
+            "reason": args.reason,
+            "source": "explicit",
+            "evidence": [],
+            "idempotencyKey": key,
+        },
+    )
+    return ToolResult(
+        {
+            "saved": bool(result.get("applied")),
+            "changeId": result.get("changeId"),
+            "revision": result.get("revision"),
+        }
+    )
+
+
 # Read tools only. The edit and research schemas exist, but a schema with no
 # executor offered to a model is a tool call that can only fail, so
 # available_tools(edits_enabled=False, research_enabled=False) and this table
 # have to agree -- and a test asserts they do.
 EXECUTORS: dict[str, Executor] = {
+    "update_story_voice_profile": update_story_voice_profile,
     "get_story_overview": get_story_overview,
     "search_story": search_story,
     "list_story_entities": list_story_entities,

@@ -66,6 +66,15 @@ HELP_BOUNDARIES = (
 
 HELP_CATALOG: tuple[Capability, ...] = (
     Capability(
+        id="story_voice",
+        tools=assistant_tools("story_voice"),
+        gate="always",
+        title="Remember this story's prose voice",
+        summary="Save a clear story-wide writing preference as a voice note, with history and Undo in Voice.",
+        example="For this story, keep the narration restrained.",
+        limits="Scene-only directions stay in the scene. You can edit, pin, remove, or undo the note.",
+    ),
+    Capability(
         id="story_overview",
         tools=assistant_tools("story_overview"),
         gate="always",
