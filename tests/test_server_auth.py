@@ -237,7 +237,7 @@ def test_create_app_without_switch_rejects_internal_routes(monkeypatch):
     with TestClient(app) as test_client:
         resp = test_client.post(
             "/agent/execute",
-            json={"action": "generateNextLines", "parameters": {}},
+            json={"action": "enhanceWizardInput", "parameters": {}},
             headers={"X-User-ID": "someone-else"},
         )
     assert resp.status_code == 401

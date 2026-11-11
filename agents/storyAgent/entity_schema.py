@@ -1,10 +1,8 @@
 """Single source of truth for metadata-entity (character/place/plot) scalar fields.
 
-Both the embedding text (``embedding_text.compose_entity_text``) and the full generation
-prompt (``context_format.format_context_for_prompt``) iterate this schema, so the
-field lists can't drift between them. Each entry is
-``(field_name, prompt_label, prompt_char_cap)``; the cap is used only by the prompt
-renderer — the embedding text is not capped.
+The embedding text (``embedding_text.compose_entity_text``) iterates this schema, and
+the MCP descriptors are checked against it, so the field lists can't drift. Each entry
+is ``(field_name, prompt_label, prompt_char_cap)``; the embedding text is not capped.
 
 Array-of-object fields (``character.relationships``, ``plot.events``) format
 differently in each renderer and are handled by bespoke code there; only their names

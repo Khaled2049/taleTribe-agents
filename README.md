@@ -7,8 +7,7 @@ Every AI feature in TheTaleTribe flows through this service. Legacy stories read
 ## Key features
 
 - **Story and chapter generation** — full drafts grounded in the writer's existing world
-- **Brainstorming** — ideas for characters, plots, and story directions on demand
-- **In-editor assistance** — next-line suggestions and prose enhancement at cursor position
+- **New-story wizard** — enriches a writer's premise, character, place and conflict notes
 - **Context-aware chat** — answers questions about the story using the full document as context
 - **Brain memory system** — four-layer cognitive memory (working, procedural, semantic, episodic) for richer continuity across sessions
 - **BYOK support** — per-request API key forwarding to Gemini, Claude, or OpenAI without touching platform credits

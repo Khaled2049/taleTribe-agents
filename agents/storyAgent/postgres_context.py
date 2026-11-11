@@ -42,7 +42,8 @@ class PostgresStoryContext:
             self.pool = None
 
     async def context(self, story_id: str) -> dict[str, Any]:
-        """Return the existing StoryContextBuilder-compatible shape."""
+        """Read a whole story, drafts included. Only the index worker may call
+        this: it takes no caller, so nothing here checks who owns the story."""
         assert self.pool is not None
         async with self.pool.acquire() as conn:
             story = await conn.fetchrow(

@@ -19,7 +19,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, ValidationError
 
 from agents.storyAgent.llm_provider import _byok_config, _firebase_token, _usage_feature
-from agents.storyAgent.tools.story_choices import _safe_json_parse
+from agents.storyAgent.utils import safe_json_parse
 from mcp_server import story_data
 
 
@@ -222,7 +222,7 @@ class VoiceLearningWorker:
             _firebase_token.reset(identity)
         # Models often wrap JSON in a markdown fence despite the prompt.
         try:
-            proposal = VoiceProposal.model_validate(_safe_json_parse(raw or ""))
+            proposal = VoiceProposal.model_validate(safe_json_parse(raw or ""))
         except (ValidationError, ValueError):
             return "analyzed"
         if not validate_proposal(proposal, notes):
