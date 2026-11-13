@@ -41,6 +41,8 @@ def require_production_env(monkeypatch):
     # the developer's .env says about writes would otherwise leak in. These
     # tests are not about the write flag either way.
     monkeypatch.setenv("ENABLE_MCP_WRITES", "false")
+    # Dev-only; a local .env may set it, and production refuses it.
+    monkeypatch.setenv("STORY_DATA_SERVICE_TOKEN", "")
 
 
 # ------------------------------------------------------------------
@@ -237,7 +239,7 @@ def test_create_app_without_switch_rejects_internal_routes(monkeypatch):
     with TestClient(app) as test_client:
         resp = test_client.post(
             "/agent/execute",
-            json={"action": "generateNextLines", "parameters": {}},
+            json={"action": "enhanceWizardInput", "parameters": {}},
             headers={"X-User-ID": "someone-else"},
         )
     assert resp.status_code == 401
@@ -281,3 +283,13 @@ def test_emulator_tokens_refused_without_local_auth_switch(monkeypatch):
                 auth_request=object(),
             )
     verify.assert_called_once()
+
+
+def test_production_refuses_the_story_data_shared_secret(monkeypatch):
+    require_production_env(monkeypatch)
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("AGENT_SERVICE_URL", AGENT_URL)
+    monkeypatch.setenv("FIREBASE_FUNCTIONS_SERVICE_ACCOUNT", TRUSTED_SA)
+    monkeypatch.setenv("STORY_DATA_SERVICE_TOKEN", "dev-service-token")
+    with pytest.raises(ValidationError, match="STORY_DATA_SERVICE_TOKEN is dev only"):
+        Settings()

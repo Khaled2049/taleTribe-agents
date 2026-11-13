@@ -523,7 +523,7 @@ async def test_calls_report_the_feature_set_by_their_entry_point():
 
     provider = _provider_with_transport(handler)
     await provider.generate_content_async("hello")
-    token = _usage_feature.set("next_line")
+    token = _usage_feature.set("wizard_enhance")
     try:
         await provider.generate_content_async("hello")
         async for _ in provider.chat_stream(
@@ -539,7 +539,7 @@ async def test_calls_report_the_feature_set_by_their_entry_point():
         await provider.aclose()
 
     # Unset means "other"; an explicit chat feature beats the ambient one.
-    assert captured == ["other", "next_line", "assistant_drafting"]
+    assert captured == ["other", "wizard_enhance", "assistant_drafting"]
 
 
 def test_every_action_reports_a_known_feature():

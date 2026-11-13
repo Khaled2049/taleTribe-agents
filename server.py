@@ -267,12 +267,7 @@ def create_app() -> FastAPI:
             if (
                 mcp_bundle is not None or settings.assistant_api_enabled
             ) and settings.story_data_url.strip():
-                story_data.configure(
-                    story_data.StoryDataClient(
-                        settings.story_data_url.strip(),
-                        settings.story_data_service_token.strip(),
-                    )
-                )
+                story_data.configure(story_data.from_settings(settings))
             worker_task = None
             if settings.indexing_worker_enabled:
                 import asyncio

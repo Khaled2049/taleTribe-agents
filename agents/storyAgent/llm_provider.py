@@ -30,12 +30,7 @@ _firebase_token: ContextVar[Optional[str]] = ContextVar("firebase_token", defaul
 # with usageFeatures in creditProxy cmd/gateway/feature.go.
 USAGE_FEATURES = frozenset(
     {
-        "next_line",
-        "enhance",
-        "brainstorm",
-        "story_choices",
         "wizard_enhance",
-        "summarize",
         "assistant",
         "assistant_specialist",
         "assistant_drafting",
@@ -44,20 +39,13 @@ USAGE_FEATURES = frozenset(
     }
 )
 ACTION_FEATURES = {
-    "summarizeChapter": "summarize",
-    "brainstormIdeas": "brainstorm",
-    "generateNextLines": "next_line",
-    "enhanceText": "enhance",
     "enhanceWizardInput": "wizard_enhance",
-    "generateStoryChoices": "story_choices",
 }
 # Set once per request by each entry point, like _byok_config.
 _usage_feature: ContextVar[str] = ContextVar("usage_feature", default="other")
 
 TASK_ROUTES_V1 = {
     "assistant_drafting": "prose_draft_v1",
-    "enhance": "prose_rewrite_v1",
-    "next_line": "next_line_v1",
     "voice_analysis": "voice_analysis_v1",
 }
 

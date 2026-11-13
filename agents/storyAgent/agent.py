@@ -10,13 +10,7 @@ from typing import Any, Dict, Optional
 try:
     from .llm_provider import get_llm_provider
     from .postgres_context import PostgresIndexWorker, PostgresStoryContext
-    from .tools import (
-        BrainstormingTool,
-        EnhanceTextTool,
-        EnhanceWizardInputTool,
-        NextLineGenerationTool,
-        StoryChoicesTool,
-    )
+    from .tools import EnhanceWizardInputTool
 except ImportError:
     # Add parent directory to path for direct execution
     current_dir = Path(__file__).parent
@@ -28,17 +22,11 @@ except ImportError:
         PostgresIndexWorker,
         PostgresStoryContext,
     )
-    from agents.storyAgent.tools import (
-        BrainstormingTool,
-        EnhanceTextTool,
-        EnhanceWizardInputTool,
-        NextLineGenerationTool,
-        StoryChoicesTool,
-    )
+    from agents.storyAgent.tools import EnhanceWizardInputTool
 
 
 class StoryAgent:
-    """Main agent for story generation and brainstorming."""
+    """Runs the /agent/execute actions and owns the shared providers."""
 
     def __init__(
         self,
@@ -63,19 +51,7 @@ class StoryAgent:
         self._embedder = _load_embedder()
 
         # Initialize tools
-        self.brainstorm_tool = BrainstormingTool(
-            self.project_id, self.location, llm_provider=self._llm_provider
-        )
-        self.next_line_tool = NextLineGenerationTool(
-            self.project_id, self.location, llm_provider=self._llm_provider
-        )
-        self.enhance_text_tool = EnhanceTextTool(
-            self.project_id, self.location, llm_provider=self._llm_provider
-        )
         self.enhance_wizard_tool = EnhanceWizardInputTool(
-            self.project_id, self.location, llm_provider=self._llm_provider
-        )
-        self.story_choices_tool = StoryChoicesTool(
             self.project_id, self.location, llm_provider=self._llm_provider
         )
         self.postgres_context = PostgresStoryContext()
@@ -102,163 +78,6 @@ class StoryAgent:
                 await close()
         await self.postgres_context.close()
 
-    async def generate_next_lines(
-        self,
-        story_id: str,
-        content: str,
-        cursorPosition: int,
-        chapter_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        Generate 3 next line suggestions based on chapter content and cursor position.
-
-        Args:
-            story_id: story-data (PostgreSQL) story ID
-            content: Current content of the chapter being edited
-            cursorPosition: Character index where the new line should be inserted
-            chapter_id: Optional chapter document ID for better context and validation
-
-        Returns:
-            Dictionary containing the suggestions array.
-        """
-        context = await self.postgres_context.context(story_id)
-        await self._add_story_voice(context, story_id, user_id)
-        return await self.next_line_tool.execute(
-            story_id, content, cursorPosition, chapter_id, context
-        )
-
-    async def brainstorm_ideas(
-        self,
-        story_id: str,
-        idea_type: str,
-        prompt: Optional[str] = None,
-        count: int = 5,
-    ) -> Dict[str, Any]:
-        """
-        Generate brainstorming ideas.
-
-        Args:
-            story_id: story-data (PostgreSQL) story ID
-            idea_type: Type of idea (characters/plots/places/themes)
-            prompt: Optional specific prompt
-            count: Number of ideas to generate
-
-        Returns:
-            Dictionary with generated ideas
-        """
-        context = await self.postgres_context.context(story_id)
-        return await self.brainstorm_tool.execute(
-            story_id, idea_type, prompt, count, context
-        )
-
-    async def enhance_text(
-        self,
-        story_id: str,
-        action: str,
-        selected_text: str,
-        chapter_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        Enhance selected text based on action type.
-
-        Args:
-            story_id: story-data (PostgreSQL) story ID
-            action: Action type (expand, dialogue, rewrite)
-            selected_text: The text to enhance
-            chapter_id: Optional chapter document ID for better context
-
-        Returns:
-            Dictionary containing enhanced text
-        """
-        context = await self.postgres_context.context(story_id)
-        await self._add_story_voice(context, story_id, user_id)
-        return await self.enhance_text_tool.execute(
-            story_id, action, selected_text, chapter_id, context
-        )
-
-    @staticmethod
-    async def _add_story_voice(
-        context: dict, story_id: str, user_id: Optional[str]
-    ) -> None:
-        if not user_id or user_id == "anonymous":
-            return
-        from assistant.prose_voice import load_voice_context
-        from mcp_server import story_data
-
-        try:
-            voice = await load_voice_context(story_data.client(), user_id, story_id)
-        except story_data.StoryDataError:
-            return  # Writing still works if the optional profile is unavailable.
-        if voice:
-            context["storyVoice"] = voice
-
-    async def summarize_chapter(
-        self,
-        story_id: str,
-        content: str,
-        chapter_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        Summarize a chapter's content for story continuity.
-
-        Returns a short summary used to keep long-range continuity cheap on
-        future chapter generations. No extra context build — operates directly
-        on the supplied chapter text.
-        """
-        text = (content or "").strip()
-        if not text:
-            return {"summary": ""}
-
-        prompt = (
-            "Summarize the following chapter in 2-3 sentences for story "
-            "continuity. Capture key plot events, character developments, and "
-            "unresolved threads. Return ONLY the summary text, with no preamble "
-            "or labels.\n\n"
-            f"CHAPTER:\n{text}"
-        )
-        summary = await self._llm_provider.generate_content_async(
-            prompt, max_output_tokens=256
-        )
-        return {"summary": (summary or "").strip()}
-
-    async def generate_story_choices(
-        self,
-        story_id: str,
-        mode: str,
-        current_content: str = "",
-        chapter_id: Optional[str] = None,
-        turn_count: int = 0,
-        user_id: str = "anonymous",
-        background_tasks=None,
-    ) -> Dict[str, Any]:
-        """
-        Generate interactive story choices for the co-write feature.
-
-        Args:
-            story_id: story-data (PostgreSQL) story ID
-            mode: "opening", "continuation", or "ending"
-            current_content: HTML already in the editor (empty string for opening)
-            chapter_id: Optional chapter document ID for chapter-specific context
-            turn_count: How many choices the user has selected (used for arc-aware prompting)
-            user_id: User identifier for procedural memory scoping
-
-        Returns:
-            For opening: {"storyId", "openingScene", "choices": [{label, sceneText}, ...]}
-            For continuation: {"storyId", "choices": [{label, sceneText}, ...]}
-            For ending: {"storyId", "choices": [{label, sceneText, isFinal: true}]}
-        """
-        context = await self.postgres_context.context(story_id)
-        return await self.story_choices_tool.execute(
-            story_id,
-            mode,
-            current_content,
-            chapter_id,
-            turn_count,
-            context_override=context,
-        )
-
     async def enhance_wizard_input(
         self,
         user_id: str,
@@ -279,7 +98,7 @@ class StoryAgent:
         Execute agent action dynamically.
 
         Args:
-            action: Action to perform (brainstorm/enhanceText/etc.)
+            action: Action to perform (see action_schemas.ActionName)
             parameters: Parameters for the action
 
         Returns:
@@ -292,57 +111,14 @@ class StoryAgent:
             sorted(parameters.keys()),
         )
 
-        # The prose tools use the authenticated request user_id for the private
-        # story voice read. Never use a userId supplied in action parameters
-        # for that owner-gated lookup.
         param_user_id = self._param(parameters, "userId", "user_id")
         effective_user_id = param_user_id or user_id
 
-        if action == "summarizeChapter":
-            return await self.summarize_chapter(
-                self._param(parameters, "storyId", "story_id"),
-                self._param(parameters, "content"),
-                self._param(parameters, "chapterId", "chapter_id"),
-            )
-        if action == "brainstormIdeas":
-            return await self.brainstorm_ideas(
-                self._param(parameters, "storyId", "story_id"),
-                self._param(parameters, "type", "idea_type"),
-                self._param(parameters, "prompt"),
-                self._param(parameters, "count", default=5),
-            )
-        if action == "generateNextLines":
-            return await self.generate_next_lines(
-                self._param(parameters, "storyId", "story_id"),
-                self._param(parameters, "content"),
-                self._param(parameters, "cursorPosition", "cursor_position"),
-                self._param(parameters, "chapterId", "chapter_id"),
-                user_id,
-            )
-        if action == "enhanceText":
-            return await self.enhance_text(
-                self._param(parameters, "storyId", "story_id"),
-                self._param(parameters, "action"),
-                self._param(parameters, "selectedText", "selected_text"),
-                self._param(parameters, "chapterId", "chapter_id"),
-                user_id,
-            )
         if action == "enhanceWizardInput":
             return await self.enhance_wizard_input(
                 effective_user_id,
                 self._param(parameters, "type", "wizard_type"),
                 self._param(parameters, "data", default={}) or {},
-            )
-
-        if action == "generateStoryChoices":
-            return await self.generate_story_choices(
-                self._param(parameters, "storyId", "story_id"),
-                self._param(parameters, "mode"),
-                self._param(parameters, "currentContent", "current_content", ""),
-                self._param(parameters, "chapterId", "chapter_id"),
-                int(self._param(parameters, "turnCount", "turn_count", 0) or 0),
-                user_id=effective_user_id,
-                background_tasks=background_tasks,
             )
 
         raise ValueError(f"Unknown action: {action}")

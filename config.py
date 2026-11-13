@@ -110,8 +110,9 @@ class Settings(BaseSettings):
     # while MCP is a caller like any other and must go through the service so
     # ownership and validation stay in one place.
     story_data_url: str = ""
-    # Shared secret that lets MCP assert X-User-ID. story-data ignores the
-    # header without it.
+    # Dev-only shared secret that lets MCP and the assistant assert X-User-ID
+    # locally. Production proves the service account with a Google ID token
+    # instead, and refuses to start with this set.
     story_data_service_token: str = ""
 
     # Server port
@@ -187,6 +188,11 @@ class Settings(BaseSettings):
                     "MCP_CONSENT_URL must be set when ENVIRONMENT=production and "
                     "ENABLE_MCP=true (the frontend consent page the OAuth "
                     "authorization flow redirects to)"
+                )
+            if self.story_data_service_token.strip():
+                raise ValueError(
+                    "STORY_DATA_SERVICE_TOKEN is dev only: in production the "
+                    "service authenticates to story-data with a Google ID token"
                 )
             if (
                 self.enable_mcp or self.assistant_api_enabled

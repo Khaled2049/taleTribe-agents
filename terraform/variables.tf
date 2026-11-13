@@ -134,7 +134,7 @@ variable "enable_mcp" {
 }
 
 variable "story_data_url" {
-  description = "Override for the story-data base URL. Leave empty to read the deployed novelsync-story-data service's URI directly, which is the normal path — set this only to point at a different instance. The matching shared secret comes from the story-data-service-token Secret Manager secret, which must be pre-created."
+  description = "Override for the story-data base URL. Leave empty to read the deployed novelsync-story-data service's URI directly, which is the normal path — set this only to point at a different instance. It is also the audience of the ID token this service presents, so it must be one of story-data's service_audiences."
   type        = string
   default     = ""
 }

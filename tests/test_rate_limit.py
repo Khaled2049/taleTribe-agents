@@ -73,8 +73,8 @@ def test_agent_execute_returns_429_when_rate_limited(monkeypatch):
 
     with TestClient(test_app) as client:
         payload = {
-            "action": "brainstormIdeas",
-            "parameters": {"storyId": "s1", "type": "theme"},
+            "action": "enhanceWizardInput",
+            "parameters": {"type": "premise", "data": {}, "userId": "rate-test-user"},
             "user_id": "rate-test-user",
         }
         assert client.post("/agent/execute", json=payload).status_code == 200
@@ -95,8 +95,8 @@ def test_agent_execute_rejects_empty_user_id(monkeypatch):
         response = client.post(
             "/agent/execute",
             json={
-                "action": "brainstormIdeas",
-                "parameters": {"storyId": "s1", "type": "theme"},
+                "action": "enhanceWizardInput",
+                "parameters": {"type": "premise", "data": {}, "userId": "u1"},
                 "user_id": "",
             },
         )

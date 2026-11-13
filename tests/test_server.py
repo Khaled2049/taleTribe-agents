@@ -3,6 +3,7 @@
 import os
 from unittest.mock import ANY, AsyncMock
 
+import pytest
 from fastapi.testclient import TestClient
 
 # Set environment for testing before importing app
@@ -28,8 +29,8 @@ class TestAgentExecution:
         response = client.post(
             "/agent/execute",
             json={
-                "action": "brainstormIdeas",
-                "parameters": {"storyId": "s1", "type": "theme"},
+                "action": "enhanceWizardInput",
+                "parameters": {"type": "premise", "data": {"title": "T"}},
             },
         )
 
@@ -38,16 +39,27 @@ class TestAgentExecution:
         assert data["success"] is False
         assert data["error"]["code"] == "VALIDATION_ERROR"
 
-    def test_a_retired_action_is_rejected_as_unknown(self):
-        """chatWithContext was the legacy chat. Its removal must read as an
-        unknown action, not as a route that silently accepts and does nothing."""
+    @pytest.mark.parametrize(
+        "action",
+        [
+            "chatWithContext",
+            "generateNextLines",
+            "enhanceText",
+            "brainstormIdeas",
+            "generateStoryChoices",
+            "summarizeChapter",
+        ],
+    )
+    def test_a_retired_action_is_rejected_as_unknown(self, action):
+        """A removed action must read as unknown, not as a route that silently
+        accepts and does nothing."""
         app.state.agent.execute_agent = AsyncMock(return_value={"response": "ok"})
 
         response = client.post(
             "/agent/execute",
             json={
-                "action": "chatWithContext",
-                "parameters": {"storyId": "s1", "message": "hello"},
+                "action": action,
+                "parameters": {"storyId": "s1"},
                 "user_id": "u1",
             },
         )
@@ -110,147 +122,6 @@ class TestAgentExecution:
                     "data": {"title": "The Last Lantern"},
                     "userId": "user-1",
                 },
-                "user_id": "u1",
-            },
-        )
-
-        assert response.status_code == 422
-        data = response.json()
-        assert data["success"] is False
-        assert data["error"]["code"] == "VALIDATION_ERROR"
-
-
-class TestGenerateStoryChoices:
-    def test_opening_mode_success(self):
-        mock_result = {
-            "storyId": "s1",
-            "openingScene": "The rain had been falling for three days...",
-            "choices": [
-                {
-                    "label": "Elena discovers the hidden letter",
-                    "sceneText": "She found it...",
-                },
-                {
-                    "label": "A stranger arrives at the inn",
-                    "sceneText": "The door swung...",
-                },
-                {
-                    "label": "The market erupts in chaos",
-                    "sceneText": "First came the sound...",
-                },
-            ],
-        }
-        app.state.agent.execute_agent = AsyncMock(return_value=mock_result)
-
-        response = client.post(
-            "/agent/execute",
-            json={
-                "action": "generateStoryChoices",
-                "parameters": {"storyId": "s1", "mode": "opening"},
-                "user_id": "u1",
-            },
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["success"] is True
-        assert (
-            data["data"]["openingScene"]
-            == "The rain had been falling for three days..."
-        )
-        assert len(data["data"]["choices"]) == 3
-        app.state.agent.execute_agent.assert_awaited_once_with(
-            "generateStoryChoices",
-            {"storyId": "s1", "mode": "opening", "currentContent": "", "turnCount": 0},
-            background_tasks=ANY,
-            user_id="u1",
-        )
-
-    def test_continuation_mode_success(self):
-        mock_result = {
-            "storyId": "s1",
-            "choices": [
-                {
-                    "label": "Confront Marcus directly",
-                    "sceneText": "She stepped forward...",
-                },
-                {
-                    "label": "Follow the shadow into alley",
-                    "sceneText": "The figure vanished...",
-                },
-                {"label": "Return to the archive", "sceneText": "The old building..."},
-            ],
-        }
-        app.state.agent.execute_agent = AsyncMock(return_value=mock_result)
-
-        response = client.post(
-            "/agent/execute",
-            json={
-                "action": "generateStoryChoices",
-                "parameters": {
-                    "storyId": "s1",
-                    "mode": "continuation",
-                    "currentContent": "<p>Some prose.</p>",
-                    "chapterId": "ch1",
-                },
-                "user_id": "u1",
-            },
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["success"] is True
-        assert len(data["data"]["choices"]) == 3
-        assert "openingScene" not in data["data"]
-        app.state.agent.execute_agent.assert_awaited_once_with(
-            "generateStoryChoices",
-            {
-                "storyId": "s1",
-                "mode": "continuation",
-                "currentContent": "<p>Some prose.</p>",
-                "chapterId": "ch1",
-                "turnCount": 0,
-            },
-            background_tasks=ANY,
-            user_id="u1",
-        )
-
-    def test_missing_mode_returns_422(self):
-        response = client.post(
-            "/agent/execute",
-            json={
-                "action": "generateStoryChoices",
-                "parameters": {"storyId": "s1"},
-                "user_id": "u1",
-            },
-        )
-
-        assert response.status_code == 422
-        data = response.json()
-        assert data["success"] is False
-        assert data["error"]["code"] == "VALIDATION_ERROR"
-
-    def test_missing_story_id_returns_422(self):
-        response = client.post(
-            "/agent/execute",
-            json={
-                "action": "generateStoryChoices",
-                "parameters": {"mode": "opening"},
-                "user_id": "u1",
-            },
-        )
-
-        assert response.status_code == 422
-        data = response.json()
-        assert data["success"] is False
-        assert data["error"]["code"] == "VALIDATION_ERROR"
-
-    def test_invalid_mode_returns_422(self):
-        response = client.post(
-            "/agent/execute",
-            json={
-                "action": "generateStoryChoices",
-                "parameters": {"storyId": "s1", "mode": "invalid"},
                 "user_id": "u1",
             },
         )
