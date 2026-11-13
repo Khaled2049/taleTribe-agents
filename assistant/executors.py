@@ -106,7 +106,7 @@ class ToolRuntime:
     No story-data client here on purpose. ``mcp_server.data`` reaches the
     process-wide one through ``story_data.client()``, and threading a second
     handle through would mean two ways to reach the same service with only one
-    of them carrying the service token. Note that server.py only configures that
+    of them carrying the service credential. Note that server.py only configures that
     client when MCP is enabled -- widening it is P3-T1's job, not something an
     executor should paper over.
     """

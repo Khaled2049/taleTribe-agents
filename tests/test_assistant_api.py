@@ -101,7 +101,7 @@ def test_voice_learning_endpoint_checks_identity_and_forwards_byok():
         "sourceRevision": 2,
     }
     with (
-        patch("assistant.api.StoryDataClient") as factory,
+        patch("assistant.api.story_data_from_settings") as factory,
         patch("assistant.voice_learning.VoiceLearningWorker") as worker,
     ):
         factory.return_value.get_story = AsyncMock(
@@ -154,7 +154,7 @@ def test_voice_learning_endpoint_checks_identity_and_forwards_byok():
 def test_gates(enabled, authorized, status):
     api, _ = client(enabled=enabled, authorized=authorized)
     if not enabled:
-        with patch("assistant.api.StoryDataClient") as factory:
+        with patch("assistant.api.story_data_from_settings") as factory:
             owned(factory)
             assert api.post("/assistant/run", json=BODY).status_code == status
     else:
@@ -164,7 +164,7 @@ def test_gates(enabled, authorized, status):
 def test_room_mode_needs_no_flag():
     provider = TextProvider()
     api, _ = client(provider=provider)
-    with patch("assistant.api.StoryDataClient") as factory:
+    with patch("assistant.api.story_data_from_settings") as factory:
         owned(factory)
         response = api.post("/assistant/run", json={**BODY, "mode": "room"})
     assert response.status_code == 200
@@ -174,7 +174,7 @@ def test_room_mode_needs_no_flag():
 def test_unowned_story_is_refused_before_the_model():
     provider = TextProvider()
     api, _ = client(provider=provider)
-    with patch("assistant.api.StoryDataClient") as factory:
+    with patch("assistant.api.story_data_from_settings") as factory:
         factory.return_value.get_story = AsyncMock(side_effect=NotFound())
         factory.return_value.close = AsyncMock()
         assert api.post("/assistant/run", json=BODY).status_code == 403
@@ -184,7 +184,7 @@ def test_unowned_story_is_refused_before_the_model():
 def test_published_story_owned_by_someone_else_is_refused_before_the_model():
     provider = TextProvider()
     api, _ = client(provider=provider)
-    with patch("assistant.api.StoryDataClient") as factory:
+    with patch("assistant.api.story_data_from_settings") as factory:
         factory.return_value.get_story = AsyncMock(
             return_value={"id": "s1", "ownerId": "someone-else", "published": True}
         )
@@ -195,7 +195,7 @@ def test_published_story_owned_by_someone_else_is_refused_before_the_model():
 
 def test_story_service_failure_is_not_reported_as_denial():
     api, _ = client()
-    with patch("assistant.api.StoryDataClient") as factory:
+    with patch("assistant.api.story_data_from_settings") as factory:
         factory.return_value.get_story = AsyncMock(side_effect=StoryDataError("boom"))
         factory.return_value.close = AsyncMock()
         assert api.post("/assistant/run", json=BODY).status_code == 503
@@ -204,7 +204,7 @@ def test_story_service_failure_is_not_reported_as_denial():
 def test_owned_story_streams_a_valid_run_with_request_context():
     provider = TextProvider()
     api, _ = client(provider=provider)
-    with patch("assistant.api.StoryDataClient") as factory:
+    with patch("assistant.api.story_data_from_settings") as factory:
         owned(factory)
         response = api.post(
             "/assistant/run",
@@ -262,7 +262,7 @@ def test_byok_credentials_reach_the_provider_context():
     has to arrive."""
     provider = TextProvider()
     api, _ = client(provider=provider)
-    with patch("assistant.api.StoryDataClient") as factory:
+    with patch("assistant.api.story_data_from_settings") as factory:
         owned(factory)
         response = api.post(
             "/assistant/run",

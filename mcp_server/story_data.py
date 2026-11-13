@@ -2,9 +2,12 @@
 
 Authenticates as a service and asserts the caller's uid: the MCP token record
 holds the uid (verified from a Firebase ID token once, at consent) but not a
-Firebase token that could be replayed, so there is nothing to forward. story-data
-trusts `X-User-ID` only when `X-Service-Token` matches, and derives ownership
-from the asserted uid exactly as it does for a browser caller.
+Firebase token that could be replayed, so there is nothing to forward. In
+production the service proves itself with a Google ID token for its own
+service account (`X-Service-Authorization`); locally, where there is no
+metadata server, with the dev-only shared secret (`X-Service-Token`).
+story-data then holds the call to its route allowlist and to stories the
+asserted uid owns.
 
 Errors are normalised here rather than at each call site: 403 and 404 both become
 NotFound, because story-data distinguishes "absent" from "not yours" and the MCP
@@ -16,14 +19,38 @@ because the limits it enforces are worth reporting to the caller verbatim.
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import json
 import logging
-from typing import Any, Optional
+import time
+from typing import Any, Awaitable, Callable, Optional
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 15.0
+# Refetch an identity token this long before it expires (Google's last an hour).
+ID_TOKEN_REFRESH_MARGIN_SECONDS = 300
+
+
+async def _metadata_id_token(audience: str) -> str:
+    from agents.storyAgent.llm_provider import _gcp_id_token_async
+
+    return await _gcp_id_token_async(audience)
+
+
+def _token_expiry(token: str) -> float:
+    """The token's own exp claim; a short default if it cannot be read."""
+    try:
+        payload = token.split(".")[1]
+        claims = json.loads(
+            base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+        )
+        return float(claims["exp"])
+    except (IndexError, ValueError, KeyError, TypeError):
+        return time.time() + ID_TOKEN_REFRESH_MARGIN_SECONDS * 2
 
 
 def _error_message(response: httpx.Response) -> str:
@@ -70,22 +97,57 @@ class StoryDataClient:
     def __init__(
         self,
         base_url: str,
-        service_token: str,
+        service_token: str = "",
         *,
+        id_token_audience: str = "",
+        fetch_id_token: Callable[[str], Awaitable[str]] = _metadata_id_token,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
     ):
         if not base_url:
             raise ValueError("story-data base URL is required")
+        if service_token and id_token_audience:
+            raise ValueError("use a service token or an ID token audience, not both")
         self._base = base_url.rstrip("/")
         self._service_token = service_token
+        self._audience = id_token_audience
+        self._fetch_id_token = fetch_id_token
+        self._id_token = ""
+        self._id_token_expiry = 0.0
+        self._id_token_lock = asyncio.Lock()
         self._client = httpx.AsyncClient(timeout=timeout)
 
     async def close(self) -> None:
         await self._client.aclose()
 
-    def _headers(self, uid: str, revision: Optional[str] = None) -> dict[str, str]:
+    def _fresh_id_token(self) -> Optional[str]:
+        if self._id_token and time.time() < (
+            self._id_token_expiry - ID_TOKEN_REFRESH_MARGIN_SECONDS
+        ):
+            return self._id_token
+        return None
+
+    async def _service_id_token(self) -> str:
+        if token := self._fresh_id_token():
+            return token
+        async with self._id_token_lock:
+            if token := self._fresh_id_token():
+                return token
+            token = await self._fetch_id_token(self._audience)
+            if not token:
+                # Fail closed: an unauthenticated call would only be refused.
+                raise StoryDataError("could not obtain a service identity token")
+            self._id_token, self._id_token_expiry = token, _token_expiry(token)
+            return token
+
+    async def _headers(
+        self, uid: str, revision: Optional[str] = None
+    ) -> dict[str, str]:
         headers = {"X-User-ID": uid}
-        if self._service_token:
+        if self._audience:
+            headers["X-Service-Authorization"] = (
+                f"Bearer {await self._service_id_token()}"
+            )
+        elif self._service_token:
             headers["X-Service-Token"] = self._service_token
         if revision is not None:
             headers["If-Match"] = revision
@@ -105,7 +167,7 @@ class StoryDataClient:
             response = await self._client.request(
                 method,
                 f"{self._base}{path}",
-                headers=self._headers(uid, revision),
+                headers=await self._headers(uid, revision),
                 params=params or None,
                 json=json,
             )
@@ -230,6 +292,16 @@ class StoryDataClient:
             json=payload,
             revision=revision,
         )
+
+
+def from_settings(settings: Any) -> StoryDataClient:
+    """The client for this deployment: Google identity in production, the
+    dev-only shared secret elsewhere. The audience is story-data's URL, which
+    must be one of its SERVICE_AUDIENCES."""
+    url = settings.story_data_url.strip().rstrip("/")
+    if settings.environment == "production":
+        return StoryDataClient(url, id_token_audience=url)
+    return StoryDataClient(url, settings.story_data_service_token.strip())
 
 
 _client: Optional[StoryDataClient] = None

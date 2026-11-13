@@ -22,7 +22,8 @@ from assistant.protocol import AgentRunRequest, ProviderConfig, StrictModel
 from assistant.run import RunLimits, run_assistant
 from assistant.version import ASSISTANT_PROTOCOL_VERSION
 from mcp_server.data import StoryNotFoundError, get_owned_story
-from mcp_server.story_data import StoryDataClient, StoryDataError
+from mcp_server.story_data import StoryDataError
+from mcp_server.story_data import from_settings as story_data_from_settings
 
 
 class VoiceLearningPass(StrictModel):
@@ -55,9 +56,7 @@ def register_assistant(
             chapter_uuid = uuid.UUID(body.chapter_id)
         except ValueError:
             raise HTTPException(400, "Invalid story or chapter ID") from None
-        client = StoryDataClient(
-            settings.story_data_url.strip(), settings.story_data_service_token.strip()
-        )
+        client = story_data_from_settings(settings)
         try:
             await get_owned_story(body.story_id, body.user_id, story_client=client)
         except StoryNotFoundError:
@@ -129,9 +128,7 @@ def register_assistant(
         # The Functions gateway checks ownership first, and agents checks again.
         # story-data permits public reads of published stories, so a 200 alone is
         # not authorization: get_owned_story compares ownerId with the asserted uid.
-        client = StoryDataClient(
-            settings.story_data_url.strip(), settings.story_data_service_token.strip()
-        )
+        client = story_data_from_settings(settings)
         try:
             await get_owned_story(body.story_id, body.user_id, story_client=client)
         except StoryNotFoundError:

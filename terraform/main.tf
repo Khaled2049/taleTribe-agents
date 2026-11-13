@@ -41,10 +41,6 @@ data "google_service_account" "cloud_run_sa" {
   project    = var.project_id
 }
 
-data "google_secret_manager_secret" "story_data_service_token" {
-  secret_id = "story-data-service-token"
-}
-
 data "google_secret_manager_secret" "story_data_database_url" {
   secret_id = "story-data-neon-database-url"
   project   = var.project_id
@@ -62,12 +58,6 @@ data "google_cloud_run_v2_service" "story_data" {
 # IAM: Allow Cloud Run service account to read secrets from Secret Manager
 resource "google_secret_manager_secret_iam_member" "secret_access" {
   secret_id = data.google_secret_manager_secret.google_ai_studio_api_key.secret_id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${data.google_service_account.cloud_run_sa.email}"
-}
-
-resource "google_secret_manager_secret_iam_member" "story_data_service_token_access" {
-  secret_id = data.google_secret_manager_secret.story_data_service_token.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${data.google_service_account.cloud_run_sa.email}"
 }
@@ -278,16 +268,9 @@ resource "google_cloud_run_v2_service" "app" {
         value = tostring(var.max_requests_per_minute_per_user)
       }
 
-      # Lets MCP assert X-User-ID to story-data. Must match SERVICE_TOKEN there.
-      env {
-        name = "STORY_DATA_SERVICE_TOKEN"
-        value_source {
-          secret_key_ref {
-            secret  = data.google_secret_manager_secret.story_data_service_token.secret_id
-            version = "latest"
-          }
-        }
-      }
+      # MCP and the assistant prove this service account to story-data with a
+      # Google ID token for STORY_DATA_URL; story-data lists the account in
+      # SERVICE_ACCOUNTS and the URL in SERVICE_AUDIENCES. No shared secret.
 
       # Secret from Secret Manager (accessed via service account)
       env {
@@ -341,7 +324,6 @@ resource "google_cloud_run_v2_service" "app" {
   depends_on = [
     google_project_service.run,
     google_secret_manager_secret_iam_member.secret_access,
-    google_secret_manager_secret_iam_member.story_data_service_token_access,
     google_secret_manager_secret_iam_member.story_data_database_url_access,
     google_project_iam_member.firestore_user,
   ]
