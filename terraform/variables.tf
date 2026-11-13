@@ -116,7 +116,7 @@ variable "assistant_edit_proposals_enabled" {
 }
 
 variable "firebase_functions_service_account" {
-  description = "Service account email used by Firebase Functions to invoke the agent (e.g. story-6f89f@appspot.gserviceaccount.com). Granted roles/run.invoker on the Cloud Run service."
+  description = "Service account email used by Firebase Functions to invoke the agent (e.g. novelsync-functions@story-6f89f.iam.gserviceaccount.com). Granted roles/run.invoker on the Cloud Run service."
   type        = string
   default     = ""
 }
