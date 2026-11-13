@@ -41,8 +41,11 @@ data "google_service_account" "cloud_run_sa" {
   project    = var.project_id
 }
 
+# agents_service: the story_data_agents group (story content to read, the
+# indexing queue and search index to write), not the schema owner. Created by
+# hand; see story-data's docs/database-roles.md.
 data "google_secret_manager_secret" "story_data_database_url" {
-  secret_id = "story-data-neon-database-url"
+  secret_id = "story-data-database-url-agents"
   project   = var.project_id
 }
 
