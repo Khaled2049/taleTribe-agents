@@ -45,4 +45,4 @@ assistant_api_enabled = true
 assistant_edit_proposals_enabled = true
 
 # Service account email used by Firebase Functions (gen 2) to invoke the Cloud Run agent
-firebase_functions_service_account = "793308156964-compute@developer.gserviceaccount.com"
+firebase_functions_service_account = "novelsync-functions@story-6f89f.iam.gserviceaccount.com"
